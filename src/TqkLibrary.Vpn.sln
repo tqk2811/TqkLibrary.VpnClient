@@ -55,6 +55,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TqkLibrary.Vpn.Tests", "..\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TqkLibrary.Vpn.Ipsec.Esp.Tests", "..\tests\TqkLibrary.Vpn.Ipsec.Esp.Tests\TqkLibrary.Vpn.Ipsec.Esp.Tests.csproj", "{A2512B6B-1693-4452-9B0E-39EAC853237B}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TqkLibrary.Vpn.Ipsec.Ike.Tests", "..\tests\TqkLibrary.Vpn.Ipsec.Ike.Tests\TqkLibrary.Vpn.Ipsec.Ike.Tests.csproj", "{52696DA7-DC37-41BB-8C80-71D239922391}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -377,6 +379,18 @@ Global
 		{A2512B6B-1693-4452-9B0E-39EAC853237B}.Release|x64.Build.0 = Release|Any CPU
 		{A2512B6B-1693-4452-9B0E-39EAC853237B}.Release|x86.ActiveCfg = Release|Any CPU
 		{A2512B6B-1693-4452-9B0E-39EAC853237B}.Release|x86.Build.0 = Release|Any CPU
+		{52696DA7-DC37-41BB-8C80-71D239922391}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{52696DA7-DC37-41BB-8C80-71D239922391}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{52696DA7-DC37-41BB-8C80-71D239922391}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{52696DA7-DC37-41BB-8C80-71D239922391}.Debug|x64.Build.0 = Debug|Any CPU
+		{52696DA7-DC37-41BB-8C80-71D239922391}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{52696DA7-DC37-41BB-8C80-71D239922391}.Debug|x86.Build.0 = Debug|Any CPU
+		{52696DA7-DC37-41BB-8C80-71D239922391}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{52696DA7-DC37-41BB-8C80-71D239922391}.Release|Any CPU.Build.0 = Release|Any CPU
+		{52696DA7-DC37-41BB-8C80-71D239922391}.Release|x64.ActiveCfg = Release|Any CPU
+		{52696DA7-DC37-41BB-8C80-71D239922391}.Release|x64.Build.0 = Release|Any CPU
+		{52696DA7-DC37-41BB-8C80-71D239922391}.Release|x86.ActiveCfg = Release|Any CPU
+		{52696DA7-DC37-41BB-8C80-71D239922391}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
