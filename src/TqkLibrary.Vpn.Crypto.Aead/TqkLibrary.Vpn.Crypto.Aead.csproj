@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>AEAD ciphers (AES-GCM): native AesGcm on net8.0, BouncyCastle fallback on netstandard2.0.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.Vpn.Crypto.Abstractions\TqkLibrary.Vpn.Crypto.Abstractions.csproj" />
+  </ItemGroup>
+
+  <!-- Aes-GCM không có trong netstandard2.0 BCL -> fallback BouncyCastle. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.4.0" />
+  </ItemGroup>
+
+</Project>

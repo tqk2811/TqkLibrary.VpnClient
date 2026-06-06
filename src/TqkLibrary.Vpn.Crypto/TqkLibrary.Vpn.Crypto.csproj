@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Managed crypto primitives: MD4, DES, SHA-0, DH-MODP, AES-CBC/CTR, HMAC, RNG.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.Vpn.Crypto.Abstractions\TqkLibrary.Vpn.Crypto.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>
