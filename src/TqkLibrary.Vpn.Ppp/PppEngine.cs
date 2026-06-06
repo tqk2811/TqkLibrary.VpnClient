@@ -1,14 +1,15 @@
 using System.Net;
 using TqkLibrary.Vpn.Abstractions.Channels.Interfaces;
+using TqkLibrary.Vpn.Ppp.Enums;
 using TqkLibrary.Vpn.Ppp.Framing.Enums;
 using TqkLibrary.Vpn.Ppp.Interfaces;
 
 namespace TqkLibrary.Vpn.Ppp
 {
     /// <summary>
-    /// Drives a PPP session over an <see cref="IPppFrameChannel"/>: runs LCP, then IPCP, demultiplexes inbound
-    /// frames by protocol field, and exposes an <see cref="IPacketChannel"/> once the link is up.
-    /// (Authentication phase — MS-CHAPv2 over CHAP — is wired in a later step; the crypto already exists.)
+    /// Drives a PPP session over an <see cref="IPppFrameChannel"/>: runs LCP, an optional authentication phase
+    /// (e.g. MS-CHAPv2 over CHAP), then IPCP; demultiplexes inbound frames by protocol field and exposes an
+    /// <see cref="IPacketChannel"/> once the link is up.
     /// </summary>
     public sealed class PppEngine
     {
@@ -16,10 +17,13 @@ namespace TqkLibrary.Vpn.Ppp
         readonly LcpNegotiator _lcp;
         readonly IpcpNegotiator _ipcp;
         readonly PppPacketChannel _packetChannel;
+        readonly IPppAuthenticator? _authenticator;
+        readonly object _sync = new();
 
         /// <summary>
         /// Creates an engine. <paramref name="localAddress"/> is the IP we request (0.0.0.0 for a client).
-        /// Pass <paramref name="assignPeerAddress"/> to act as the server that assigns the peer an address.
+        /// Pass <paramref name="assignPeerAddress"/> to act as the server. Pass <paramref name="authenticator"/>
+        /// to satisfy a server that demands authentication.
         /// </summary>
         public PppEngine(
             IPppFrameChannel channel,
@@ -27,10 +31,12 @@ namespace TqkLibrary.Vpn.Ppp
             IPAddress localAddress,
             IPAddress? assignPeerAddress = null,
             IPAddress? assignPeerDns = null,
+            IPppAuthenticator? authenticator = null,
             int mtu = 1400)
         {
             _channel = channel;
             _channel.FrameReceived += OnFrame;
+            _authenticator = authenticator;
             _lcp = new LcpNegotiator(p => SendControl(PppProtocol.Lcp, p), magic);
             _ipcp = new IpcpNegotiator(p => SendControl(PppProtocol.Ipcp, p), localAddress, assignPeerAddress, assignPeerDns);
             _packetChannel = new PppPacketChannel(SendIpAsync, mtu);
@@ -40,6 +46,12 @@ namespace TqkLibrary.Vpn.Ppp
 
         /// <summary>Raised once IPCP is open and the link can carry IP traffic.</summary>
         public event Action? LinkUp;
+
+        /// <summary>Raised when authentication succeeds.</summary>
+        public event Action? AuthSucceeded;
+
+        /// <summary>Raised when authentication fails.</summary>
+        public event Action? AuthFailed;
 
         /// <summary>The L3 channel for this session (valid after <see cref="LinkUp"/>).</summary>
         public IPacketChannel PacketChannel => _packetChannel;
@@ -53,15 +65,47 @@ namespace TqkLibrary.Vpn.Ppp
         /// <summary>True once the link is up (IPCP opened).</summary>
         public bool IsLinkUp { get; private set; }
 
-        /// <summary>Begins negotiation (LCP first).</summary>
-        public void Start() => _lcp.Start();
+        /// <summary>True once authentication has succeeded (or none was required).</summary>
+        public bool IsAuthenticated { get; private set; }
 
-        void OnLcpOpened() => _ipcp.Start(); // TODO: insert the authentication phase here once CHAP packets are wired.
+        /// <summary>Begins negotiation (LCP first).</summary>
+        public void Start()
+        {
+            lock (_sync) _lcp.Start();
+        }
+
+        void OnLcpOpened()
+        {
+            if (_lcp.RequiresMsChapV2 && _authenticator != null)
+                return; // wait for the server's CHAP Challenge; IPCP starts after auth succeeds.
+
+            IsAuthenticated = true; // no auth required
+            _ipcp.Start();
+        }
 
         void OnIpcpOpened()
         {
             IsLinkUp = true;
             LinkUp?.Invoke();
+        }
+
+        void HandleAuth(ReadOnlySpan<byte> packet)
+        {
+            PppAuthStatus status = _authenticator!.Handle(packet, out byte[]? response);
+            if (response != null)
+                SendControl(PppProtocol.Chap, response);
+
+            switch (status)
+            {
+                case PppAuthStatus.Success:
+                    IsAuthenticated = true;
+                    AuthSucceeded?.Invoke();
+                    _ipcp.Start();
+                    break;
+                case PppAuthStatus.Failure:
+                    AuthFailed?.Invoke();
+                    break;
+            }
         }
 
         void OnFrame(ReadOnlyMemory<byte> frame)
@@ -73,11 +117,17 @@ namespace TqkLibrary.Vpn.Ppp
 
             ushort proto = (ushort)((span[offset] << 8) | span[offset + 1]);
             ReadOnlyMemory<byte> info = frame.Slice(offset + 2);
-            switch ((PppProtocol)proto)
+            lock (_sync)
             {
-                case PppProtocol.Lcp: _lcp.HandlePacket(info.Span); break;
-                case PppProtocol.Ipcp: _ipcp.HandlePacket(info.Span); break;
-                case PppProtocol.Ip: _packetChannel.RaiseInbound(info); break;
+                switch ((PppProtocol)proto)
+                {
+                    case PppProtocol.Lcp: _lcp.HandlePacket(info.Span); break;
+                    case PppProtocol.Chap:
+                        if (_authenticator != null) HandleAuth(info.Span);
+                        break;
+                    case PppProtocol.Ipcp: _ipcp.HandlePacket(info.Span); break;
+                    case PppProtocol.Ip: _packetChannel.RaiseInbound(info); break;
+                }
             }
         }
 

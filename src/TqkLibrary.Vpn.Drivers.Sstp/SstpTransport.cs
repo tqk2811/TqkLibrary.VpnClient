@@ -15,6 +15,7 @@ namespace TqkLibrary.Vpn.Drivers.Sstp
     {
         readonly string _host;
         readonly int _port;
+        readonly SemaphoreSlim _writeLock = new(1, 1);
         TcpClient? _tcp;
         SslStream? _ssl;
 
@@ -99,7 +100,16 @@ namespace TqkLibrary.Vpn.Drivers.Sstp
             packet[2] = (byte)((length >> 8) & 0x0F);
             packet[3] = (byte)(length & 0xff);
             body.Span.CopyTo(packet.AsSpan(4));
-            await _ssl!.WriteAsync(packet, 0, packet.Length, cancellationToken).ConfigureAwait(false);
+
+            await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _ssl!.WriteAsync(packet, 0, packet.Length, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                _writeLock.Release();
+            }
         }
 
         /// <summary>Reads one SSTP packet; returns whether it is a control packet and its body (after the 4-byte header).</summary>
@@ -132,6 +142,7 @@ namespace TqkLibrary.Vpn.Drivers.Sstp
             _ssl?.Dispose();
             _tcp?.Dispose();
             ServerCertificate?.Dispose();
+            _writeLock.Dispose();
         }
     }
 }

@@ -38,8 +38,9 @@ byte2-3: R(4-bit reserved) + Length(12-bit) = tổng độ dài gói
 
 ## PPP cho SSTP
 
-- **Framing:** SSTP mang PPP **HDLC-like framed bên trong data packet** (byte-stuffing 0x7E/escape, RFC 1662) — KHÁC L2TP (packet-mode). → `IPppFramer` cần 2 chế độ; SSTP = `HdlcStream`.
+- **Framing (đã verify thực tế với VPN Gate):** SSTP data packet mang **PPP THÔ** — **1 PPP frame / 1 data packet**, delineate bằng **trường Length của SSTP**, KHÔNG HDLC byte-stuffing/FCS. (Trước đó phỏng đoán HDLC theo sstp-client là SAI; test thật cho thấy gửi HDLC → server bỏ qua, raw → server trả lời.) HdlcFramer/Decoder chỉ dùng cho L2TP-stream khác, không cho SSTP.
 - Auth: MS-CHAPv2 (hoặc EAP). IP qua IPCP (xem `03`/`04`).
+- **Đã chạy thật:** `vpn/vpn` @ public-vpn-227.opengw.net:443 → LCP → MS-CHAPv2 → CHAP Success. Crypto binding (Call Connected) cần cho bước IPCP→IP.
 
 ## Lưu ý triển khai
 - `SslStream` xử lý TLS; bên trên là `IByteStreamTransport` cho `PppEngine`.

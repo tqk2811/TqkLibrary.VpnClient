@@ -8,6 +8,7 @@
     <ProjectReference Include="..\TqkLibrary.Vpn.Abstractions\TqkLibrary.Vpn.Abstractions.csproj" />
     <ProjectReference Include="..\TqkLibrary.Vpn.Crypto.Abstractions\TqkLibrary.Vpn.Crypto.Abstractions.csproj" />
     <ProjectReference Include="..\TqkLibrary.Vpn.Crypto\TqkLibrary.Vpn.Crypto.csproj" />
+    <ProjectReference Include="..\TqkLibrary.Vpn.Ppp\TqkLibrary.Vpn.Ppp.csproj" />
   </ItemGroup>
 
 </Project>
