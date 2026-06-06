@@ -38,6 +38,13 @@ namespace TqkLibrary.Vpn.Ppp.Auth
         /// <summary>The 24-byte NT-Response we sent (used later for SSTP HLAK derivation).</summary>
         public byte[]? NtResponse { get; private set; }
 
+        /// <summary>Derives the 32-byte HLAK for the SSTP crypto binding (valid after a successful auth).</summary>
+        public byte[] DeriveHlak()
+        {
+            if (NtResponse == null) throw new InvalidOperationException("Authentication has not produced an NT-Response yet.");
+            return MsChapV2.DeriveHlak(_password, NtResponse);
+        }
+
         /// <inheritdoc/>
         public PppAuthStatus Handle(ReadOnlySpan<byte> packet, out byte[]? response)
         {

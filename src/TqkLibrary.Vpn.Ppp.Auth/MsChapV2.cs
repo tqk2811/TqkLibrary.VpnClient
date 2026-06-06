@@ -71,5 +71,59 @@ namespace TqkLibrary.Vpn.Ppp.Auth
             for (int i = 0; i < 8; i++) key[i] = (byte)(key[i] << 1); // 7 data bits high, parity bit low
             return key;
         }
+
+        // ----- MPPE/HLAK key derivation (RFC 3079) for the SSTP crypto binding -----
+
+        static readonly byte[] Magic1 = Encoding.ASCII.GetBytes("This is the MPPE Master Key");
+        static readonly byte[] Magic2 = Encoding.ASCII.GetBytes(
+            "On the client side, this is the send key; on the server side, it is the receive key.");
+        static readonly byte[] Magic3 = Encoding.ASCII.GetBytes(
+            "On the client side, this is the receive key; on the server side, it is the send key.");
+
+        /// <summary>
+        /// Derives the 32-byte Higher-Layer Authentication Key (HLAK) for the SSTP crypto binding from the
+        /// MS-CHAPv2 keys (RFC 3079): MasterSendKey(16) || MasterReceiveKey(16), both computed client-side.
+        /// </summary>
+        public static byte[] DeriveHlak(string password, byte[] ntResponse)
+        {
+            byte[] passwordHash = NtPasswordHash(password);   // MD4(unicode(password))
+            byte[] passwordHashHash = Md4.Hash(passwordHash); // MD4 of the NT hash
+            byte[] masterKey = GetMasterKey(passwordHashHash, ntResponse);
+            byte[] sendKey = GetAsymmetricStartKey(masterKey, isSend: true);
+            byte[] recvKey = GetAsymmetricStartKey(masterKey, isSend: false);
+
+            byte[] hlak = new byte[32];
+            Buffer.BlockCopy(sendKey, 0, hlak, 0, 16);
+            Buffer.BlockCopy(recvKey, 0, hlak, 16, 16);
+            return hlak;
+        }
+
+        static byte[] GetMasterKey(byte[] passwordHashHash, byte[] ntResponse)
+        {
+            using var sha1 = SHA1.Create();
+            sha1.TransformBlock(passwordHashHash, 0, 16, null, 0);
+            sha1.TransformBlock(ntResponse, 0, 24, null, 0);
+            sha1.TransformFinalBlock(Magic1, 0, Magic1.Length);
+            byte[] master = new byte[16];
+            Buffer.BlockCopy(sha1.Hash!, 0, master, 0, 16);
+            return master;
+        }
+
+        static byte[] GetAsymmetricStartKey(byte[] masterKey, bool isSend)
+        {
+            byte[] magic = isSend ? Magic2 : Magic3; // client side: IsServer = false
+            byte[] pad1 = new byte[40];               // SHSpad1 = 40 x 0x00
+            byte[] pad2 = new byte[40];               // SHSpad2 = 40 x 0xF2
+            for (int i = 0; i < 40; i++) pad2[i] = 0xF2;
+
+            using var sha1 = SHA1.Create();
+            sha1.TransformBlock(masterKey, 0, 16, null, 0);
+            sha1.TransformBlock(pad1, 0, 40, null, 0);
+            sha1.TransformBlock(magic, 0, magic.Length, null, 0);
+            sha1.TransformFinalBlock(pad2, 0, 40);
+            byte[] key = new byte[16];
+            Buffer.BlockCopy(sha1.Hash!, 0, key, 0, 16);
+            return key;
+        }
     }
 }
