@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>L2TP/IPsec driver: UDP/4500 NAT-T -> IKEv2 -> ESP -> L2TP -> PPP engine.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.Vpn.Abstractions\TqkLibrary.Vpn.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.Vpn.Transport.Udp\TqkLibrary.Vpn.Transport.Udp.csproj" />
+    <ProjectReference Include="..\TqkLibrary.Vpn.Ipsec.Ike\TqkLibrary.Vpn.Ipsec.Ike.csproj" />
+    <ProjectReference Include="..\TqkLibrary.Vpn.Ipsec.Esp\TqkLibrary.Vpn.Ipsec.Esp.csproj" />
+    <ProjectReference Include="..\TqkLibrary.Vpn.L2tp\TqkLibrary.Vpn.L2tp.csproj" />
+    <ProjectReference Include="..\TqkLibrary.Vpn.Ppp\TqkLibrary.Vpn.Ppp.csproj" />
+    <ProjectReference Include="..\TqkLibrary.Vpn.Ppp.Auth\TqkLibrary.Vpn.Ppp.Auth.csproj" />
+  </ItemGroup>
+
+</Project>

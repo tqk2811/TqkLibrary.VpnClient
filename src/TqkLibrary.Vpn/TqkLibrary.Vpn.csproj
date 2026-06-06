@@ -1,9 +1,15 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net6.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
+    <Description>TqkLibrary.Vpn façade: VpnClient/VpnClientBuilder, driver registration, DI wiring.</Description>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.Vpn.Sockets\TqkLibrary.Vpn.Sockets.csproj" />
+    <ProjectReference Include="..\TqkLibrary.Vpn.Crypto\TqkLibrary.Vpn.Crypto.csproj" />
+    <ProjectReference Include="..\TqkLibrary.Vpn.Crypto.Aead\TqkLibrary.Vpn.Crypto.Aead.csproj" />
+    <ProjectReference Include="..\TqkLibrary.Vpn.Drivers.Sstp\TqkLibrary.Vpn.Drivers.Sstp.csproj" />
+    <ProjectReference Include="..\TqkLibrary.Vpn.Drivers.L2tpIpsec\TqkLibrary.Vpn.Drivers.L2tpIpsec.csproj" />
+  </ItemGroup>
 
 </Project>

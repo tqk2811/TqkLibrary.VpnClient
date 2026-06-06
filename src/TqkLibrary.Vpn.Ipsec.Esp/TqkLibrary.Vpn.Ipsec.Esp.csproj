@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>ESP transform: SPI demux, sequence, anti-replay, AES-CBC+HMAC / AES-GCM, padding.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.Vpn.Abstractions\TqkLibrary.Vpn.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.Vpn.Crypto.Abstractions\TqkLibrary.Vpn.Crypto.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.Vpn.Crypto.Aead\TqkLibrary.Vpn.Crypto.Aead.csproj" />
+  </ItemGroup>
+
+</Project>

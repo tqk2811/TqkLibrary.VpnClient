@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>SslStream-based IByteStreamTransport + HTTP auth front-end helpers (SSTP, SSL-VPNs).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.Vpn.Abstractions\TqkLibrary.Vpn.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.Vpn.Transport.Tcp\TqkLibrary.Vpn.Transport.Tcp.csproj" />
+  </ItemGroup>
+
+</Project>

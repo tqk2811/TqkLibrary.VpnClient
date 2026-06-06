@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>MS-SSTP driver: TLS:443 + SSTP control + PPP engine -> IPacketChannel.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.Vpn.Abstractions\TqkLibrary.Vpn.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.Vpn.Transport.Tls\TqkLibrary.Vpn.Transport.Tls.csproj" />
+    <ProjectReference Include="..\TqkLibrary.Vpn.Ppp\TqkLibrary.Vpn.Ppp.csproj" />
+    <ProjectReference Include="..\TqkLibrary.Vpn.Ppp.Auth\TqkLibrary.Vpn.Ppp.Auth.csproj" />
+  </ItemGroup>
+
+</Project>

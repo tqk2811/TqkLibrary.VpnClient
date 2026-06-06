@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Public socket-like API: VpnTcpClient, VpnUdpClient, VpnStream over the userspace IP stack.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.Vpn.Abstractions\TqkLibrary.Vpn.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.Vpn.IpStack\TqkLibrary.Vpn.IpStack.csproj" />
+    <ProjectReference Include="..\TqkLibrary.Vpn.IpStack.Tcp\TqkLibrary.Vpn.IpStack.Tcp.csproj" />
+  </ItemGroup>
+
+</Project>

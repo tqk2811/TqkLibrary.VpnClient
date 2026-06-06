@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Userspace TCP state machine (RTO, sliding window, MSS; minimal, no SACK).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.Vpn.Abstractions\TqkLibrary.Vpn.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.Vpn.IpStack\TqkLibrary.Vpn.IpStack.csproj" />
+  </ItemGroup>
+
+</Project>

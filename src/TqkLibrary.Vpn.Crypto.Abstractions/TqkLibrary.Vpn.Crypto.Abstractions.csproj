@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Crypto primitive contracts: block cipher, AEAD, DH group, PRF, integrity, hash.</Description>
+  </PropertyGroup>
+
+</Project>

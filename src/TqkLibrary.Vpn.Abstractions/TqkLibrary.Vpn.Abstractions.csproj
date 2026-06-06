@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>VPN platform abstractions: link channels, transport/security/encapsulation contracts, driver plugin interface.</Description>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>PPP engine: LCP, IPCP/NCP state machines; yields IPacketChannel when link is up.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.Vpn.Abstractions\TqkLibrary.Vpn.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.Vpn.Ppp.Framing\TqkLibrary.Vpn.Ppp.Framing.csproj" />
+  </ItemGroup>
+
+</Project>
