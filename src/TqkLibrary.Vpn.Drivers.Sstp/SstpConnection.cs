@@ -56,6 +56,7 @@ namespace TqkLibrary.Vpn.Drivers.Sstp
             Buffer.BlockCopy(cryptoRequest.Value, 4, nonce, 0, 32); // Reserved(3) + Bitmask(1) + Nonce(32)
 
             _channel = new SstpPppChannel(_transport);
+            _channel.ControlReceived += OnControlReceived;
             var authenticator = new MsChapV2Authenticator(userName, password);
             _engine = new PppEngine(_channel, _magic, IPAddress.Any, authenticator: authenticator);
 
@@ -79,6 +80,13 @@ namespace TqkLibrary.Vpn.Drivers.Sstp
             await Task.WhenAny(linkUp.Task, Task.Delay(Timeout.Infinite, cancellationToken)).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             await linkUp.Task.ConfigureAwait(false);
+        }
+
+        void OnControlReceived(SstpControlMessage message)
+        {
+            // Keep the tunnel alive: answer the server's periodic Echo Request.
+            if (message.MessageType == SstpMessageType.EchoRequest)
+                _ = _transport.SendControlAsync(SstpMessageType.EchoResponse, Array.Empty<SstpAttribute>(), _loopCts?.Token ?? CancellationToken.None);
         }
 
         /// <inheritdoc/>
