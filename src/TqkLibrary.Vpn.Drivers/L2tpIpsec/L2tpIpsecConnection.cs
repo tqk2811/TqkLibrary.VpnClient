@@ -24,6 +24,11 @@ namespace TqkLibrary.Vpn.Drivers.L2tpIpsec
         static readonly TimeSpan DpdInterval = TimeSpan.FromSeconds(20);
         const int DpdMaxMissed = 3;
 
+        // Rekey the ESP CHILD SA at ~90% of its lifetime; declare the IKE SA expired likewise (Phase 1 = 8h).
+        static readonly TimeSpan RekeyInterval = TimeSpan.FromSeconds(IkeV1Lifetimes.Phase2Seconds * 9 / 10);
+        static readonly TimeSpan Phase1Lifetime = TimeSpan.FromSeconds(IkeV1Lifetimes.Phase1Seconds * 9 / 10);
+        static readonly TimeSpan RekeyGrace = TimeSpan.FromSeconds(10);
+
         readonly string _host;
         readonly byte[] _preSharedKey;
         readonly uint _magic;
@@ -39,6 +44,10 @@ namespace TqkLibrary.Vpn.Drivers.L2tpIpsec
 
         System.Threading.Timer? _helloTimer;
         System.Threading.Timer? _dpdTimer;
+        System.Threading.Timer? _rekeyTimer;
+        System.Threading.Timer? _phase1Timer;
+        System.Threading.Timer? _dropTimer;
+        TaskCompletionSource<byte[]>? _rekeyWaiter;
         int _dpdSequence;
         int _dpdMissed;
         volatile bool _keepaliveRunning;
@@ -94,7 +103,7 @@ namespace TqkLibrary.Vpn.Drivers.L2tpIpsec
             await _natt.SendIkeAsync(ike.BuildQuickMode3()).ConfigureAwait(false); // QM3 has no reply
 
             // ESP data plane + L2TP + PPP.
-            EspSession esp = BuildEspSession(ike);
+            EspSession esp = BuildEspSession(ike.CreatePhase2Keys(), ike.ChildOutboundSpi, ike.ChildInboundSpi);
             _dataTransport = new IpsecL2tpTransport(esp, datagram => _natt.SendEspAsync(datagram));
             _espActive = true;
 
@@ -118,12 +127,11 @@ namespace TqkLibrary.Vpn.Drivers.L2tpIpsec
             StartKeepalive();
         }
 
-        static EspSession BuildEspSession(IkeV1Client ike)
+        static EspSession BuildEspSession(IkeV1Phase2Keys keys, byte[] outboundSpi, byte[] inboundSpi)
         {
-            IkeV1Phase2Keys keys = ike.CreatePhase2Keys();
             EspCipherSuite outbound = EspCipherSuite.AesCbcHmacSha1(keys.OutboundEncryption, keys.OutboundIntegrity);
             EspCipherSuite inbound = EspCipherSuite.AesCbcHmacSha1(keys.InboundEncryption, keys.InboundIntegrity);
-            return new EspSession(ToSpi(ike.ChildOutboundSpi), outbound, ToSpi(ike.ChildInboundSpi), inbound);
+            return new EspSession(ToSpi(outboundSpi), outbound, ToSpi(inboundSpi), inbound);
         }
 
         async Task<byte[]> ExchangeIkeAsync(byte[] request, CancellationToken cancellationToken)
@@ -151,8 +159,13 @@ namespace TqkLibrary.Vpn.Drivers.L2tpIpsec
                     if (kind == NatTPacketKind.Ike)
                     {
                         TaskCompletionSource<byte[]>? waiter = _ikeWaiter;
-                        if (waiter != null) waiter.TrySetResult(payload); // a handshake reply
-                        else HandleInboundIke(payload);                   // steady-state DPD / Delete
+                        TaskCompletionSource<byte[]>? rekey = _rekeyWaiter;
+                        if (waiter != null)
+                            waiter.TrySetResult(payload);                  // a handshake reply
+                        else if (rekey != null && _ike!.IsRekeyReply(payload))
+                            rekey.TrySetResult(payload);                   // a rekey Quick Mode reply
+                        else
+                            HandleInboundIke(payload);                     // steady-state DPD / Delete
                     }
                     else if (kind == NatTPacketKind.Esp && _espActive)
                         _dataTransport?.OnEspPacket(payload);
@@ -170,6 +183,9 @@ namespace TqkLibrary.Vpn.Drivers.L2tpIpsec
             SetState(L2tpIpsecConnectionState.Connected);
             _helloTimer = new System.Threading.Timer(_ => _ = SendHelloTickAsync(), null, HelloInterval, HelloInterval);
             _dpdTimer = new System.Threading.Timer(_ => _ = SendDpdTickAsync(), null, DpdInterval, DpdInterval);
+            _rekeyTimer = new System.Threading.Timer(_ => _ = RekeyPhase2Async(), null, RekeyInterval, RekeyInterval);
+            _phase1Timer = new System.Threading.Timer(
+                _ => OnLinkLost("IKE Phase 1 SA lifetime expired."), null, Phase1Lifetime, System.Threading.Timeout.InfiniteTimeSpan);
         }
 
         void StopKeepalive()
@@ -177,8 +193,14 @@ namespace TqkLibrary.Vpn.Drivers.L2tpIpsec
             _keepaliveRunning = false;
             _helloTimer?.Dispose();
             _dpdTimer?.Dispose();
+            _rekeyTimer?.Dispose();
+            _phase1Timer?.Dispose();
+            _dropTimer?.Dispose();
             _helloTimer = null;
             _dpdTimer = null;
+            _rekeyTimer = null;
+            _phase1Timer = null;
+            _dropTimer = null;
         }
 
         async Task SendHelloTickAsync()
@@ -232,6 +254,48 @@ namespace TqkLibrary.Vpn.Drivers.L2tpIpsec
         {
             try { await _natt!.SendIkeAsync(ike.BuildDpdAck(sequence)).ConfigureAwait(false); }
             catch { }
+        }
+
+        // ---- rekey: refresh the ESP CHILD SA on the live IKE SA (make-before-break) ----
+
+        async Task RekeyPhase2Async()
+        {
+            if (!_keepaliveRunning) return;
+            IkeV1Client ike = _ike!;
+            try
+            {
+                byte[] reply = await ExchangeRekeyAsync(ike.BuildRekeyQuickMode1()).ConfigureAwait(false);
+                if (!ike.ProcessRekeyQuickMode2(reply)) return; // keep the current SA; retry at the next interval
+                await _natt!.SendIkeAsync(ike.BuildRekeyQuickMode3()).ConfigureAwait(false);
+
+                EspSession next = BuildEspSession(ike.CreateRekeyPhase2Keys(), ike.RekeyChildOutboundSpi, ike.RekeyChildInboundSpi);
+                _dataTransport!.SwapSession(next);
+                ScheduleDropPreviousInbound();
+            }
+            catch { /* rekey failed; the current SA stays active — DPD declares the peer dead if it is truly gone */ }
+        }
+
+        async Task<byte[]> ExchangeRekeyAsync(byte[] request)
+        {
+            for (int attempt = 0; attempt < 5 && _keepaliveRunning; attempt++)
+            {
+                var waiter = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _rekeyWaiter = waiter;
+                await _natt!.SendIkeAsync(request).ConfigureAwait(false);
+
+                Task completed = await Task.WhenAny(waiter.Task, Task.Delay(2500)).ConfigureAwait(false);
+                _rekeyWaiter = null;
+                if (completed == waiter.Task) return await waiter.Task.ConfigureAwait(false);
+            }
+            throw new TimeoutException("No Quick Mode rekey response from the gateway.");
+        }
+
+        void ScheduleDropPreviousInbound()
+        {
+            _dropTimer?.Dispose();
+            _dropTimer = new System.Threading.Timer(
+                _ => { try { _dataTransport?.DropPreviousInbound(); } catch { } },
+                null, RekeyGrace, System.Threading.Timeout.InfiniteTimeSpan);
         }
 
         void OnLinkLost(string reason)

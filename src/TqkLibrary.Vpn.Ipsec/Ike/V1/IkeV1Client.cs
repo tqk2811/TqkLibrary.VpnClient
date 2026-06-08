@@ -41,6 +41,14 @@ namespace TqkLibrary.Vpn.Ipsec.Ike.V1
         byte[] _quickModeNonce;
         byte[] _quickModeMessageAfterHash = Array.Empty<byte>();
 
+        // Quick Mode rekey state (kept separate from the primary exchange above so a rekey never clobbers it).
+        uint _rekeyMessageId;
+        byte[] _rekeyNonceInitiator = Array.Empty<byte>();
+        byte[] _rekeyNonceResponder = Array.Empty<byte>();
+        byte[] _rekeyChildInboundSpi = Array.Empty<byte>();
+        byte[] _rekeyChildOutboundSpi = Array.Empty<byte>();
+        IkeV1Cipher? _rekeyCipher;
+
         /// <summary>Creates a client with the PSK and the IPv4 identities to assert for Phase 1 / traffic selectors.</summary>
         public IkeV1Client(byte[] preSharedKey, IPAddress localIdentity, IPAddress remoteIdentity, byte[]? initiatorCookie = null)
         {
@@ -220,6 +228,72 @@ namespace TqkLibrary.Vpn.Ipsec.Ike.V1
             => IkeV1Phase2Keys.Derive(_prf, _keys!.SkeyidD, IkeV1Constants.Protocol.Esp,
                 ChildInboundSpi, ChildOutboundSpi, _quickModeNonce, _nonceResponder, encryptionKeyLength: 32, integrityKeyLength: 20);
 
+        // ---- Quick Mode rekey (Phase 2 / CHILD SA refresh on the live IKE SA) ----
+
+        /// <summary>The fresh ESP SPI we chose for the rekeyed CHILD SA (the peer sends to us on it).</summary>
+        public byte[] RekeyChildInboundSpi => _rekeyChildInboundSpi;
+
+        /// <summary>The ESP SPI the responder chose for the rekeyed CHILD SA (we send to it on it).</summary>
+        public byte[] RekeyChildOutboundSpi => _rekeyChildOutboundSpi;
+
+        /// <summary>Rekey QM1: a brand-new Quick Mode (fresh nonce, SPI, message id) negotiating a replacement ESP SA.</summary>
+        public byte[] BuildRekeyQuickMode1()
+        {
+            _rekeyMessageId = RandomNonZeroUInt32();
+            _rekeyNonceInitiator = RandomBytes(16);
+            _rekeyChildInboundSpi = RandomBytes(4);
+            _rekeyCipher = NewDerivedIvCipher(_rekeyMessageId);
+
+            var afterHash = new List<IsakmpPayload>
+            {
+                IkeV1Proposals.Phase2(_rekeyChildInboundSpi),
+                new IsakmpRawPayload(IsakmpPayloadType.Nonce, _rekeyNonceInitiator),
+                new IsakmpRawPayload(IsakmpPayloadType.Identification, IdBody(IdTypeIpv4, 17, 1701, _localIdentity.GetAddressBytes())),
+                new IsakmpRawPayload(IsakmpPayloadType.Identification, IdBody(IdTypeIpv4, 17, 1701, _remoteIdentity.GetAddressBytes())),
+            };
+            var afterHashBytes = new List<byte>();
+            IsakmpMessage.EncodePayloadChain(afterHashBytes, afterHash);
+
+            byte[] hash1 = IkeV1QuickMode.ComputeHash1(_prf, _keys!.SkeyidA, _rekeyMessageId, afterHashBytes.ToArray());
+            var inner = new List<IsakmpPayload> { new IsakmpRawPayload(IsakmpPayloadType.Hash, hash1) };
+            inner.AddRange(afterHash);
+            return EncodeEncrypted(_rekeyCipher, IsakmpExchangeType.QuickMode, _rekeyMessageId, inner);
+        }
+
+        /// <summary>Rekey QM2: capture the responder's replacement ESP SPI and nonce.</summary>
+        public bool ProcessRekeyQuickMode2(byte[] wire)
+        {
+            List<IsakmpPayload> payloads = DecryptWith(_rekeyCipher!, wire);
+            IsakmpSaPayload? sa = payloads.OfType<IsakmpSaPayload>().FirstOrDefault();
+            IsakmpRawPayload? nr = payloads.OfType<IsakmpRawPayload>().FirstOrDefault(p => p.Type == IsakmpPayloadType.Nonce);
+            if (sa is null || nr is null || sa.Proposals.Count == 0) return false;
+
+            _rekeyChildOutboundSpi = sa.Proposals[0].Spi;
+            _rekeyNonceResponder = nr.Body;
+            return _rekeyChildOutboundSpi.Length == 4;
+        }
+
+        /// <summary>Rekey QM3: the final HASH(3) confirming the rekey.</summary>
+        public byte[] BuildRekeyQuickMode3()
+        {
+            byte[] hash3 = IkeV1QuickMode.ComputeHash3(_prf, _keys!.SkeyidA, _rekeyMessageId, _rekeyNonceInitiator, _rekeyNonceResponder);
+            var inner = new List<IsakmpPayload> { new IsakmpRawPayload(IsakmpPayloadType.Hash, hash3) };
+            return EncodeEncrypted(_rekeyCipher!, IsakmpExchangeType.QuickMode, _rekeyMessageId, inner);
+        }
+
+        /// <summary>Derives the rekeyed ESP CHILD SA keys.</summary>
+        public IkeV1Phase2Keys CreateRekeyPhase2Keys()
+            => IkeV1Phase2Keys.Derive(_prf, _keys!.SkeyidD, IkeV1Constants.Protocol.Esp,
+                _rekeyChildInboundSpi, _rekeyChildOutboundSpi, _rekeyNonceInitiator, _rekeyNonceResponder, encryptionKeyLength: 32, integrityKeyLength: 20);
+
+        /// <summary>True if <paramref name="wire"/> is the Quick Mode reply for the rekey exchange currently in flight.</summary>
+        public bool IsRekeyReply(byte[] wire)
+        {
+            if (_rekeyMessageId == 0) return false;
+            IsakmpMessage header = IsakmpMessage.ReadHeader(wire, out _);
+            return header.ExchangeType == IsakmpExchangeType.QuickMode && header.MessageId == _rekeyMessageId;
+        }
+
         // ---- Informational exchange (DPD keepalive; Delete for teardown) ----
 
         /// <summary>Builds an encrypted DPD R-U-THERE probe (RFC 3706) carrying <paramref name="sequence"/>.</summary>
@@ -246,7 +320,7 @@ namespace TqkLibrary.Vpn.Ipsec.Ike.V1
             if (peek.ExchangeType != IsakmpExchangeType.Informational)
                 return new IkeV1InformationalResult(IkeV1InformationalKind.Unknown, 0);
 
-            List<IsakmpPayload> payloads = DecryptInformational(wire, out _);
+            List<IsakmpPayload> payloads = DecryptWith(NewDerivedIvCipher(peek.MessageId), wire);
 
             foreach (IsakmpRawPayload payload in payloads.OfType<IsakmpRawPayload>())
             {
@@ -277,14 +351,12 @@ namespace TqkLibrary.Vpn.Ipsec.Ike.V1
 
             var inner = new List<IsakmpPayload> { new IsakmpRawPayload(IsakmpPayloadType.Hash, hash) };
             inner.AddRange(afterHash);
-            return EncodeEncrypted(NewInformationalCipher(messageId), IsakmpExchangeType.Informational, messageId, inner);
+            return EncodeEncrypted(NewDerivedIvCipher(messageId), IsakmpExchangeType.Informational, messageId, inner);
         }
 
-        List<IsakmpPayload> DecryptInformational(byte[] wire, out IsakmpMessage header)
+        List<IsakmpPayload> DecryptWith(IkeV1Cipher cipher, byte[] wire)
         {
-            header = IsakmpMessage.ReadHeader(wire, out IsakmpPayloadType first);
-            IkeV1Cipher cipher = NewInformationalCipher(header.MessageId);
-
+            IsakmpMessage.ReadHeader(wire, out IsakmpPayloadType first);
             byte[] ciphertext = new byte[wire.Length - IsakmpMessage.HeaderSize];
             Buffer.BlockCopy(wire, IsakmpMessage.HeaderSize, ciphertext, 0, ciphertext.Length);
             byte[] plain = cipher.Decrypt(ciphertext);
@@ -294,9 +366,10 @@ namespace TqkLibrary.Vpn.Ipsec.Ike.V1
             return payloads;
         }
 
-        // Each Informational message derives its own IV from the last Phase 1 IV and its message id (RFC 2409 §5.5),
-        // so they neither chain with each other nor disturb the Phase 1 / Quick Mode cipher state.
-        IkeV1Cipher NewInformationalCipher(uint messageId)
+        // A Quick Mode or Informational message derives its IV from the last Phase 1 IV and its message id
+        // (RFC 2409 §5.5), independent of the Phase 1 cipher chain. Single-message exchanges (DPD, Delete) make a
+        // fresh one each time; a multi-message rekey reuses one instance so its IV chains across QM1→QM2→QM3.
+        IkeV1Cipher NewDerivedIvCipher(uint messageId)
             => new IkeV1Cipher(_keys!.CipherKey, IkeV1Cipher.QuickModeIv(_hash, _phase1LastIv, messageId));
 
         // ---- helpers ----

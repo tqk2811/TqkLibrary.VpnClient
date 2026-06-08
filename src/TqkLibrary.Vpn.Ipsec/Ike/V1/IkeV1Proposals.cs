@@ -11,8 +11,8 @@ namespace TqkLibrary.Vpn.Ipsec.Ike.V1
     /// </summary>
     public static class IkeV1Proposals
     {
-        const uint Phase1Lifetime = 28800;
-        const uint Phase2Lifetime = 3600;
+        const uint Phase1Lifetime = IkeV1Lifetimes.Phase1Seconds;
+        const uint Phase2Lifetime = IkeV1Lifetimes.Phase2Seconds;
 
         /// <summary>Builds the Phase 1 (ISAKMP) SA payload offering several common AES-CBC/SHA1/PSK transforms.</summary>
         public static IsakmpSaPayload Phase1()
