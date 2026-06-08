@@ -65,6 +65,21 @@ namespace TqkLibrary.Vpn.L2tp
         public Task SendHelloAsync()
             => _control.SendAsync(L2tpControlMessage.Create(L2tpMessageType.Hello, PeerTunnelId));
 
+        /// <summary>Sends a Call-Disconnect-Notify for the session (RFC 2661 §5.6); <paramref name="resultCode"/> 3 = administrative.</summary>
+        public Task SendCallDisconnectAsync(ushort resultCode = 3)
+        {
+            var cdn = L2tpControlMessage.Create(L2tpMessageType.CallDisconnectNotify, PeerTunnelId)
+                .With(L2tpAvp.UInt16(L2tpAvpType.ResultCode, resultCode));
+            cdn.SessionId = PeerSessionId;
+            return _control.SendAsync(cdn);
+        }
+
+        /// <summary>Sends a Stop-Control-Connection-Notification to tear the tunnel down; <paramref name="resultCode"/> 1 = general request to clear.</summary>
+        public Task SendStopControlConnectionAsync(ushort resultCode = 1)
+            => _control.SendAsync(L2tpControlMessage.Create(L2tpMessageType.StopControlConnectionNotification, PeerTunnelId)
+                .With(L2tpAvp.UInt16(L2tpAvpType.ResultCode, resultCode))
+                .With(L2tpAvp.UInt16(L2tpAvpType.AssignedTunnelId, LocalTunnelId)));
+
         Task SendSccrqAsync()
         {
             var sccrq = L2tpControlMessage.Create(L2tpMessageType.StartControlConnectionRequest, 0)

@@ -294,6 +294,23 @@ namespace TqkLibrary.Vpn.Ipsec.Ike.V1
             return header.ExchangeType == IsakmpExchangeType.QuickMode && header.MessageId == _rekeyMessageId;
         }
 
+        // ---- Teardown: Delete payloads ----
+
+        /// <summary>Builds an encrypted Informational+Delete for the current ESP CHILD SA (the latest inbound SPI).</summary>
+        public byte[] BuildDeleteEsp()
+        {
+            byte[] spi = _rekeyChildInboundSpi.Length == 4 ? _rekeyChildInboundSpi : ChildInboundSpi;
+            var delete = new IsakmpRawPayload(IsakmpPayloadType.Delete, IkeV1Delete.BuildEspDeleteBody(spi));
+            return BuildInformational(new List<IsakmpPayload> { delete });
+        }
+
+        /// <summary>Builds an encrypted Informational+Delete for the ISAKMP SA (tearing the whole tunnel down).</summary>
+        public byte[] BuildDeleteIsakmp()
+        {
+            var delete = new IsakmpRawPayload(IsakmpPayloadType.Delete, IkeV1Delete.BuildIsakmpDeleteBody(InitiatorCookie, ResponderCookie));
+            return BuildInformational(new List<IsakmpPayload> { delete });
+        }
+
         // ---- Informational exchange (DPD keepalive; Delete for teardown) ----
 
         /// <summary>Builds an encrypted DPD R-U-THERE probe (RFC 3706) carrying <paramref name="sequence"/>.</summary>

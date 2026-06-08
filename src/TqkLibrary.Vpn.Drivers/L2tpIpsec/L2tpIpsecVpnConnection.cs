@@ -23,10 +23,6 @@ namespace TqkLibrary.Vpn.Drivers.L2tpIpsec
             => throw new NotSupportedException("This L2TP/IPsec client establishes a single PPP session per tunnel.");
 
         /// <inheritdoc/>
-        public ValueTask DisposeAsync()
-        {
-            _inner.Dispose();
-            return default;
-        }
+        public ValueTask DisposeAsync() => _inner.DisposeAsync();
     }
 }

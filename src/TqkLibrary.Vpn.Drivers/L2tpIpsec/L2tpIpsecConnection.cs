@@ -18,7 +18,7 @@ namespace TqkLibrary.Vpn.Drivers.L2tpIpsec
     /// data plane, an L2TP tunnel/session over UDP/1701, and a PPP session (MS-CHAPv2) that yields the assigned IP.
     /// After <see cref="ConnectAsync"/> the tunnel carries IP traffic via <see cref="PacketChannel"/>.
     /// </summary>
-    public sealed class L2tpIpsecConnection : IDisposable
+    public sealed class L2tpIpsecConnection : IDisposable, IAsyncDisposable
     {
         static readonly TimeSpan HelloInterval = TimeSpan.FromSeconds(60);
         static readonly TimeSpan DpdInterval = TimeSpan.FromSeconds(20);
@@ -50,6 +50,7 @@ namespace TqkLibrary.Vpn.Drivers.L2tpIpsec
         TaskCompletionSource<byte[]>? _rekeyWaiter;
         int _dpdSequence;
         int _dpdMissed;
+        int _teardownStarted;
         volatile bool _keepaliveRunning;
         L2tpIpsecConnectionState _state = L2tpIpsecConnectionState.Disconnected;
 
@@ -333,14 +334,66 @@ namespace TqkLibrary.Vpn.Drivers.L2tpIpsec
 
         static uint ToSpi(byte[] spi) => (uint)((spi[0] << 24) | (spi[1] << 16) | (spi[2] << 8) | spi[3]);
 
+        /// <summary>
+        /// Tears the tunnel down gracefully: stops keepalive, sends L2TP CDN + StopCCN and IKE Delete (ESP + ISAKMP),
+        /// then cancels the receive loop and disposes the transports. Best-effort and time-boxed; safe to call once.
+        /// </summary>
+        public async Task DisconnectAsync(CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Exchange(ref _teardownStarted, 1) != 0) return;
+
+            StopKeepalive();
+            SetState(L2tpIpsecConnectionState.Disconnected);
+
+            await SendTeardownAsync().ConfigureAwait(false);
+
+            _espActive = false;
+            _loopCts?.Cancel();
+            _l2tp?.Dispose();
+            if (_natt != null) await _natt.DisposeAsync().ConfigureAwait(false);
+        }
+
+        async Task SendTeardownAsync()
+        {
+            L2tpClient? l2tp = _l2tp;
+            IkeV1Client? ike = _ike;
+            NatTraversalChannel? natt = _natt;
+
+            // Notify the peer so it releases the SAs immediately instead of waiting for them to time out.
+            Task teardown = Task.Run(async () =>
+            {
+                if (l2tp != null)
+                {
+                    await Swallow(() => l2tp.SendCallDisconnectAsync()).ConfigureAwait(false);
+                    await Swallow(() => l2tp.SendStopControlConnectionAsync()).ConfigureAwait(false);
+                }
+                if (ike != null && natt != null)
+                {
+                    await Swallow(() => natt.SendIkeAsync(ike.BuildDeleteEsp())).ConfigureAwait(false);
+                    await Swallow(() => natt.SendIkeAsync(ike.BuildDeleteIsakmp())).ConfigureAwait(false);
+                }
+                await Task.Delay(200).ConfigureAwait(false); // let the datagrams leave before the socket closes
+            });
+
+            await Task.WhenAny(teardown, Task.Delay(TimeSpan.FromSeconds(2))).ConfigureAwait(false);
+        }
+
+        static async Task Swallow(Func<Task> action)
+        {
+            try { await action().ConfigureAwait(false); } catch { }
+        }
+
+        /// <inheritdoc/>
+        public async ValueTask DisposeAsync()
+        {
+            try { await DisconnectAsync().ConfigureAwait(false); } catch { }
+        }
+
         /// <inheritdoc/>
         public void Dispose()
         {
-            StopKeepalive();
-            SetState(L2tpIpsecConnectionState.Disconnected);
-            _loopCts?.Cancel();
-            _l2tp?.Dispose();
-            _ = _natt?.DisposeAsync();
+            // Prefer DisposeAsync; this offloads to the thread pool to avoid a sync-context deadlock on the block.
+            try { Task.Run(() => DisconnectAsync()).GetAwaiter().GetResult(); } catch { }
         }
     }
 }
