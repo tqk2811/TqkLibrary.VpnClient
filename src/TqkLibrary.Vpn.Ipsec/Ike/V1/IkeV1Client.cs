@@ -220,6 +220,85 @@ namespace TqkLibrary.Vpn.Ipsec.Ike.V1
             => IkeV1Phase2Keys.Derive(_prf, _keys!.SkeyidD, IkeV1Constants.Protocol.Esp,
                 ChildInboundSpi, ChildOutboundSpi, _quickModeNonce, _nonceResponder, encryptionKeyLength: 32, integrityKeyLength: 20);
 
+        // ---- Informational exchange (DPD keepalive; Delete for teardown) ----
+
+        /// <summary>Builds an encrypted DPD R-U-THERE probe (RFC 3706) carrying <paramref name="sequence"/>.</summary>
+        public byte[] BuildDpdRUThere(uint sequence) => BuildDpdNotify(IkeV1Dpd.RUThere, sequence);
+
+        /// <summary>Builds an encrypted DPD R-U-THERE-ACK answering a peer probe with its <paramref name="sequence"/>.</summary>
+        public byte[] BuildDpdAck(uint sequence) => BuildDpdNotify(IkeV1Dpd.RUThereAck, sequence);
+
+        byte[] BuildDpdNotify(ushort notifyType, uint sequence)
+        {
+            byte[] notifyBody = IkeV1Dpd.BuildNotifyBody(InitiatorCookie, ResponderCookie, notifyType, sequence);
+            var afterHash = new List<IsakmpPayload> { new IsakmpRawPayload(IsakmpPayloadType.Notification, notifyBody) };
+            return BuildInformational(afterHash);
+        }
+
+        /// <summary>
+        /// Decrypts an inbound Informational exchange and classifies it (DPD request/ack or a Delete). Returns
+        /// <see cref="IkeV1InformationalKind.Unknown"/> for any non-Informational message, so the caller can route
+        /// every post-handshake IKE datagram here without inspecting the header itself.
+        /// </summary>
+        public IkeV1InformationalResult ProcessInformational(byte[] wire)
+        {
+            IsakmpMessage peek = IsakmpMessage.ReadHeader(wire, out _);
+            if (peek.ExchangeType != IsakmpExchangeType.Informational)
+                return new IkeV1InformationalResult(IkeV1InformationalKind.Unknown, 0);
+
+            List<IsakmpPayload> payloads = DecryptInformational(wire, out _);
+
+            foreach (IsakmpRawPayload payload in payloads.OfType<IsakmpRawPayload>())
+            {
+                if (payload.Type == IsakmpPayloadType.Notification
+                    && IkeV1Dpd.TryParseNotify(payload.Body, out ushort notifyType, out uint sequence))
+                {
+                    if (notifyType == IkeV1Dpd.RUThere) return new IkeV1InformationalResult(IkeV1InformationalKind.DpdRequest, sequence);
+                    if (notifyType == IkeV1Dpd.RUThereAck) return new IkeV1InformationalResult(IkeV1InformationalKind.DpdAck, sequence);
+                }
+                else if (payload.Type == IsakmpPayloadType.Delete && payload.Body.Length >= 5)
+                {
+                    byte protocol = payload.Body[4]; // Delete body: DOI(4) | Protocol(1) | …
+                    if (protocol == IkeV1Constants.Protocol.Esp) return new IkeV1InformationalResult(IkeV1InformationalKind.DeleteEsp, 0);
+                    if (protocol == IkeV1Constants.Protocol.Isakmp) return new IkeV1InformationalResult(IkeV1InformationalKind.DeleteIsakmp, 0);
+                }
+            }
+            return new IkeV1InformationalResult(IkeV1InformationalKind.Unknown, 0);
+        }
+
+        /// <summary>Wraps <paramref name="afterHash"/> in a HASH(1)-prefixed Informational message under a fresh message id.</summary>
+        byte[] BuildInformational(List<IsakmpPayload> afterHash)
+        {
+            uint messageId = RandomNonZeroUInt32();
+
+            var afterHashBytes = new List<byte>();
+            IsakmpMessage.EncodePayloadChain(afterHashBytes, afterHash);
+            byte[] hash = IkeV1QuickMode.ComputeHash1(_prf, _keys!.SkeyidA, messageId, afterHashBytes.ToArray());
+
+            var inner = new List<IsakmpPayload> { new IsakmpRawPayload(IsakmpPayloadType.Hash, hash) };
+            inner.AddRange(afterHash);
+            return EncodeEncrypted(NewInformationalCipher(messageId), IsakmpExchangeType.Informational, messageId, inner);
+        }
+
+        List<IsakmpPayload> DecryptInformational(byte[] wire, out IsakmpMessage header)
+        {
+            header = IsakmpMessage.ReadHeader(wire, out IsakmpPayloadType first);
+            IkeV1Cipher cipher = NewInformationalCipher(header.MessageId);
+
+            byte[] ciphertext = new byte[wire.Length - IsakmpMessage.HeaderSize];
+            Buffer.BlockCopy(wire, IsakmpMessage.HeaderSize, ciphertext, 0, ciphertext.Length);
+            byte[] plain = cipher.Decrypt(ciphertext);
+
+            var payloads = new List<IsakmpPayload>();
+            IsakmpMessage.ParsePayloadChain(plain, first, payloads);
+            return payloads;
+        }
+
+        // Each Informational message derives its own IV from the last Phase 1 IV and its message id (RFC 2409 §5.5),
+        // so they neither chain with each other nor disturb the Phase 1 / Quick Mode cipher state.
+        IkeV1Cipher NewInformationalCipher(uint messageId)
+            => new IkeV1Cipher(_keys!.CipherKey, IkeV1Cipher.QuickModeIv(_hash, _phase1LastIv, messageId));
+
         // ---- helpers ----
 
         IsakmpMessage NewMessage(IsakmpExchangeType exchange) => new()
@@ -235,7 +314,11 @@ namespace TqkLibrary.Vpn.Ipsec.Ike.V1
             IkeV1Cipher cipher = exchange == IsakmpExchangeType.QuickMode
                 ? QuickModeCipher(messageId, useQuickModeIv)
                 : _phase1Cipher!;
+            return EncodeEncrypted(cipher, exchange, messageId, payloads);
+        }
 
+        byte[] EncodeEncrypted(IkeV1Cipher cipher, IsakmpExchangeType exchange, uint messageId, List<IsakmpPayload> payloads)
+        {
             var chain = new List<byte>();
             IsakmpMessage.EncodePayloadChain(chain, payloads);
             byte[] ciphertext = cipher.Encrypt(chain.ToArray());

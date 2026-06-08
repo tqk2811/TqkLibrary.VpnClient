@@ -44,6 +44,9 @@ namespace TqkLibrary.Vpn.L2tp
         /// <summary>Raised for each inbound PPP frame carried by an L2TP data message for our session.</summary>
         public event Action<ReadOnlyMemory<byte>>? DataReceived;
 
+        /// <summary>Raised when the server tears the tunnel/session down (StopCCN or CDN) after it was established.</summary>
+        public event Action<string>? Disconnected;
+
         /// <summary>Brings up the tunnel and session, completing once the session is established.</summary>
         public async Task ConnectAsync(CancellationToken cancellationToken = default)
         {
@@ -57,6 +60,10 @@ namespace TqkLibrary.Vpn.L2tp
         /// <summary>Sends a PPP frame inside an L2TP data message addressed to the server's tunnel/session.</summary>
         public Task SendDataAsync(ReadOnlyMemory<byte> pppFrame)
             => _transport.SendAsync(L2tpCodec.EncodeData(PeerTunnelId, PeerSessionId, pppFrame.Span));
+
+        /// <summary>Sends an L2TP HELLO keepalive on the reliable control channel (RFC 2661 §5.5).</summary>
+        public Task SendHelloAsync()
+            => _control.SendAsync(L2tpControlMessage.Create(L2tpMessageType.Hello, PeerTunnelId));
 
         Task SendSccrqAsync()
         {
@@ -115,10 +122,12 @@ namespace TqkLibrary.Vpn.L2tp
 
                 case L2tpMessageType.StopControlConnectionNotification:
                     Fail("Server sent StopCCN (tunnel rejected).");
+                    Disconnected?.Invoke("Server sent StopCCN (tunnel down).");
                     break;
 
                 case L2tpMessageType.CallDisconnectNotify:
                     Fail("Server sent CDN (call disconnected).");
+                    Disconnected?.Invoke("Server sent CDN (call disconnected).");
                     break;
             }
         }
