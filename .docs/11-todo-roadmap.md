@@ -9,16 +9,19 @@
 - **IKEv2** (`Ipsec/Ike/V2/`) đầy đủ + test, **chưa wire vào driver**.
 - Socket API trong tunnel: **TCP** (`VpnTcpClient` → HttpClient) + **UDP** (`VpnUdpClient` → DNS-over-tunnel), đều live.
 - NAT-T (forced 500→4500), userspace IPv4/TCP/UDP, anti-replay ESP.
-- 10 project `src/`, build xanh `netstandard2.0`+`net8.0`, ~96 test (gồm 3 live integration).
+- **Robustness L2TP/IPsec**: keepalive (HELLO + DPD), Phase 2 rekey in-place (make-before-break), teardown sạch (CDN/StopCCN/DELETE) + `DisconnectAsync`/`IAsyncDisposable` + event `StateChanged`.
+- 10 project `src/`, build xanh `netstandard2.0`+`net8.0`, ~105 test (gồm 3 live integration).
 
 ---
 
 ## P1 — Hoàn thiện 2 driver đang dùng (robustness)
 
-- [ ] **Keepalive L2TP/IPsec**: gửi định kỳ **L2TP HELLO** + **IKE DPD** (RFC 3706). Hiện tunnel **idle là rớt** vì không có keepalive ở tầng L2TP/IKE (SSTP đã có Echo). → [L2tpClient.cs](../src/TqkLibrary.Vpn.L2tp/L2tpClient.cs), [IkeV1Client.cs](../src/TqkLibrary.Vpn.Ipsec/Ike/V1/IkeV1Client.cs)
-- [ ] **Rekey theo SA lifetime**: Phase 1 (28800s) / Phase 2 (3600s) **chỉ đề xuất, không rekey** → kết nối dài sẽ chết. Cần IKE rekey + CHILD_SA/Quick-Mode rekey. → [IkeV1Proposals.cs](../src/TqkLibrary.Vpn.Ipsec/Ike/V1/IkeV1Proposals.cs)
-- [ ] **Teardown sạch khi disconnect**: gửi `DELETE` (IKE) / `StopCCN`+`CDN` (L2TP) / SSTP disconnect thay vì chỉ cancel loop. → [L2tpIpsecConnection.cs](../src/TqkLibrary.Vpn.Drivers/L2tpIpsec/L2tpIpsecConnection.cs)
-- [ ] **Reconnect tự động** khi rớt (exponential backoff), expose event trạng thái (Connected/Reconnecting/Disconnected).
+- [x] **Keepalive L2TP/IPsec**: **L2TP HELLO** (60s) + **IKE DPD** R-U-THERE/ACK (RFC 3706, 20s, chết sau 3 lần không ACK), trả ACK cho probe của server. → [IkeV1Dpd.cs](../src/TqkLibrary.Vpn.Ipsec/Ike/V1/IkeV1Dpd.cs), [IkeV1Client.cs](../src/TqkLibrary.Vpn.Ipsec/Ike/V1/IkeV1Client.cs) (`BuildDpdRUThere`/`BuildDpdAck`/`ProcessInformational`), [L2tpClient.cs](../src/TqkLibrary.Vpn.L2tp/L2tpClient.cs) (`SendHelloAsync`), điều phối + timers ở [L2tpIpsecConnection.cs](../src/TqkLibrary.Vpn.Drivers/L2tpIpsec/L2tpIpsecConnection.cs).
+- [x] **Rekey theo SA lifetime — Phase 2**: Quick Mode rekey in-place ở ~90% lifetime (3600s), swap `EspSession` make-before-break (giữ SA cũ 10s cho inbound). → [IkeV1Client.cs](../src/TqkLibrary.Vpn.Ipsec/Ike/V1/IkeV1Client.cs) (`BuildRekeyQuickMode1/2/3`), [IpsecL2tpTransport.cs](../src/TqkLibrary.Vpn.Drivers/L2tpIpsec/IpsecL2tpTransport.cs) (`SwapSession`/`DropPreviousInbound`), [IkeV1Lifetimes.cs](../src/TqkLibrary.Vpn.Ipsec/Ike/V1/IkeV1Lifetimes.cs).
+  - [ ] **Rekey Phase 1** (28800s): hiện chỉ phát tín hiệu hết hạn ở ~90% (→ raise Disconnected); **chưa** re-Main-Mode/auto-reconnect (đi cùng "Reconnect tự động" bên dưới).
+- [x] **Teardown sạch khi disconnect (L2TP/IPsec)**: `DisconnectAsync`/`IAsyncDisposable` gửi `CDN`+`StopCCN` (L2TP) + `DELETE` ESP+ISAKMP (IKE) rồi mới đóng socket (best-effort, timeout 2s). → [IkeV1Delete.cs](../src/TqkLibrary.Vpn.Ipsec/Ike/V1/IkeV1Delete.cs), [L2tpClient.cs](../src/TqkLibrary.Vpn.L2tp/L2tpClient.cs) (`SendCallDisconnectAsync`/`SendStopControlConnectionAsync`), [L2tpIpsecConnection.cs](../src/TqkLibrary.Vpn.Drivers/L2tpIpsec/L2tpIpsecConnection.cs).
+  - [ ] **SSTP disconnect** sạch (gửi SSTP Call-Disconnect) — chưa làm.
+- [ ] **Reconnect tự động** khi rớt (exponential backoff). Đã có **event trạng thái** `StateChanged` + enum [L2tpIpsecConnectionState](../src/TqkLibrary.Vpn.Drivers/L2tpIpsec/Enums/L2tpIpsecConnectionState.cs) (Connecting/Connected/Reconnecting/Disconnected); còn thiếu vòng reconnect + backoff (sẽ kích hoạt trạng thái `Reconnecting`, dùng chung cho Phase 1 rekey-by-reconnect).
 - [ ] **Phân loại lỗi & timeout rõ ràng**: phân biệt auth-fail vs network-timeout vs server-reject; custom exception types; timeout cấu hình được (hiện IKE retransmit 5×2.5s hard-code).
 - [ ] **Rủi ro forced-NAT-T theo server** (plan rủi ro #1): vài gateway từ chối ephemeral-port/forced-NAT → cần fallback **native ESP** (cần `Transport.RawIp`, elevate) + test nhiều server.
 
@@ -65,8 +68,8 @@
 ---
 
 ## Gợi ý thứ tự
-1. **Keepalive + rekey + teardown** (P1) — để 2 driver hiện có dùng được lâu dài, không chỉ "demo request".
-2. **IKEv1 capstone + lab Docker + TCP loopback** (P1 test) — chốt regression offline.
+1. ~~**Keepalive + rekey + teardown** (P1)~~ — ✅ phần lõi đã xong (keepalive, Phase 2 rekey, teardown). **Còn lại**: Phase 1 rekey/reconnect + backoff (gộp với "Reconnect tự động").
+2. **IKEv1 capstone + lab Docker + TCP loopback** (P1 test) — chốt regression offline (rekey/DPD encrypted hiện chỉ phủ bằng live test, cần responder IKEv1 in-process).
 3. **TCP retransmit + ICMP + AES-GCM ESP** (P2) — vững IP stack & crypto.
 4. **Driver IKEv2-native** (P3) — tận dụng hạ tầng IKEv2 đã build sẵn, chi phí thấp nhất trong nhóm P3.
 5. Các driver/tầng còn lại theo nhu cầu.
