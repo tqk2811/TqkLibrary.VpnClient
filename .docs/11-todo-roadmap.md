@@ -41,6 +41,7 @@
 ## P2 — Nợ kỹ thuật & tài liệu
 
 - [ ] **AEAD ESP (AES-GCM)**: `EspGcmSuite` đã có nhưng IKEv1/L2TP đang chỉ negotiate **AES-CBC+HMAC** → bổ sung đề xuất GCM. → [EspGcmSuite.cs](../src/TqkLibrary.Vpn.Ipsec/Esp/EspGcmSuite.cs)
+- [ ] **`IByteStreamTransport` mồ côi**: interface đã khai báo nhưng **không class nào implement/consume** — SSTP tự cuộn TLS riêng (`TcpClient`+`SslStream`) trong `SstpTransport`. → refactor `SstpTransport` về sau `IByteStreamTransport` để biến interface thành thật + tái dùng cho SSL-VPN khác. → [IByteStreamTransport.cs](../src/TqkLibrary.Vpn.Abstractions/Transport/Interfaces/IByteStreamTransport.cs), [SstpTransport.cs](../src/TqkLibrary.Vpn.Drivers/Sstp/SstpTransport.cs)
 - [ ] **IKEv2 Configuration Payload (CP)**: hiện chỉ `RawPayload`; cần model CP để nhận IP/DNS qua IKEv2 (chuẩn bị cho driver IKEv2-native). → [Ipsec/Ike/V2/Payloads/](../src/TqkLibrary.Vpn.Ipsec/Ike/V2/Payloads/)
 - [ ] **Đồng bộ design docs 00–09 ↔ as-built**: doc `10` đã liệt kê khác biệt (L2TP dùng IKEv1 chứ không IKEv2; không có `EspIkeDemuxTransport`; chưa có L2 Ethernet…) → cập nhật/đánh dấu rõ design-intent.
 - [ ] **Logging/diagnostics** xuyên suốt (trace handshake, drop reason).
@@ -58,6 +59,7 @@
 - [ ] **Driver SoftEther** (SSL-VPN, PACK codec, SHA-0/RC4, SecureNAT) — re-implement, không copy GPL source.
 - [ ] **Driver WireGuard** (Noise IKpsk2, ChaCha20-Poly1305/X25519/BLAKE2s) → cần `Crypto.Noise`.
 - [ ] **Driver OpenConnect-family** (Cisco/Fortinet/F5/Juniper/Pulse/GlobalProtect) → cần `Transport.Dtls`.
+- [ ] **`Transport.Tcp` / `Transport.Tls`** (byte-stream transport độc lập, implement [`IByteStreamTransport`](../src/TqkLibrary.Vpn.Abstractions/Transport/Interfaces/IByteStreamTransport.cs)): tách phần TLS-over-TCP hiện đang nhúng trong `SstpTransport` ra project dùng chung, làm nền cho các SSL-VPN tương lai (SoftEther, OpenConnect-family). Hiện mới có interface, chưa có concrete.
 - [ ] **`Transport.RawIp`** (opt-in, cần elevate, tự detect quyền root/CAP_NET_RAW vs Administrators) → PPTP/GRE/EtherIP/L2TPv3/native-ESP. Đi kèm `Crypto.Mppe` (RC4/MPPE) cho PPTP.
 
 ---
