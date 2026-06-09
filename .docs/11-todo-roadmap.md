@@ -11,6 +11,7 @@
 - NAT-T (forced 500→4500), userspace IPv4/TCP/UDP, anti-replay ESP.
 - **Robustness L2TP/IPsec**: keepalive (HELLO + DPD), Phase 2 rekey in-place (make-before-break), teardown sạch (CDN/StopCCN/DELETE) + `DisconnectAsync`/`IAsyncDisposable`, **auto-reconnect** (backoff, stable channel) + event `StateChanged`.
 - 10 project `src/` + 11 project `tests/`, build xanh `netstandard2.0`+`net8.0`, ~93 test method (`[Fact]`/`[Theory]`) — gồm 7 live integration `[Trait("Category","Integration")]` (3 ở `TqkLibrary.Vpn.Tests` + 4 SSTP).
+- **Demo tích hợp proxy** `demo/Vpn2ProxyDemo`: adapter `IProxySource` (inline trong demo) cho `TqkLibrary.Proxy` 1.0.35 → HTTP/SOCKS proxy local định tuyến qua tunnel; MS-SSTP + L2TP/IPsec → `checkip`.
 
 ---
 
@@ -53,6 +54,7 @@
 - [ ] **Logging/diagnostics** xuyên suốt (trace handshake, drop reason).
 - [ ] **Review** cancellation/timeout & thread-safety toàn cục (các receive-loop, channel).
 - [ ] **CI đa OS** (plan M0) — chưa có cấu hình CI.
+- [ ] **Adapter proxy** (hiện **inline** trong [`demo/Vpn2ProxyDemo`](../demo/Vpn2ProxyDemo), chưa tách thành project `src/`): mới có `IConnectSource` (HTTP/SOCKS CONNECT). Còn thiếu **UDP-ASSOCIATE** (có sẵn `VpnUdpClient`, cần SOCKS5 UDP framing), **BIND** (cần listen userspace — chưa có), **DNS-over-tunnel** (đang resolve bằng host DNS), **IPv6**. Nếu cần tái dùng → cân nhắc tách lại thành `TqkLibrary.Vpn.Proxy`.
 - [ ] **NuGet packaging** nếu phát hành: version (GitVersion), `GenerateDocumentationFile`, symbols/snupkg.
 
 ---

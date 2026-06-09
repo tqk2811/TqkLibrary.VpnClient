@@ -1,0 +1,24 @@
+{
+  "profiles": {
+    "sstp": {
+      "commandName": "Project",
+      "commandLineArgs": "sstp"
+    },
+    "l2tp": {
+      "commandName": "Project",
+      "commandLineArgs": "l2tp"
+    },
+    "sstp (host khác)": {
+      "commandName": "Project",
+      "commandLineArgs": "sstp --host public-vpn-226.opengw.net"
+    },
+    "l2tp (host khác)": {
+      "commandName": "Project",
+      "commandLineArgs": "l2tp --host public-vpn-226.opengw.net"
+    },
+    "help": {
+      "commandName": "Project",
+      "commandLineArgs": "--help"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Driver façades: SstpConnection (MS-SSTP) + L2tpIpsecConnection (L2TP/IPsec). -->
+    <ProjectReference Include="..\..\src\TqkLibrary.Vpn.Drivers\TqkLibrary.Vpn.Drivers.csproj" />
+    <!-- Socket API trên tunnel: VpnTcpClient + TcpIpStack (dùng bởi VpnProxySource cục bộ). -->
+    <ProjectReference Include="..\..\src\TqkLibrary.Vpn.Sockets\TqkLibrary.Vpn.Sockets.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" Version="2.0.7" />
+    <PackageReference Include="TqkLibrary.Proxy" Version="1.0.35" />
+  </ItemGroup>
+
+</Project>
