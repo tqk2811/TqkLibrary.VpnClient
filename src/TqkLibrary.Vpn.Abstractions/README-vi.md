@@ -18,7 +18,7 @@ Nhiều enum/flag trong project là **khung mở rộng tương lai** (WireGuard
 - **Target frameworks:** `netstandard2.0` ; `net8.0`.
 - **Phụ thuộc (ProjectReference):** **không có** — đây là project đáy, không tham chiếu project nào trong solution.
 - **PackageReference:** không có package đặc thù riêng. Trên `netstandard2.0` kế thừa polyfill chung từ [Directory.Build.props](../Directory.Build.props#L16-L21): `System.Memory`, `System.Threading.Channels`, `System.IO.Pipelines`, `Microsoft.Bcl.AsyncInterfaces` (cung cấp `Span/Memory`, `IAsyncDisposable`, `ValueTask`). Trên `net8.0` các kiểu này có sẵn trong BCL.
-- **Được dùng bởi:** `Drivers`, `IpStack`, `Ipsec`, `Transport.Udp`, `L2tp`, `Sockets`, `Ppp` (gián tiếp qua các tầng đó là `Vpn`).
+- **Được dùng bởi:** `Drivers.L2tpIpsec`, `Drivers.Sstp`, `IpStack`, `Ipsec`, `Transport.Udp`, `L2tp`, `Sockets`, `Ppp` (gián tiếp qua các tầng đó là `Vpn`).
 
 Xem thêm tài liệu as-built: [10-codebase-architecture-and-flow.md](../../.docs/10-codebase-architecture-and-flow.md).
 
@@ -37,7 +37,11 @@ TqkLibrary.Vpn.Abstractions/
     ├── Enums/                #   VpnLinkLayer/Transport/Security/Auth + Address/MultiHost
     ├── Models/               #   VpnEndpoint, VpnCredentials, TunnelConfig, VpnDriverCapabilities
     ├── Interfaces/           #   IVpnProtocolDriver → IVpnConnection → IVpnSession
-    └── VpnElevationRequiredException.cs
+    ├── VpnElevationRequiredException.cs        # cần quyền admin/root (kế thừa Exception)
+    ├── VpnConnectionException.cs               # base lỗi kết nối (không sealed)
+    ├── VpnAuthenticationException.cs           # con: sai credential
+    ├── VpnServerRejectedException.cs           # con: server từ chối ở mức giao thức
+    └── VpnNetworkTimeoutException.cs           # con: handshake no-response trong timeout
 ```
 
 ## Thành phần chính
@@ -77,7 +81,11 @@ TqkLibrary.Vpn.Abstractions/
 | `VpnEndpoint` | Host + port của server | [VpnEndpoint.cs:4](Drivers/Models/VpnEndpoint.cs#L4) |
 | `VpnCredentials` | `Username` / `Password` / `PreSharedKey` | [VpnCredentials.cs:4](Drivers/Models/VpnCredentials.cs#L4) |
 | `TunnelConfig` | Kết quả mạng của session: địa chỉ, prefix, DNS, routes, MTU (chỉ dùng nội bộ, không ghi routing table OS) | [TunnelConfig.cs:9](Drivers/Models/TunnelConfig.cs#L9) |
-| `VpnElevationRequiredException` | Ném khi driver cần quyền admin/root/CAP_NET_RAW nhưng tiến trình không có | [VpnElevationRequiredException.cs:7](Drivers/VpnElevationRequiredException.cs#L7) |
+| `VpnElevationRequiredException` | Ném khi driver cần quyền admin/root/CAP_NET_RAW nhưng tiến trình không có (kế thừa `Exception`, **không** thuộc cây `VpnConnectionException`) | [VpnElevationRequiredException.cs:7](Drivers/VpnElevationRequiredException.cs#L7) |
+| `VpnConnectionException` | **Base** (không sealed) cho mọi lỗi khi thiết lập/duy trì kết nối; catch để xử lý chung, catch lớp con để phản ứng theo nguyên nhân | [VpnConnectionException.cs:8](Drivers/VpnConnectionException.cs#L8) |
+| `VpnAuthenticationException` | (sealed, con của `VpnConnectionException`) server từ chối credential: PPP MS-CHAPv2 fail / IKE PSK·HASH_R mismatch — retry cùng credential vô ích | [VpnAuthenticationException.cs:7](Drivers/VpnAuthenticationException.cs#L7) |
+| `VpnServerRejectedException` | (sealed, con của `VpnConnectionException`) server từ chối session ở mức giao thức: SSTP Call-Connect-Nak/Call-Abort, non-200 handshake, IKE Quick Mode không có SA | [VpnServerRejectedException.cs:8](Drivers/VpnServerRejectedException.cs#L8) |
+| `VpnNetworkTimeoutException` | (sealed, con của `VpnConnectionException`) handshake không có hồi đáp trong timeout (IKE gateway im, TLS không xong) — vấn đề transport/reachability; caller `OperationCanceledException` **không** bị tái phân loại | [VpnNetworkTimeoutException.cs:8](Drivers/VpnNetworkTimeoutException.cs#L8) |
 | `VpnLinkLayer` | Enum: L3Ip / L2Ethernet / Both | [VpnLinkLayer.cs:4](Drivers/Enums/VpnLinkLayer.cs#L4) |
 | `MultiHostModel` | Enum: None / RoutedPrefixes / L2BroadcastDomain | [MultiHostModel.cs:5](Drivers/Enums/MultiHostModel.cs#L5) |
 | `AddressAssignment` | Enum: Ipcp / ConfigPush / OutOfBand / Dhcp | [AddressAssignment.cs:5](Drivers/Enums/AddressAssignment.cs#L5) |
@@ -110,7 +118,7 @@ Project này là **CORE thuần hợp đồng — không hiện thực RFC nào*
 
 ```csharp
 // Phía consumer (façade) chỉ làm việc với hợp đồng — không lệ thuộc hiện thực cụ thể.
-IVpnProtocolDriver driver = /* ví dụ: L2tpIpsecDriver từ TqkLibrary.Vpn.Drivers */;
+IVpnProtocolDriver driver = /* ví dụ: L2tpIpsecDriver từ TqkLibrary.Vpn.Drivers.L2tpIpsec */;
 
 VpnDriverCapabilities caps = driver.Capabilities;
 // (Có thể kiểm tra caps.RequiresElevation / caps.AuthMethods... trước khi kết nối.)

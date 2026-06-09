@@ -14,7 +14,7 @@ Cụ thể nó giải quyết:
 - **Đóng/mở khung (HDLC framing)** — khung hoá / giải khung byte-stuffed kèm FCS-16 cho transport dạng byte-stream (SSTP). L2TP dùng packet-mode nên không cần lớp HDLC này.
 - **Cầu nối lên tầng L3** — sau khi link up, lộ ra một [`IPacketChannel`](../TqkLibrary.Vpn.Abstractions/Channels/Interfaces/IPacketChannel.cs#L6) để các tầng trên gửi/nhận gói IP qua tunnel.
 
-Đây là một mảnh trong stack VPN userspace của TqkLibrary.Vpn; project được [`TqkLibrary.Vpn.Drivers`](../TqkLibrary.Vpn.Drivers) lắp ráp vào driver L2TP/IPsec và SSTP.
+Đây là một mảnh trong stack VPN userspace của TqkLibrary.Vpn; project được hai driver [`TqkLibrary.Vpn.Drivers.L2tpIpsec`](../TqkLibrary.Vpn.Drivers.L2tpIpsec) và [`TqkLibrary.Vpn.Drivers.Sstp`](../TqkLibrary.Vpn.Drivers.Sstp) lắp ráp vào (cả hai đều dựng `PppEngine`).
 
 ## Vị trí trong kiến trúc
 
@@ -24,7 +24,7 @@ Cụ thể nó giải quyết:
   - [`TqkLibrary.Vpn.Abstractions`](../TqkLibrary.Vpn.Abstractions) — interface/model/enum dùng chung (vd `IPacketChannel`, `LinkMedium`) — [TqkLibrary.Vpn.Ppp.csproj:8](TqkLibrary.Vpn.Ppp.csproj#L8).
   - [`TqkLibrary.Vpn.Crypto`](../TqkLibrary.Vpn.Crypto) — primitive `Md4`, `Des` cho MS-CHAPv2 — [TqkLibrary.Vpn.Ppp.csproj:9](TqkLibrary.Vpn.Ppp.csproj#L9).
   - Không có PackageReference đặc thù riêng (chỉ thừa hưởng polyfill `System.Memory`,... cho netstandard2.0 từ [Directory.Build.props:16-21](../Directory.Build.props#L16-L21)).
-- **Được dùng bởi:** [`TqkLibrary.Vpn.Drivers`](../TqkLibrary.Vpn.Drivers) (cả driver L2TP/IPsec lẫn SSTP đều dựng `PppEngine` trên một `IPppFrameChannel` của riêng chúng).
+- **Được dùng bởi:** [`TqkLibrary.Vpn.Drivers.L2tpIpsec`](../TqkLibrary.Vpn.Drivers.L2tpIpsec) và [`TqkLibrary.Vpn.Drivers.Sstp`](../TqkLibrary.Vpn.Drivers.Sstp) (cả hai driver đều dựng `PppEngine` trên một `IPppFrameChannel` của riêng chúng).
 
 ## Cấu trúc thư mục
 

@@ -20,7 +20,7 @@ Project cố tình bind một **cổng local ephemeral** (không phải 500/4500
 - **Phụ thuộc (ProjectReference):**
   - [TqkLibrary.Vpn.Abstractions](../TqkLibrary.Vpn.Abstractions/TqkLibrary.Vpn.Abstractions.csproj) — chỉ tham chiếu, các type hiện tại chưa dùng interface nào của Abstractions.
   - Không có PackageReference đặc thù; trên `netstandard2.0` kế thừa polyfill chung (`System.Memory`, ...) từ [Directory.Build.props:16-21](../Directory.Build.props#L16-L21).
-- **Được dùng bởi:** [TqkLibrary.Vpn.Drivers.L2tpIpsec](../TqkLibrary.Vpn.Drivers.L2tpIpsec/TqkLibrary.Vpn.Drivers.L2tpIpsec.csproj) — driver L2TP/IPsec ([L2tpIpsecConnection.cs:125](../TqkLibrary.Vpn.Drivers.L2tpIpsec/L2tpIpsecConnection.cs#L125)).
+- **Được dùng bởi:** [TqkLibrary.Vpn.Drivers.L2tpIpsec](../TqkLibrary.Vpn.Drivers.L2tpIpsec/TqkLibrary.Vpn.Drivers.L2tpIpsec.csproj) — driver L2TP/IPsec ([L2tpIpsecConnection.cs:130](../TqkLibrary.Vpn.Drivers.L2tpIpsec/L2tpIpsecConnection.cs#L130)).
 
 ## Cấu trúc thư mục
 
@@ -91,13 +91,13 @@ Tham khảo cách dùng thật trong driver L2TP/IPsec: [L2tpIpsecConnection.cs:
 
 **2. Gửi IKE theo cổng hiện tại:** `SendIkeAsync` kiểm tra `_remote.Port` — nếu là 4500 thì `WrapIke` (thêm marker), ngược lại gửi nguyên IKE message ([NatTraversalChannel.cs:36-42](NatTraversalChannel.cs#L36-L42)).
 
-**3. Đổi cổng sau khi phát hiện NAT:** tầng IKE gọi `SwitchToNatTPort` đổi đích thành `serverIp:4500` ([NatTraversalChannel.cs:33](NatTraversalChannel.cs#L33)); driver gọi đúng sau Main Mode 3/4 ([L2tpIpsecConnection.cs:139](../TqkLibrary.Vpn.Drivers.L2tpIpsec/L2tpIpsecConnection.cs#L139)).
+**3. Đổi cổng sau khi phát hiện NAT:** tầng IKE gọi `SwitchToNatTPort` đổi đích thành `serverIp:4500` ([NatTraversalChannel.cs:33](NatTraversalChannel.cs#L33)); driver gọi đúng sau Main Mode 3/4 ([L2tpIpsecConnection.cs:144](../TqkLibrary.Vpn.Drivers.L2tpIpsec/L2tpIpsecConnection.cs#L144)).
 
 **4. Nhận + phân loại:**
 - Trên **cổng 500**: payload luôn là IKE; chỉ kiểm tra độ dài tối thiểu 28 byte (header ISAKMP) → `Ike`/`Invalid`, không bóc marker ([NatTraversalChannel.cs:64-65](NatTraversalChannel.cs#L64-L65)).
 - Trên **cổng 4500**: `Classify` đọc 4 byte đầu — toàn 0 ⇒ `Ike` (sau đó `UnwrapIke` bóc marker), khác 0 ⇒ `Esp` (SPI không bao giờ bằng 0) ([NatTraversalChannel.cs:67-69](NatTraversalChannel.cs#L67-L69), [NatTraversal.cs:40-47](NatTraversal.cs#L40-L47)).
 
-**5. Demux phía consumer:** driver có một `ReceiveLoopAsync` đọc liên tục từ kênh và rẽ nhánh theo `Kind`: IKE → waiter handshake / rekey / DPD-Delete; ESP → `EspSession` ([L2tpIpsecConnection.cs:221-240](../TqkLibrary.Vpn.Drivers.L2tpIpsec/L2tpIpsecConnection.cs#L221-L240)).
+**5. Demux phía consumer:** driver có một `ReceiveLoopAsync` đọc liên tục từ kênh và rẽ nhánh theo `Kind`: IKE → waiter handshake / rekey / DPD-Delete; ESP → `EspSession` ([L2tpIpsecConnection.cs:228-249](../TqkLibrary.Vpn.Drivers.L2tpIpsec/L2tpIpsecConnection.cs#L228-L249)).
 
 **6. Dispose:** `DisposeAsync` chỉ dispose `UdpClient` ([NatTraversalChannel.cs:73-77](NatTraversalChannel.cs#L73-L77)).
 

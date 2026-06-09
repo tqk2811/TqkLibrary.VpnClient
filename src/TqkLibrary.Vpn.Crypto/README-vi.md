@@ -18,7 +18,7 @@ Project này là tầng **CRYPTO** thuần — gom mọi *primitive* mật mã m
 - **Phụ thuộc:**
   - ProjectReference: **không có** (tầng đáy, tự chứa).
   - PackageReference (đặc thù): `BouncyCastle.Cryptography 2.4.0` — **chỉ** khi `TargetFramework == netstandard2.0`, và **chỉ** được dùng bởi [Aead/AesGcmCipher.cs](Aead/AesGcmCipher.cs) (BCL netstandard2.0 không có AES-GCM). Xem [TqkLibrary.Vpn.Crypto.csproj:7-10](TqkLibrary.Vpn.Crypto.csproj#L7-L10).
-- **Được dùng bởi:** `TqkLibrary.Vpn.Ipsec`, `TqkLibrary.Vpn.Ppp`, `TqkLibrary.Vpn.Vpn`.
+- **Được dùng bởi:** `TqkLibrary.Vpn.Ipsec`, `TqkLibrary.Vpn.Ppp`, `TqkLibrary.Vpn` (project entry-point).
 
 > Lưu ý: namespace của các interface là `TqkLibrary.Vpn.Crypto.Abstractions.Interfaces` (không phải `...Crypto.Interfaces`) — đây là các hợp đồng primitive *cục bộ* của project Crypto, **không** liên quan tới project `TqkLibrary.Vpn.Abstractions`.
 

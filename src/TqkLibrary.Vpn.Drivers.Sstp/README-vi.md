@@ -67,7 +67,7 @@ TqkLibrary.Vpn.Drivers.Sstp/
 | `[MS-SSTP]` §2.2.7, §3.2.5.2 (Crypto Binding) | `SstpCryptoBinding` | [SstpCryptoBinding.cs:9](SstpCryptoBinding.cs#L9) | CMK = HMAC-SHA256(HLAK, seed) |
 | `[MS-SSTP]` (hằng số chung) | `SstpConstants` | [SstpConstants.cs:3](SstpConstants.cs#L3) | Version 0x10, DuplexUri |
 | `[MS-SSTP]` (RAW PPP per packet, không HDLC) | `SstpPppChannel` | [SstpPppChannel.cs:6](SstpPppChannel.cs#L6) | Comment dẫn rõ |
-| `[MS-SSTP]` (Echo keepalive + Call-Disconnect teardown) | `SstpConnection` (active Echo + clean teardown + reconnect) | [SstpConnection.cs:262](SstpConnection.cs#L262) | Echo-Request 30s, chết sau 3 lần thiếu Echo-Response; teardown gửi Call-Disconnect |
+| `[MS-SSTP]` (Echo keepalive + Call-Disconnect teardown) | `SstpConnection` (active Echo + clean teardown + reconnect) | [SstpConnection.cs:264](SstpConnection.cs#L264) | Echo-Request 30s, chết sau 3 lần thiếu Echo-Response; teardown gửi Call-Disconnect |
 | FIPS PUB 198-1 / RFC 6234 (HMAC-SHA-256) | `SstpCryptoBinding` (`HMACSHA256` BCL) | [SstpCryptoBinding.cs:44](SstpCryptoBinding.cs#L44) | (suy luận) — dùng `System.Security.Cryptography.HMACSHA256` |
 | FIPS PUB 180-4 (SHA-256, hash cert TLS) | `SstpConnection` (`SHA256.Create()`) | [SstpConnection.cs:170](SstpConnection.cs#L170) | (suy luận) |
 | RFC 8446 / 5246 (TLS, qua `SslStream`) | `SstpTransport` | [SstpTransport.cs:44](SstpTransport.cs#L44) | (suy luận) — BCL `SslStream.AuthenticateAsClientAsync` |
@@ -107,7 +107,7 @@ Class hạ tầng `SstpConnection` cũng public nếu cần điều khiển chi 
 
 ### Keepalive · teardown · reconnect (mirror L2TP/IPsec)
 
-- **Active keepalive:** gửi **SSTP Echo-Request mỗi 30s**, coi peer chết sau **3 lần liên tiếp** thiếu Echo-Response (reset khi có bất kỳ control inbound); vẫn trả lời Echo-Request của server — [SstpConnection.cs:262-299](SstpConnection.cs#L262-L299) · [OnControlReceived @ :233](SstpConnection.cs#L233).
+- **Active keepalive:** gửi **SSTP Echo-Request mỗi 30s**, coi peer chết sau **3 lần liên tiếp** thiếu Echo-Response (reset khi có bất kỳ control inbound); vẫn trả lời Echo-Request của server — [SstpConnection.cs:264-299](SstpConnection.cs#L264-L299) · [OnControlReceived @ :233](SstpConnection.cs#L233).
 - **Phát hiện peer-dead (3 nguồn):** vòng đọc SSTP kết thúc (**chính**, lọc qua [`OnReadLoopEnded` @ :255](SstpConnection.cs#L255) — double-guard `_attemptId` + cancel vòng đọc chống vòng đọc cũ báo rớt giả), thiếu Echo-Response, và inbound **Call-Disconnect / Call-Abort** → tất cả gọi [`OnLinkLost` @ :304](SstpConnection.cs#L304).
 - **Auto-reconnect:** `OnLinkLost` → [`ReconnectLoopAsync` @ :331](SstpConnection.cs#L331) exponential backoff + jitter (bật mặc định, cấu hình qua `SstpReconnectOptions`); thành công thì raise `Reconnected` (cập nhật `TunnelConfig` qua `SstpVpnSession.ApplyReconnect`). Tunnel mới chui sau facade ⇒ flow same-address sống sót không re-bind.
 - **Teardown:** [`DisconnectAsync` @ :400](SstpConnection.cs#L400) hủy reconnect, gửi **SSTP Call-Disconnect** (best-effort, timeout 2s), rồi đóng transport.

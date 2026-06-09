@@ -21,7 +21,7 @@ Toàn bộ là **logic giao thức thuần** (build/process từng message, enco
   - [TqkLibrary.Vpn.Abstractions](../TqkLibrary.Vpn.Abstractions) — interface + model + enum dùng chung.
   - [TqkLibrary.Vpn.Crypto](../TqkLibrary.Vpn.Crypto) — AES-CBC/GCM, DH (MODP), HMAC-PRF, các integrity algo.
   - Không có PackageReference đặc thù (xem [TqkLibrary.Vpn.Ipsec.csproj](TqkLibrary.Vpn.Ipsec.csproj)).
-- **Được dùng bởi:** `TqkLibrary.Vpn.Drivers` (driver `L2tpIpsec/` dùng `Ike/V1` + `Esp/`).
+- **Được dùng bởi:** [TqkLibrary.Vpn.Drivers.L2tpIpsec](../TqkLibrary.Vpn.Drivers.L2tpIpsec) (driver L2TP/IPsec dùng `Ike/V1` + `Esp/`).
 
 Xem thêm tài liệu as-built toàn cục: [10-codebase-architecture-and-flow.md](../../.docs/10-codebase-architecture-and-flow.md).
 
@@ -190,7 +190,7 @@ if (ike.ProcessAuthResponse(Recv())) { ChildSaKeys child = ike.ChildKeys!; }
 
 ## Trạng thái & ghi chú
 
-- **Đang chạy thực tế:** `Ike/V1` + `Esp/` — driver `L2tpIpsec` dùng `IkeV1Client` ([L2tpIpsecConnection.cs:131](../TqkLibrary.Vpn.Drivers.L2tpIpsec/L2tpIpsecConnection.cs#L131)) và `EspSession`/`EspCipherSuite` cho data plane. Đã verify live trên VPN Gate (PSK + AES-256 + HMAC-SHA1, MODP group 2/14).
+- **Đang chạy thực tế:** `Ike/V1` + `Esp/` — driver `L2tpIpsec` dùng `IkeV1Client` ([L2tpIpsecConnection.cs:136](../TqkLibrary.Vpn.Drivers.L2tpIpsec/L2tpIpsecConnection.cs#L136)) và `EspSession`/`EspCipherSuite` cho data plane. Đã verify live trên VPN Gate (PSK + AES-256 + HMAC-SHA1, MODP group 2/14).
 - **Đầy đủ nhưng chưa wire:** `Ike/V2` (IKEv2) — `IkeClient` có đủ IKE_SA_INIT + IKE_AUTH (PSK) và unit test, nhưng **không driver nào tham chiếu** (grep `IkeClient` trong `Drivers` không có kết quả). Đây là khung sẵn cho IKEv2 transport mode/ESP tương lai.
 - **ESP suite:** ba bộ — AES-CBC+HMAC-SHA256-128 (mặc định IKEv2), AES-CBC+HMAC-SHA1-96 (ESP SA của IKEv1, đang dùng), AES-GCM (RFC 4106, AEAD). Anti-replay cố định cửa sổ 64, **không hỗ trợ Extended Sequence Number** (ESN): GCM IV để 4 byte cao = 0 ([EspGcmSuite.cs:87](Esp/EspGcmSuite.cs#L87)); sequence là 32-bit, `Protect` dùng `checked` nên sẽ ném nếu vượt `uint.MaxValue` — đây là **backstop**: driver `L2tpIpsec` theo dõi `OutboundSequence` và chủ động rekey Phase 2 ở high-watermark ~75%×2³² (RFC 4303 §3.3.3) **trước khi** chạm giới hạn này.
 - **IKEv1 PFS:** Quick Mode rekey **không có PFS** (KEYMAT chỉ từ SKEYID_d + nonce mới, không trao đổi KE mới) — phù hợp interop L2TP/IPsec phổ biến.

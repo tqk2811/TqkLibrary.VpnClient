@@ -8,7 +8,7 @@ Project hiện thực **L2TPv2 (RFC 2661)** ở phía **LAC** (L2TP Access Conce
 
 Trong stack VPN userspace của thư viện, L2TP là tầng nằm **giữa**:
 - Phía dưới: data plane IPsec/ESP (UDP/1701 đã được ESP bảo vệ) hoặc một transport in-process cho test.
-- Phía trên: tầng PPP (LCP/IPCP/MS-CHAPv2). PPP frame đi vào/ra qua sự kiện [`DataReceived`](L2tpClient.cs#L45) và method [`SendDataAsync`](L2tpClient.cs#L61).
+- Phía trên: tầng PPP (LCP/IPCP/MS-CHAPv2). PPP frame đi vào/ra qua sự kiện [`DataReceived`](L2tpClient.cs#L49) và method [`SendDataAsync`](L2tpClient.cs#L65).
 
 Project giải quyết các bài toán cốt lõi của L2TP:
 - **Bắt tay tunnel** (3-way: SCCRQ → SCCRP → SCCCN) và **bắt tay session** (ICRQ → ICRP → ICCN).
@@ -25,7 +25,7 @@ Lưu ý: đây là **L2TP thuần** — bản thân nó không làm IPsec/ESP. V
 - **Phụ thuộc (ProjectReference):**
   - [TqkLibrary.Vpn.Abstractions](../TqkLibrary.Vpn.Abstractions) — xem [TqkLibrary.Vpn.L2tp.csproj:8](TqkLibrary.Vpn.L2tp.csproj#L8). Không có PackageReference đặc thù.
 - **Được dùng bởi:**
-  - [TqkLibrary.Vpn.Drivers](../TqkLibrary.Vpn.Drivers) — driver `L2tpIpsec/` lắp `L2tpClient` lên trên transport ESP-over-UDP (`IpsecL2tpTransport`) và phơi PPP frame ra qua channel (`L2tpPppFrameChannel`).
+  - [TqkLibrary.Vpn.Drivers.L2tpIpsec](../TqkLibrary.Vpn.Drivers.L2tpIpsec) — driver L2TP/IPsec lắp `L2tpClient` lên trên transport ESP-over-UDP (`IpsecL2tpTransport`) và phơi PPP frame ra qua channel (`L2tpPppFrameChannel`).
 
 > Ghi chú: dù phụ thuộc `Abstractions`, các kiểu trong project hiện chỉ dùng kiểu .NET cơ bản (`Task`, `Action<>`, `ReadOnlyMemory<byte>`) cho ranh giới `IL2tpTransport`; không trực tiếp tham chiếu interface VPN nào của `Abstractions` trong các file `.cs` hiện tại.
 
@@ -67,9 +67,9 @@ TqkLibrary.Vpn.L2tp/
 | RFC 2661 §4.4 (bảng control message type) | `L2tpMessageType` (Enums) | [L2tpMessageType.cs:3](Enums/L2tpMessageType.cs#L3) | SCCRQ/SCCRP/SCCCN/StopCCN/HELLO/ICRQ/ICRP/ICCN/CDN/SetLinkInfo |
 | RFC 2661 §4.4 (bảng AVP attribute type) | `L2tpAvpType` (Enums) | [L2tpAvpType.cs:3](Enums/L2tpAvpType.cs#L3) | Tập AVP mà client này dùng |
 | RFC 2661 §5.8 (kênh điều khiển tin cậy — Ns/Nr, ack tích lũy, ZLB, retransmit) | `L2tpControlChannel` | [L2tpControlChannel.cs:6](L2tpControlChannel.cs#L6) | Ack tích lũy: một Nr nhận được xóa mọi message đã queue dưới nó |
-| RFC 2661 §5.5 (HELLO keepalive) | `L2tpClient.SendHelloAsync` | [L2tpClient.cs:64](L2tpClient.cs#L64) | HELLO gửi tin cậy trên control channel |
-| RFC 2661 §5.6 (Call-Disconnect-Notify teardown session) | `L2tpClient.SendCallDisconnectAsync` | [L2tpClient.cs:68](L2tpClient.cs#L68) | `resultCode` 3 = administrative |
-| RFC 2661 (Stop-Control-Connection-Notification teardown tunnel) | `L2tpClient.SendStopControlConnectionAsync` | [L2tpClient.cs:78](L2tpClient.cs#L78) | `resultCode` 1 = general request to clear (suy luận §5.x — không chú thích số mục trong comment) |
+| RFC 2661 §5.5 (HELLO keepalive) | `L2tpClient.SendHelloAsync` | [L2tpClient.cs:69](L2tpClient.cs#L69) | HELLO gửi tin cậy trên control channel |
+| RFC 2661 §5.6 (Call-Disconnect-Notify teardown session) | `L2tpClient.SendCallDisconnectAsync` | [L2tpClient.cs:73](L2tpClient.cs#L73) | `resultCode` 3 = administrative |
+| RFC 2661 (Stop-Control-Connection-Notification teardown tunnel) | `L2tpClient.SendStopControlConnectionAsync` | [L2tpClient.cs:82](L2tpClient.cs#L82) | `resultCode` 1 = general request to clear (suy luận §5.x — không chú thích số mục trong comment) |
 | RFC 2661 §1.x (L2TP chạy trên UDP/1701 — mỗi message là một datagram) | `IL2tpTransport` | [IL2tpTransport.cs:3](IL2tpTransport.cs#L3) | UDP/1701 payload; driver bọc trong ESP (suy luận — comment nói "UDP/1701" nhưng không ghi số mục RFC) |
 
 ## API / cách dùng
@@ -77,12 +77,12 @@ TqkLibrary.Vpn.L2tp/
 Các kiểu/điểm vào public chính:
 
 - `L2tpClient(IL2tpTransport transport, string hostName = "anonymous", TimeSpan? retransmitInterval = null, int maxRetransmits = 0)` — `maxRetransmits` > 0 ⇒ link chết sau N lần retransmit không ack; 0 = vô hạn (mặc định) — [L2tpClient.cs:24](L2tpClient.cs#L24)
-- `Task ConnectAsync(CancellationToken)` — dựng tunnel rồi session, hoàn tất khi session up — [L2tpClient.cs:51](L2tpClient.cs#L51)
-- `Task SendDataAsync(ReadOnlyMemory<byte> pppFrame)` — gửi PPP frame trong data message — [L2tpClient.cs:61](L2tpClient.cs#L61)
-- `event Action<ReadOnlyMemory<byte>> DataReceived` — nhận PPP frame của session — [L2tpClient.cs:45](L2tpClient.cs#L45)
-- `event Action<string> Disconnected` — server tear down (StopCCN/CDN) **hoặc** control channel hết hạn retransmit — [L2tpClient.cs:48](L2tpClient.cs#L48)
-- `Task SendHelloAsync()` / `Task SendCallDisconnectAsync(...)` / `Task SendStopControlConnectionAsync(...)` — keepalive & teardown — [L2tpClient.cs:65](L2tpClient.cs#L65)
-- `LocalTunnelId` / `LocalSessionId` / `PeerTunnelId` / `PeerSessionId` — id hai phía — [L2tpClient.cs:33-42](L2tpClient.cs#L33-L42)
+- `Task ConnectAsync(CancellationToken)` — dựng tunnel rồi session, hoàn tất khi session up — [L2tpClient.cs:55](L2tpClient.cs#L55)
+- `Task SendDataAsync(ReadOnlyMemory<byte> pppFrame)` — gửi PPP frame trong data message — [L2tpClient.cs:65](L2tpClient.cs#L65)
+- `event Action<ReadOnlyMemory<byte>> DataReceived` — nhận PPP frame của session — [L2tpClient.cs:49](L2tpClient.cs#L49)
+- `event Action<string> Disconnected` — server tear down (StopCCN/CDN) **hoặc** control channel hết hạn retransmit — [L2tpClient.cs:52](L2tpClient.cs#L52)
+- `Task SendHelloAsync()` / `Task SendCallDisconnectAsync(...)` / `Task SendStopControlConnectionAsync(...)` — keepalive & teardown — [L2tpClient.cs:69](L2tpClient.cs#L69)
+- `LocalTunnelId` / `LocalSessionId` / `PeerTunnelId` / `PeerSessionId` — id hai phía — [L2tpClient.cs:37-46](L2tpClient.cs#L37-L46)
 
 Ví dụ ngắn (transport do tầng driver cung cấp):
 
@@ -106,23 +106,23 @@ await l2tp.SendStopControlConnectionAsync();         // teardown tunnel (StopCCN
 
 ### 1. Bắt tay tunnel + session (`ConnectAsync`)
 
-[`ConnectAsync`](L2tpClient.cs#L51) chạy tuần tự hai pha, mỗi pha chờ một `TaskCompletionSource`:
+[`ConnectAsync`](L2tpClient.cs#L55) chạy tuần tự hai pha, mỗi pha chờ một `TaskCompletionSource`:
 
-1. **Tunnel:** gửi **SCCRQ** ([`SendSccrqAsync`](L2tpClient.cs#L83)) với các AVP ProtocolVersion/Framing/Bearer/HostName/AssignedTunnelId/ReceiveWindowSize → chờ [`_tunnelUp`](L2tpClient.cs#L17).
-2. Khi nhận **SCCRP** trong [`OnControl`](L2tpClient.cs#L120): lấy `AssignedTunnelId` của server làm `PeerTunnelId`, gán cho control channel, gửi **SCCCN** ([`SendScccnAsync`](L2tpClient.cs#L96)), rồi `_tunnelUp.TrySetResult(true)`.
-3. **Session:** gửi **ICRQ** ([`SendIcrqAsync`](L2tpClient.cs#L99)) với AssignedSessionId/CallSerialNumber → chờ [`_sessionUp`](L2tpClient.cs#L18).
-4. Khi nhận **ICRP** ([`OnControl`](L2tpClient.cs#L131)): lấy `AssignedSessionId` của server làm `PeerSessionId`, gửi **ICCN** ([`SendIccnAsync`](L2tpClient.cs#L107)), rồi `_sessionUp.TrySetResult(true)`. Session đã established.
+1. **Tunnel:** gửi **SCCRQ** ([`SendSccrqAsync`](L2tpClient.cs#L87)) với các AVP ProtocolVersion/Framing/Bearer/HostName/AssignedTunnelId/ReceiveWindowSize → chờ [`_tunnelUp`](L2tpClient.cs#L17).
+2. Khi nhận **SCCRP** trong [`OnControl`](L2tpClient.cs#L124): lấy `AssignedTunnelId` của server làm `PeerTunnelId`, gán cho control channel, gửi **SCCCN** ([`SendScccnAsync`](L2tpClient.cs#L100)), rồi `_tunnelUp.TrySetResult(true)`.
+3. **Session:** gửi **ICRQ** ([`SendIcrqAsync`](L2tpClient.cs#L103)) với AssignedSessionId/CallSerialNumber → chờ [`_sessionUp`](L2tpClient.cs#L18).
+4. Khi nhận **ICRP** ([`OnControl`](L2tpClient.cs#L135)): lấy `AssignedSessionId` của server làm `PeerSessionId`, gửi **ICCN** ([`SendIccnAsync`](L2tpClient.cs#L111)), rồi `_sessionUp.TrySetResult(true)`. Session đã established.
 
-Nếu server gửi **StopCCN/CDN**: [`OnControl`](L2tpClient.cs#L138-L146) gọi [`Fail`](L2tpClient.cs#L163) (đẩy exception vào hai TCS) và raise `Disconnected`.
+Nếu server gửi **StopCCN/CDN**: [`OnControl`](L2tpClient.cs#L142-L150) gọi [`Fail`](L2tpClient.cs#L167) (đẩy exception vào hai TCS) và raise `Disconnected`.
 
 ### 2. Kênh điều khiển tin cậy (`L2tpControlChannel`)
 
-- **Gửi:** [`SendAsync`](L2tpControlChannel.cs#L36) gán `Ns = _ns`, `Nr = _nr`, encode, đưa vào hàng `_unacked`, tăng `_ns`, rồi truyền.
-- **Nhận:** [`OnDatagram`](L2tpControlChannel.cs#L52):
-  - **Ack tích lũy** — xóa mọi message trong `_unacked` có `Ns < message.Nr` ([dòng 61-62](L2tpControlChannel.cs#L61-L62)).
-  - **ZLB** (`IsZeroLengthBody`) — chỉ là ack, return ngay ([dòng 64-65](L2tpControlChannel.cs#L64-L65)).
-  - **In-order** (`Ns == _nr`) — tăng `_nr`, đánh dấu deliver; sau đó raise `ControlReceived` và gửi standalone ZLB ack ([dòng 67-83](L2tpControlChannel.cs#L67-L83)).
-  - **Trùng** (`Ns < _nr`) — peer retransmit vì lỡ ack của ta → re-ack ([dòng 72-76](L2tpControlChannel.cs#L72-L76)).
+- **Gửi:** [`SendAsync`](L2tpControlChannel.cs#L49) gán `Ns = _ns`, `Nr = _nr`, encode, đưa vào hàng `_unacked`, tăng `_ns`, rồi truyền.
+- **Nhận:** [`OnDatagram`](L2tpControlChannel.cs#L65):
+  - **Ack tích lũy** — xóa mọi message trong `_unacked` có `Ns < message.Nr` ([dòng 74-75](L2tpControlChannel.cs#L74-L75)).
+  - **ZLB** (`IsZeroLengthBody`) — chỉ là ack, return ngay ([dòng 77-78](L2tpControlChannel.cs#L77-L78)).
+  - **In-order** (`Ns == _nr`) — tăng `_nr`, đánh dấu deliver; sau đó raise `ControlReceived` và gửi standalone ZLB ack ([dòng 80-96](L2tpControlChannel.cs#L80-L96)).
+  - **Trùng** (`Ns < _nr`) — peer retransmit vì lỡ ack của ta → re-ack ([dòng 85-89](L2tpControlChannel.cs#L85-L89)).
 - **Retransmit:** [`Timer`](L2tpControlChannel.cs#L35) định kỳ gọi [`Retransmit`](L2tpControlChannel.cs#L111) gửi lại message đầu hàng `_unacked` (mặc định 1s). Mỗi message giữ bộ đếm `Attempts`; khi vượt `maxRetransmits` (nếu > 0) → dừng timer + raise [`Failed`](L2tpControlChannel.cs#L46) (peer im lặng), `L2tpClient` chuyển thành `Disconnected`.
 - So sánh seq wrap-around 16-bit: [`SeqLess`](L2tpControlChannel.cs#L139).
 
@@ -130,7 +130,7 @@ Nếu server gửi **StopCCN/CDN**: [`OnControl`](L2tpClient.cs#L138-L146) gọi
 
 - **Control:** [`EncodeControl`](L2tpCodec.cs#L23) ghi header 12 byte (cờ T=L=S=1, Ver=2, Length, TunnelId, SessionId, Ns, Nr) + AVP Message Type + các AVP; [`DecodeControl`](L2tpCodec.cs#L48) parse header theo cờ rồi duyệt AVP (AVP đầu là Message Type).
 - **Data:** [`EncodeData`](L2tpCodec.cs#L98) bọc PPP frame trong header tối thiểu 6 byte (T=0); [`TryDecodeData`](L2tpCodec.cs#L110) tách PPP frame ra theo cờ L/S/O.
-- **Định tuyến datagram:** [`OnDatagram`](L2tpClient.cs#L150) gọi [`IsControl`](L2tpCodec.cs#L20) — control đưa vào control channel, data giải mã và (nếu `sessionId == LocalSessionId`) raise `DataReceived`.
+- **Định tuyến datagram:** [`OnDatagram`](L2tpClient.cs#L154) gọi [`IsControl`](L2tpCodec.cs#L20) — control đưa vào control channel, data giải mã và (nếu `sessionId == LocalSessionId`) raise `DataReceived`.
 
 ### 4. AVP (`L2tpAvp`)
 
@@ -140,9 +140,9 @@ Nếu server gửi **StopCCN/CDN**: [`OnControl`](L2tpClient.cs#L138-L146) gọi
 
 - **Đã hiện thực (as-built):** vai trò **LAC/initiator** với một tunnel + một session; bắt tay đầy đủ SCCRQ/SCCRP/SCCCN + ICRQ/ICRP/ICCN; control channel tin cậy (Ns/Nr, ack tích lũy, ZLB, retransmit); HELLO keepalive; teardown CDN + StopCCN; data plane mang PPP frame. Xem chi tiết as-built tại [.docs/10-codebase-architecture-and-flow.md](../../.docs/10-codebase-architecture-and-flow.md).
 - **Hạn chế đã biết / khung mở rộng:**
-  - Chỉ hỗ trợ **một** session trên một tunnel (chỉ so khớp `LocalSessionId` ở [L2tpClient.cs:156-157](L2tpClient.cs#L156-L157)).
+  - Chỉ hỗ trợ **một** session trên một tunnel (chỉ so khớp `LocalSessionId` ở [L2tpClient.cs:160-161](L2tpClient.cs#L160-L161)).
   - **AVP Hidden** parse được nhưng **không giải mã** ([L2tpAvp.cs:8](Models/L2tpAvp.cs#L8), [L2tpAvp.cs:16](Models/L2tpAvp.cs#L16)).
-  - **Tunnel CHAP** (Challenge/ChallengeResponse) có trong enum [`L2tpAvpType`](Enums/L2tpAvpType.cs#L36-L40) nhưng client chưa dùng để xác thực tunnel.
+  - **Tunnel CHAP** (Challenge/ChallengeResponse) có trong enum [`L2tpAvpType`](Enums/L2tpAvpType.cs#L37-L40) nhưng client chưa dùng để xác thực tunnel.
   - **SetLinkInfo** có trong enum nhưng `OnControl` chưa xử lý loại message này.
   - Retransmit gửi lại **message đầu hàng** mỗi tick; có **cap số lần thử** tùy chọn (`maxRetransmits`, mặc định 0 = vô hạn) ở [`Retransmit`](L2tpControlChannel.cs#L111) — vượt cap raise `Failed`. Driver L2TP/IPsec đặt cap mặc định 8 qua `L2tpIpsecTimeoutOptions`. Vẫn chưa có **exponential backoff** cho khoảng retransmit (cố định mỗi tick).
   - Cửa sổ truyền/nhận hiệu dụng là **1** (gửi message tiếp theo không chặn theo `ReceiveWindowSize` đã quảng cáo).
