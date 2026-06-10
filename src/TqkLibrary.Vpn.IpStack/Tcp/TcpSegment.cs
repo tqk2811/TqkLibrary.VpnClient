@@ -6,14 +6,34 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
     /// <summary>Builds and reads TCP segments (with the pseudo-header checksum).</summary>
     public static class TcpSegment
     {
-        /// <summary>Builds a TCP segment. Pass <paramref name="mss"/> &gt; 0 to include the MSS option (for SYN).</summary>
+        /// <summary>A <paramref name="windowScale"/> value meaning "no Window Scale option" (RFC 7323).</summary>
+        public const byte NoWindowScale = 0xFF;
+
+        /// <summary>
+        /// Builds a TCP segment. On a SYN, pass <paramref name="mss"/> &gt; 0 to include the MSS option (RFC 793) and
+        /// <paramref name="windowScale"/> ≠ <see cref="NoWindowScale"/> to include the Window Scale option (RFC 7323);
+        /// the options are padded to a 32-bit boundary with No-Operation bytes.
+        /// </summary>
         public static byte[] Build(
             IPAddress sourceIp, IPAddress destinationIp,
             ushort sourcePort, ushort destinationPort,
             uint sequence, uint acknowledgment, TcpFlags flags, ushort window,
-            ReadOnlySpan<byte> payload, ushort mss = 0)
+            ReadOnlySpan<byte> payload, ushort mss = 0, byte windowScale = NoWindowScale)
         {
-            int headerLength = mss > 0 ? 24 : 20;
+            Span<byte> options = stackalloc byte[8];
+            int optLen = 0;
+            if (mss > 0)
+            {
+                options[optLen++] = 2; options[optLen++] = 4;               // MSS: kind 2, length 4
+                options[optLen++] = (byte)(mss >> 8); options[optLen++] = (byte)mss;
+            }
+            if (windowScale != NoWindowScale)
+            {
+                options[optLen++] = 3; options[optLen++] = 3; options[optLen++] = windowScale; // Window Scale: kind 3, length 3
+            }
+            while ((optLen & 3) != 0) options[optLen++] = 1;                // pad to a 32-bit boundary with NOPs
+
+            int headerLength = 20 + optLen;
             byte[] segment = new byte[headerLength + payload.Length];
             WriteU16(segment, 0, sourcePort);
             WriteU16(segment, 2, destinationPort);
@@ -23,12 +43,7 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
             segment[13] = (byte)flags;
             WriteU16(segment, 14, window);
             // checksum (16..18) and urgent (18..20) left zero
-            if (mss > 0)
-            {
-                segment[20] = 2; // MSS option kind
-                segment[21] = 4; // length
-                WriteU16(segment, 22, mss);
-            }
+            options.Slice(0, optLen).CopyTo(segment.AsSpan(20));
             payload.CopyTo(segment.AsSpan(headerLength));
 
             ushort checksum = Checksum(sourceIp, destinationIp, segment);
@@ -78,28 +93,40 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
         /// <summary>The data payload after the TCP header.</summary>
         public static ReadOnlyMemory<byte> Payload(ReadOnlyMemory<byte> segment) => segment.Slice(DataOffset(segment.Span));
 
-        /// <summary>
-        /// Reads the Maximum Segment Size option (kind 2) from the TCP options, or 0 if no MSS option is present.
-        /// Walks the options between the fixed 20-byte header and the data offset, skipping End-of-List/No-Operation
-        /// padding and tolerating malformed/truncated options (returns 0 rather than throwing).
-        /// </summary>
+        /// <summary>Reads the Maximum Segment Size option (kind 2) from the TCP options, or 0 if no MSS option is present.</summary>
         public static ushort MaxSegmentSize(ReadOnlySpan<byte> segment)
         {
+            int v = FindOption(segment, kind: 2, out int valueLength);
+            return v >= 0 && valueLength == 2 ? (ushort)((segment[v] << 8) | segment[v + 1]) : (ushort)0;
+        }
+
+        /// <summary>Reads the Window Scale option (kind 3) shift count (RFC 7323), or <see cref="NoWindowScale"/> if absent.</summary>
+        public static byte WindowScale(ReadOnlySpan<byte> segment)
+        {
+            int v = FindOption(segment, kind: 3, out int valueLength);
+            return v >= 0 && valueLength == 1 ? segment[v] : NoWindowScale;
+        }
+
+        // Walks the options between the fixed 20-byte header and the data offset, skipping End-of-List/No-Operation
+        // padding and tolerating malformed/truncated options. Returns the value offset (just past kind+length) of the
+        // first option matching <paramref name="kind"/> (and its value length), or -1 if not found.
+        static int FindOption(ReadOnlySpan<byte> segment, byte kind, out int valueLength)
+        {
+            valueLength = 0;
             int dataOffset = Math.Min(DataOffset(segment), segment.Length);
             int i = 20;
             while (i < dataOffset)
             {
-                byte kind = segment[i];
-                if (kind == 0) break;             // End of Option List
-                if (kind == 1) { i++; continue; } // No-Operation: a single byte with no length
-                if (i + 1 >= dataOffset) break;    // truncated option header
+                byte optKind = segment[i];
+                if (optKind == 0) break;              // End of Option List
+                if (optKind == 1) { i++; continue; }  // No-Operation: a single byte with no length
+                if (i + 1 >= dataOffset) break;        // truncated option header
                 byte length = segment[i + 1];
                 if (length < 2 || i + length > dataOffset) break; // malformed length
-                if (kind == 2 && length == 4)
-                    return (ushort)((segment[i + 2] << 8) | segment[i + 3]);
+                if (optKind == kind) { valueLength = length - 2; return i + 2; }
                 i += length;
             }
-            return 0;
+            return -1;
         }
 
         static void WriteU16(byte[] b, int o, ushort v) { b[o] = (byte)(v >> 8); b[o + 1] = (byte)v; }

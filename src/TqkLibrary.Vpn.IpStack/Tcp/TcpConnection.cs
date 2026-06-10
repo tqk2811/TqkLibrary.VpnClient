@@ -28,6 +28,7 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
         const ushort MinMss = 88;            // defensive floor so a tiny/bogus MTU can't produce a useless segment size
         const ushort AssumedPeerMss = 536;   // RFC 1122: assume a 536-byte send MSS if the peer advertises none
         const ushort ReceiveWindow = 65535;
+        const byte RcvWScale = 2;            // window scaling we advertise (RFC 7323): effective rwnd = 65535 << 2 ≈ 256 KB
 
         // RFC 6298 estimator constants.
         const double Alpha = 0.125;          // SRTT gain (1/8)
@@ -71,6 +72,12 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
         // SendIp never has to fragment them.
         readonly ushort _localMss;
         ushort _sendMss;
+
+        // Window scaling (RFC 7323), negotiated on the SYN exchange. _sndWScale scales the peer's advertised window
+        // (raising our send ceiling above 64 KB); _rcvScaleActive (peer also offered scaling) widens the window we
+        // accept on receive. Both stay 0/false unless the peer's SYN-ACK carries a Window Scale option.
+        byte _sndWScale;
+        bool _rcvScaleActive;
 
         // Unsent application bytes waiting for window space (a queue of arrays + an offset into the head array).
         readonly Queue<byte[]> _sndChunks = new();
@@ -154,7 +161,7 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
                 uint iss = ((uint)r[0] << 24) | ((uint)r[1] << 16) | ((uint)r[2] << 8) | r[3];
                 _sndUna = iss;
                 _sndNxt = iss;
-                EmitSegment(iss, TcpFlags.Syn, ReadOnlySpan<byte>.Empty, mss: _localMss);
+                EmitSegment(iss, TcpFlags.Syn, ReadOnlySpan<byte>.Empty, mss: _localMss, windowScale: RcvWScale);
                 EnqueueRetx(iss, TcpFlags.Syn, Array.Empty<byte>(), seqLen: 1);
                 _sndNxt = iss + 1;
                 _state = TcpState.SynSent;
@@ -248,7 +255,14 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
                     // Clamp our outbound segment size to the peer's advertised MSS (RFC 1122: assume 536 if absent).
                     ushort peerMss = TcpSegment.MaxSegmentSize(span);
                     _sendMss = (ushort)Math.Max(MinMss, Math.Min(_localMss, peerMss > 0 ? peerMss : AssumedPeerMss));
-                    ProcessAck(ack, seq, wnd);                 // acks our SYN, seeds the send window
+                    ProcessAck(ack, seq, wnd);                 // acks our SYN, seeds the send window (SYN-ACK window is unscaled)
+                    // Window scaling takes effect only if the peer also offered it (RFC 7323); its window is scaled hereafter.
+                    byte peerWScale = TcpSegment.WindowScale(span);
+                    if (peerWScale != TcpSegment.NoWindowScale)
+                    {
+                        _sndWScale = peerWScale > 14 ? (byte)14 : peerWScale; // RFC 7323 §2.3: clamp the shift count to 14
+                        _rcvScaleActive = true;
+                    }
                     EmitSegment(_sndNxt, TcpFlags.Ack, ReadOnlySpan<byte>.Empty);
                     _state = TcpState.Established;
                     _connected.TrySetResult(true);
@@ -271,12 +285,16 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
 
         // ---- Receive reassembly + half-close FSM -----------------------------------------------------------
 
+        // The receive window we actually honour: the advertised 65535 scaled up when window scaling was negotiated
+        // (RFC 7323). This bounds how far past _rcvNxt an out-of-order segment may sit before we drop it.
+        uint RcvWindowEffective() => _rcvScaleActive ? ((uint)ReceiveWindow << RcvWScale) : ReceiveWindow;
+
         // Accepts in-window data, delivering in order and buffering out-of-order segments until the gap fills.
         void ReceiveData(uint seq, ReadOnlyMemory<byte> payload)
         {
             uint end = seq + (uint)payload.Length;
             if (SeqGeq(_rcvNxt, end)) return;                         // wholly old/duplicate
-            if (!SeqGreater(_rcvNxt + ReceiveWindow, seq)) return;    // beyond the advertised window
+            if (!SeqGreater(_rcvNxt + RcvWindowEffective(), seq)) return; // beyond the advertised (scaled) window
 
             if (seq == _rcvNxt)
             {
@@ -429,7 +447,7 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
             if (SeqGreater(segSeq, _sndWl1) || (segSeq == _sndWl1 && !SeqGreater(_sndWl2, ack)))
             {
                 if (_sndWnd == 0 && segWnd > 0) _persistMs = _opts.PersistMin.TotalMilliseconds; // window reopened
-                _sndWnd = segWnd;
+                _sndWnd = (uint)segWnd << _sndWScale; // apply the peer's negotiated window scale (RFC 7323)
                 _sndWl1 = segSeq;
                 _sndWl2 = ack;
             }
@@ -472,9 +490,9 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
             _retx.AddLast(new RetxUnit { Seq = seq, Flags = flags, Payload = payload, SeqLen = seqLen, SentTicks = Now() });
         }
 
-        void EmitSegment(uint seq, TcpFlags flags, ReadOnlySpan<byte> payload, ushort mss = 0)
+        void EmitSegment(uint seq, TcpFlags flags, ReadOnlySpan<byte> payload, ushort mss = 0, byte windowScale = TcpSegment.NoWindowScale)
         {
-            byte[] tcp = TcpSegment.Build(_localIp, _remoteIp, _localPort, _remotePort, seq, _rcvNxt, flags, ReceiveWindow, payload, mss);
+            byte[] tcp = TcpSegment.Build(_localIp, _remoteIp, _localPort, _remotePort, seq, _rcvNxt, flags, ReceiveWindow, payload, mss, windowScale);
             byte[] ip = Ipv4.Build(_localIp, _remoteIp, Ipv4.ProtocolTcp, tcp, _ipId++);
             _sendIp(ip);
         }
@@ -518,7 +536,8 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
                 }
 
                 RetxUnit u = node.Value;
-                EmitSegment(u.Seq, u.Flags, u.Payload, (u.Flags & TcpFlags.Syn) != 0 ? _localMss : (ushort)0);
+                bool isSyn = (u.Flags & TcpFlags.Syn) != 0;
+                EmitSegment(u.Seq, u.Flags, u.Payload, isSyn ? _localMss : (ushort)0, isSyn ? RcvWScale : TcpSegment.NoWindowScale);
                 u.Retransmitted = true;
                 u.SentTicks = now;
                 _rtoMs = Math.Min(_rtoMs * 2, _opts.MaxRto.TotalMilliseconds); // exponential backoff (RFC 6298 §5.5)
