@@ -11,15 +11,16 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
 {
     /// <summary>
     /// An active-open TCP connection over the userspace stack. The peer is a real host on the internet (reached
-    /// through the VPN gateway), so the send path implements reliability: every sequence-consuming segment is held
-    /// in a retransmission queue, retransmitted on an RFC 6298 RTO (with RTT-estimated, exponentially backed-off
-    /// timeout and a give-up cap), and the sender honours the peer's advertised receive window (sliding-window flow
-    /// control + a zero-window persist probe). Received bytes are read via <see cref="ReadAsync"/>.
+    /// through the VPN gateway), so this is a reliable stack: the send path holds every sequence-consuming segment
+    /// in a retransmission queue, retransmits on an RFC 6298 RTO (RTT-estimated, exponentially backed-off, with a
+    /// give-up cap), and honours the peer's advertised receive window (sliding-window flow control + a zero-window
+    /// persist probe); the receive path reassembles out-of-order segments before delivering in order via
+    /// <see cref="ReadAsync"/>, and the close path runs the full half-close FSM (FINWAIT1/2, CLOSING, TIMEWAIT,
+    /// CLOSEWAIT, LASTACK) with a TIME-WAIT linger.
     /// </summary>
     /// <remarks>
-    /// Still simplified on the receive side (out-of-order segments are dropped, not reassembled) and in the close
-    /// FSM (no FINWAIT2/CLOSING/TIMEWAIT). Congestion control (cwnd/slow-start/fast-retransmit) is intentionally
-    /// omitted — only flow control (the receiver window) is implemented.
+    /// Congestion control (cwnd/slow-start/fast-retransmit) is intentionally omitted — only flow control (the
+    /// receiver window) is implemented. Inbound IP fragments are assumed already reassembled by the IP layer.
     /// </remarks>
     public sealed class TcpConnection : IDisposable
     {
@@ -68,10 +69,19 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
         int _sndChunkPos;
         int _sndBufferedBytes;
 
+        // Out-of-order receive reassembly: segments past _rcvNxt held until the gap fills (bounded by ReceiveWindow).
+        readonly List<(uint Seq, byte[] Data)> _ooo = new();
+
         // Deferred FIN: requested via CloseSend, emitted once the send buffer drains.
         bool _finRequested;
         bool _finSent;
+        uint _finSeq;
         TcpState _finState;
+
+        // Peer FIN tracking for the half-close FSM (consumed only once _rcvNxt reaches the FIN's sequence).
+        bool _peerFinReceived;
+        bool _peerFinPending;
+        uint _peerFinSeq;
 
         // Retransmission queue (oldest first) + RFC 6298 RTO estimator.
         readonly LinkedList<RetxUnit> _retx = new();
@@ -86,9 +96,12 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
         double _persistMs;
         bool _persistArmed;
 
+        // TIME-WAIT linger (and the only timer used in the closing FSM after the retx queue drains).
+        readonly Timer _closeTimer;
+
         bool _terminal;
 
-        /// <summary>Raised once when the connection faults (RST or retransmission give-up); lets the stack drop and dispose it.</summary>
+        /// <summary>Raised once when the connection reaches a terminal state — graceful CLOSED or a fault (RST / retransmission give-up); lets the stack drop and dispose it.</summary>
         public event Action? Closed;
 
         /// <summary>Creates a connection from the local endpoint to the remote endpoint.</summary>
@@ -106,10 +119,14 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
             _persistMs = _opts.PersistMin.TotalMilliseconds;
             _rtoTimer = new Timer(_ => OnRtoTimer(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
             _persistTimer = new Timer(_ => OnPersistTimer(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            _closeTimer = new Timer(_ => OnCloseTimer(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         }
 
         /// <summary>This connection's local port.</summary>
         public ushort LocalPort => _localPort;
+
+        /// <summary>The current TCP state (observable for diagnostics/tests; transitions happen under the connection lock).</summary>
+        public TcpState State => _state;
 
         /// <summary>Completes when the 3-way handshake finishes (or faults on RST).</summary>
         public Task Connected => _connected.Task;
@@ -203,49 +220,146 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
             ReadOnlyMemory<byte> payload = TcpSegment.Payload(segment);
             int len = payload.Length;
 
+            if (_terminal) return;
             if ((flags & TcpFlags.Rst) != 0)
             {
                 Fail("connection reset by peer");
                 return;
             }
 
+            if (_state == TcpState.SynSent)
+            {
+                if ((flags & TcpFlags.Syn) != 0 && (flags & TcpFlags.Ack) != 0)
+                {
+                    _rcvNxt = seq + 1;
+                    ProcessAck(ack, seq, wnd);                 // acks our SYN, seeds the send window
+                    EmitSegment(_sndNxt, TcpFlags.Ack, ReadOnlySpan<byte>.Empty);
+                    _state = TcpState.Established;
+                    _connected.TrySetResult(true);
+                    TrySendData();                             // flush anything queued before the handshake finished
+                }
+                return;
+            }
+            if (_state == TcpState.Closed) return;
+
+            // Data-transfer + closing states (Established/FinWait1/FinWait2/Closing/TimeWait/CloseWait/LastAck).
+            bool fin = (flags & TcpFlags.Fin) != 0;
+            if ((flags & TcpFlags.Ack) != 0) ProcessAck(ack, seq, wnd);
+            if (len > 0) ReceiveData(seq, payload);
+            if (fin) NoteFin(seq, len);
+            TryConsumePeerFin();
+            if (len > 0 || fin) EmitSegment(_sndNxt, TcpFlags.Ack, ReadOnlySpan<byte>.Empty); // cumulative / dup ACK
+            AdvanceClose();
+            if (_state == TcpState.TimeWait && fin) ArmCloseTimer(); // refresh linger on a retransmitted peer FIN
+        }
+
+        // ---- Receive reassembly + half-close FSM -----------------------------------------------------------
+
+        // Accepts in-window data, delivering in order and buffering out-of-order segments until the gap fills.
+        void ReceiveData(uint seq, ReadOnlyMemory<byte> payload)
+        {
+            uint end = seq + (uint)payload.Length;
+            if (SeqGeq(_rcvNxt, end)) return;                         // wholly old/duplicate
+            if (!SeqGreater(_rcvNxt + ReceiveWindow, seq)) return;    // beyond the advertised window
+
+            if (seq == _rcvNxt)
+            {
+                DeliverReceived(payload);
+                _rcvNxt = end;
+                if (_ooo.Count > 0) DrainOoo();
+                return;
+            }
+
+            for (int i = 0; i < _ooo.Count; i++)                      // dedupe an identical out-of-order arrival
+                if (_ooo[i].Seq == seq) { _ooo.RemoveAt(i); break; }
+            _ooo.Add((seq, payload.ToArray()));
+            DrainOoo();
+        }
+
+        // Delivers any buffered segments now contiguous with _rcvNxt (wrap-safe; small buffer, linear scan).
+        void DrainOoo()
+        {
+            bool progress = true;
+            while (progress)
+            {
+                progress = false;
+                for (int i = 0; i < _ooo.Count; i++)
+                {
+                    (uint s, byte[] d) = _ooo[i];
+                    uint end = s + (uint)d.Length;
+                    if (SeqGeq(_rcvNxt, end)) { _ooo.RemoveAt(i); progress = true; break; }   // wholly old now
+                    if (SeqGeq(_rcvNxt, s))                                                    // contiguous → deliver tail
+                    {
+                        int skip = (int)(_rcvNxt - s);
+                        DeliverReceived(d.AsMemory(skip));
+                        _rcvNxt = end;
+                        _ooo.RemoveAt(i);
+                        progress = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Records the peer's FIN (its sequence slot sits after any data the segment carried).
+        void NoteFin(uint seq, int len)
+        {
+            if (_peerFinReceived) return;     // already consumed; a retransmitted FIN just gets re-ACKed
+            _peerFinSeq = seq + (uint)len;
+            _peerFinPending = true;
+        }
+
+        // Consumes the peer FIN once all preceding data has been reassembled (delivers end-of-stream to the reader).
+        void TryConsumePeerFin()
+        {
+            if (!_peerFinPending || _rcvNxt != _peerFinSeq) return;
+            _rcvNxt += 1;
+            _peerFinPending = false;
+            _peerFinReceived = true;
+            CompleteReceive(null);
+        }
+
+        bool OurFinAcked => _finSent && SeqGeq(_sndUna, _finSeq + 1);
+
+        // Drives the closing FSM from the per-segment flags (RFC 793 §3.5/§3.9 active+passive close).
+        void AdvanceClose()
+        {
             switch (_state)
             {
-                case TcpState.SynSent:
-                    if ((flags & TcpFlags.Syn) != 0 && (flags & TcpFlags.Ack) != 0)
-                    {
-                        _rcvNxt = seq + 1;
-                        ProcessAck(ack, seq, wnd);                 // acks our SYN, seeds the send window
-                        EmitSegment(_sndNxt, TcpFlags.Ack, ReadOnlySpan<byte>.Empty);
-                        _state = TcpState.Established;
-                        _connected.TrySetResult(true);
-                        TrySendData();                             // flush anything queued before the handshake finished
-                    }
-                    break;
-
                 case TcpState.Established:
-                case TcpState.CloseWait:
-                case TcpState.FinWait1:
-                    if ((flags & TcpFlags.Ack) != 0) ProcessAck(ack, seq, wnd);
-
-                    if (len > 0)
-                    {
-                        if (seq == _rcvNxt)
-                        {
-                            DeliverReceived(payload);
-                            _rcvNxt += (uint)len;
-                        }
-                        EmitSegment(_sndNxt, TcpFlags.Ack, ReadOnlySpan<byte>.Empty); // cumulative ACK
-                    }
-
-                    if ((flags & TcpFlags.Fin) != 0 && seq + (uint)len == _rcvNxt)
-                    {
-                        _rcvNxt += 1;
-                        EmitSegment(_sndNxt, TcpFlags.Ack, ReadOnlySpan<byte>.Empty);
-                        CompleteReceive(null);
-                        _state = _state == TcpState.FinWait1 ? TcpState.LastAck : TcpState.CloseWait;
-                    }
+                    if (_peerFinReceived) _state = TcpState.CloseWait;       // passive close: peer closed first
                     break;
+                case TcpState.FinWait1:
+                    if (_peerFinReceived && OurFinAcked) EnterTimeWait();    // peer FIN+ACK in one segment
+                    else if (_peerFinReceived) _state = TcpState.Closing;    // simultaneous close
+                    else if (OurFinAcked) _state = TcpState.FinWait2;        // our FIN acked, awaiting peer FIN
+                    break;
+                case TcpState.FinWait2:
+                    if (_peerFinReceived) EnterTimeWait();
+                    break;
+                case TcpState.Closing:
+                    if (OurFinAcked) EnterTimeWait();
+                    break;
+                case TcpState.LastAck:
+                    if (OurFinAcked) Terminate(null);                        // passive close complete → CLOSED
+                    break;
+            }
+        }
+
+        void EnterTimeWait()
+        {
+            _state = TcpState.TimeWait;
+            ArmCloseTimer();
+        }
+
+        void ArmCloseTimer() => _closeTimer.Change(_opts.TimeWait, Timeout.InfiniteTimeSpan);
+
+        void OnCloseTimer()
+        {
+            lock (_sync)
+            {
+                if (_terminal) return;
+                if (_state == TcpState.TimeWait) Terminate(null); // linger elapsed → CLOSED
             }
         }
 
@@ -333,6 +447,7 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
             EnqueueRetx(seq, TcpFlags.Fin | TcpFlags.Ack, Array.Empty<byte>(), seqLen: 1);
             _sndNxt += 1;
             _finSent = true;
+            _finSeq = seq;
             _state = _finState;
         }
 
@@ -471,28 +586,32 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
             waiter?.TrySetResult(true);
         }
 
-        void Fail(string message)
+        void Fail(string message) => Terminate(new IOException(message));
+
+        // Single terminal path: graceful close (error == null) or fault. Stops timers, signals the reader, raises Closed.
+        void Terminate(Exception? error)
         {
             if (_terminal) return;
             _terminal = true;
             _rtoTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
             _persistTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            _closeTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
             _persistArmed = false;
             _state = TcpState.Closed;
-            var error = new IOException(message);
-            _connected.TrySetException(error);
-            CompleteReceive(error);
+            if (error != null) _connected.TrySetException(error);
+            CompleteReceive(error); // null = end-of-stream (idempotent if the FIN already completed it)
 
             Action? handler = Closed;
             Closed = null;
             handler?.Invoke();
         }
 
-        /// <summary>Stops the retransmission/persist timers. Idempotent; also invoked when the connection faults.</summary>
+        /// <summary>Stops the retransmission/persist/time-wait timers. Idempotent; also invoked when the connection terminates.</summary>
         public void Dispose()
         {
             _rtoTimer.Dispose();
             _persistTimer.Dispose();
+            _closeTimer.Dispose();
         }
 
         static bool SeqGreater(uint a, uint b) => (int)(a - b) > 0;

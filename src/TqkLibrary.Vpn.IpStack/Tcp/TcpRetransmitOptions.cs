@@ -32,6 +32,9 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
         /// <summary>Maximum zero-window persist interval after exponential backoff.</summary>
         public TimeSpan PersistMax { get; }
 
+        /// <summary>How long to linger in TIME-WAIT before closing (RFC 793 uses 2×MSL; a userspace socket can be far shorter).</summary>
+        public TimeSpan TimeWait { get; }
+
         /// <summary>Creates the options; any argument left <c>null</c> takes its RFC 6298 default.</summary>
         public TcpRetransmitOptions(
             TimeSpan? initialRto = null,
@@ -39,7 +42,8 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
             TimeSpan? maxRto = null,
             int maxRetransmits = 5,
             TimeSpan? persistMin = null,
-            TimeSpan? persistMax = null)
+            TimeSpan? persistMax = null,
+            TimeSpan? timeWait = null)
         {
             InitialRto = initialRto ?? TimeSpan.FromSeconds(1);
             MinRto = minRto ?? TimeSpan.FromSeconds(1);
@@ -47,6 +51,7 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
             MaxRetransmits = maxRetransmits;
             PersistMin = persistMin ?? TimeSpan.FromSeconds(1);
             PersistMax = persistMax ?? TimeSpan.FromSeconds(60);
+            TimeWait = timeWait ?? TimeSpan.FromSeconds(2);
         }
 
         /// <summary>RFC 6298 defaults used by the stack when no options are supplied.</summary>
