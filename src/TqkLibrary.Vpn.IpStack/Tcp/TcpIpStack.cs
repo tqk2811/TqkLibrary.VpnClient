@@ -19,6 +19,7 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
         readonly ConcurrentDictionary<ushort, TcpConnection> _connections = new();
         readonly ConcurrentDictionary<ushort, UdpConnection> _udpSockets = new();
         readonly ConcurrentDictionary<ushort, TaskCompletionSource<PingReply>> _pings = new();
+        readonly Ipv4Reassembler _reassembler = new();
         readonly ushort _pingIdentifier;
         int _nextPort = 49152;
         int _nextPingSequence;
@@ -96,9 +97,14 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
 
         void OnInbound(ReadOnlyMemory<byte> ipPacket)
         {
-            ReadOnlySpan<byte> span = ipPacket.Span;
-            if (span.Length < 20) return;
+            if (ipPacket.Length < 20) return;
 
+            // Reassemble fragmented datagrams (RFC 791): whole packets pass through, fragments buffer until complete.
+            ReadOnlyMemory<byte>? assembled = _reassembler.Offer(ipPacket);
+            if (assembled is null) return;
+            ipPacket = assembled.Value;
+
+            ReadOnlySpan<byte> span = ipPacket.Span;
             byte protocol = Ipv4.Protocol(span);
             if (protocol == Ipv4.ProtocolTcp)
             {

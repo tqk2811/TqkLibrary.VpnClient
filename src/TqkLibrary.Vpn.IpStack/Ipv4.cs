@@ -41,8 +41,57 @@ namespace TqkLibrary.Vpn.IpStack
             return packet;
         }
 
+        /// <summary>
+        /// Builds one fragment of an IPv4 datagram (20-byte header, no options). <paramref name="fragmentOffset"/>
+        /// is the byte offset of <paramref name="payloadFragment"/> within the reassembled payload (must be a
+        /// multiple of 8 except for the last fragment). Set <paramref name="moreFragments"/> on every fragment
+        /// except the last. All fragments of one datagram must share <paramref name="identification"/>.
+        /// </summary>
+        public static byte[] BuildFragment(IPAddress source, IPAddress destination, byte protocol, ReadOnlySpan<byte> payloadFragment, ushort identification, int fragmentOffset, bool moreFragments)
+        {
+            byte[] packet = new byte[20 + payloadFragment.Length];
+            packet[0] = 0x45;       // Version 4, IHL 5
+            packet[1] = 0x00;       // DSCP/ECN
+            int total = packet.Length;
+            packet[2] = (byte)(total >> 8);
+            packet[3] = (byte)total;
+            packet[4] = (byte)(identification >> 8);
+            packet[5] = (byte)identification;
+            int units = fragmentOffset / 8;                 // fragment offset field counts 8-byte units
+            byte flags = moreFragments ? (byte)0x20 : (byte)0x00; // MF bit (DF cleared on fragments)
+            packet[6] = (byte)(flags | ((units >> 8) & 0x1F));
+            packet[7] = (byte)units;
+            packet[8] = 64;         // TTL
+            packet[9] = protocol;
+            // checksum (10..12) left zero for the computation
+            source.GetAddressBytes().CopyTo(packet, 12);
+            destination.GetAddressBytes().CopyTo(packet, 16);
+
+            ushort checksum = InternetChecksum.Compute(packet.AsSpan(0, 20));
+            packet[10] = (byte)(checksum >> 8);
+            packet[11] = (byte)checksum;
+
+            payloadFragment.CopyTo(packet.AsSpan(20));
+            return packet;
+        }
+
         /// <summary>Header length in bytes (IHL * 4).</summary>
         public static int HeaderLength(ReadOnlySpan<byte> packet) => (packet[0] & 0x0F) * 4;
+
+        /// <summary>Total length of the datagram in bytes (header + payload) from the IPv4 length field.</summary>
+        public static int TotalLength(ReadOnlySpan<byte> packet) => (packet[2] << 8) | packet[3];
+
+        /// <summary>The 16-bit identification field (shared by all fragments of one datagram).</summary>
+        public static ushort Identification(ReadOnlySpan<byte> packet) => (ushort)((packet[4] << 8) | packet[5]);
+
+        /// <summary>True if the Don't-Fragment flag is set.</summary>
+        public static bool DontFragment(ReadOnlySpan<byte> packet) => (packet[6] & 0x40) != 0;
+
+        /// <summary>True if the More-Fragments flag is set (this is not the last fragment).</summary>
+        public static bool MoreFragments(ReadOnlySpan<byte> packet) => (packet[6] & 0x20) != 0;
+
+        /// <summary>Fragment offset in bytes (the 13-bit field value × 8).</summary>
+        public static int FragmentOffset(ReadOnlySpan<byte> packet) => (((packet[6] & 0x1F) << 8) | packet[7]) * 8;
 
         /// <summary>The protocol field.</summary>
         public static byte Protocol(ReadOnlySpan<byte> packet) => packet[9];
