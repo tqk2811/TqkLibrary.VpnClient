@@ -13,7 +13,7 @@
 - **Robustness L2TP/IPsec**: keepalive (HELLO + DPD), Phase 2 rekey in-place (make-before-break), teardown sạch (CDN/StopCCN/DELETE) + `DisconnectAsync`/`IAsyncDisposable`, **auto-reconnect** (backoff, stable channel) + event `StateChanged`.
 - **Robustness SSTP** (mirror L2TP/IPsec): active keepalive (Echo-Request 30s, chết sau 3 lần thiếu Echo-Response), teardown sạch (Call-Disconnect) + `IAsyncDisposable`, **auto-reconnect** (backoff, stable channel) + event `StateChanged`/`Reconnected`. **Không** rekey (TLS sống dài).
 - **Typed exception** `VpnConnectionException` + 3 lớp con (auth/server-reject/network-timeout) wire ở cả 2 driver.
-- 11 project `src/` + 11 project `tests/`, build xanh `netstandard2.0`+`net8.0`, **144 test offline pass** (`net8.0`) — gồm IKEv1 capstone, TCP loopback, fuzz parser, L2TP control-channel retransmit-cap, ESP sequence-exhaustion rekey watermark, ESP suite negotiation (CBC/GCM, V1+V2); thêm ~12 live integration `[Trait("Category","Integration")]` (chạy offline bằng `--filter "Category!=Integration"`).
+- 11 project `src/` + 11 project `tests/`, build xanh `netstandard2.0`+`net8.0`, **149 test offline pass** (`net8.0`) — gồm IKEv1 capstone, TCP loopback, **ICMP echo/ping + destination-unreachable**, fuzz parser, L2TP control-channel retransmit-cap, ESP sequence-exhaustion rekey watermark, ESP suite negotiation (CBC/GCM, V1+V2); thêm ~12 live integration `[Trait("Category","Integration")]` (chạy offline bằng `--filter "Category!=Integration"`).
 - **Demo tích hợp proxy** `demo/Vpn2ProxyDemo` — chi tiết as-built tách riêng ở [`12-demo-vpn2proxy.md`](12-demo-vpn2proxy.md): adapter `IProxySource` (inline) → HTTP/SOCKS proxy local qua tunnel, giữ tới khi nhấn Enter; MS-SSTP + L2TP/IPsec.
 
 ---
@@ -55,7 +55,8 @@
 ## P2 — IP stack hoàn thiện
 
 - [ ] **TCP retransmit/RTO** (RFC 6298) + **sliding window** thật + half-close edge cases. Hiện tối giản, dựa vào tunnel "đủ tin cậy" (no-SACK, no-retransmit). → [TcpConnection.cs](../src/TqkLibrary.Vpn.IpStack/Tcp/TcpConnection.cs)
-- [ ] **ICMP** (echo/ping, destination-unreachable) — chưa có. → [IpStack/](../src/TqkLibrary.Vpn.IpStack/)
+- [x] **ICMP** (echo/ping, destination-unreachable): codec [Icmpv4.cs](../src/TqkLibrary.Vpn.IpStack/Icmpv4.cs) (build/parse Echo Request/Reply + Destination Unreachable, checksum one's-complement trên toàn message — **không** pseudo-header); wire vào [`TcpIpStack.OnInbound`/`OnIcmp`](../src/TqkLibrary.Vpn.IpStack/Tcp/TcpIpStack.cs): tự trả lời Echo Request (host trong tunnel đáp ping), và [`PingAsync`](../src/TqkLibrary.Vpn.IpStack/Tcp/TcpIpStack.cs) gửi Echo Request + chờ Echo Reply (match identifier/sequence) trả [`PingReply`](../src/TqkLibrary.Vpn.IpStack/PingReply.cs) (RTT/data) — nhận Destination Unreachable trích đúng Echo Request đã gửi ⇒ ném [`IcmpUnreachableException`](../src/TqkLibrary.Vpn.IpStack/IcmpUnreachableException.cs). Test offline: [IcmpStackTests.cs](../tests/TqkLibrary.Vpn.IpStack.Tests/IcmpStackTests.cs).
+  - [ ] **Chưa làm:** tự sinh ICMP port-unreachable cho TCP/UDP tới port không có socket (hiện vẫn drop im lặng — tránh đổi hành vi data plane); IPv6 ICMPv6.
 - [ ] **IPv4 reassembly** cho gói phân mảnh inbound (hiện giả định không phân mảnh).
 - [ ] **MTU/PMTUD**: MTU cố định 1400, chưa Path-MTU-Discovery.
 
@@ -89,6 +90,6 @@
 ## Gợi ý thứ tự
 1. ~~**Keepalive + rekey + teardown + reconnect** (P1)~~ — ✅ xong cho **cả 2 driver** (L2TP/IPsec: keepalive, Phase 2 rekey **theo time + sequence-exhaustion**, teardown, auto-reconnect + Phase 1 by-reconnect; SSTP: active keepalive, teardown Call-Disconnect, auto-reconnect) + ~~typed exception~~ + ~~timeout cấu hình được + L2TP retransmit cap~~. **Còn lại P1 robustness**: forced-NAT-T fallback.
 2. ~~**IKEv1 capstone + TCP loopback + fuzz parser**~~ (P1 test) — ✅ xong regression offline. **Còn lại**: lab Docker thay server công khai.
-3. **TCP retransmit + ICMP + ~~AES-GCM ESP~~** (P2) — vững IP stack & crypto. ✅ **AES-GCM ESP đã xong** (negotiate được cả IKEv1+IKEv2 qua `EspSuiteSelection`); **còn lại**: TCP retransmit/RTO + ICMP.
+3. **~~ICMP~~ + TCP retransmit + ~~AES-GCM ESP~~** (P2) — vững IP stack & crypto. ✅ **AES-GCM ESP đã xong** (negotiate được cả IKEv1+IKEv2 qua `EspSuiteSelection`); ✅ **ICMP đã xong** (echo/ping + destination-unreachable trong IP stack); **còn lại**: TCP retransmit/RTO + sliding window.
 4. **Driver IKEv2-native** (P3) — tận dụng hạ tầng IKEv2 đã build sẵn, chi phí thấp nhất trong nhóm P3.
 5. Các driver/tầng còn lại theo nhu cầu.
