@@ -34,14 +34,28 @@ namespace TqkLibrary.Vpn.IpStack.Tests
         {
             var sent = new List<byte[]>();
             using var conn = new TcpConnection(ClientIp, ClientPort, ServerIp, ServerPort, sent.Add, linkMtu: 1400);
-            uint clientIss = DoHandshake(conn, sent, peerWindowScale: 4); // peer scales its window by ×16
+            uint clientIss = DoHandshake(conn, sent, peerWindowScale: 4); // peer scales its window by ×16 → 5000 ≡ 80000
 
-            // A later (non-SYN) peer ACK advertises window field 5000; scaled by 4 → 80000, above the 65535 ceiling.
-            conn.OnSegment(Peer(seq: 9001, ack: clientIss + 1, TcpFlags.Ack, window: 5000));
-            sent.Clear();
-
-            conn.Send(new byte[100000]); // more than the window — emission stops exactly at the (scaled) window
-            Assert.Equal(80000, sent.Sum(PayloadLength)); // 5000 << 4
+            // Congestion control caps the first burst at the initial cwnd (≪ 64 KB). Drive send/ACK rounds — ACKing
+            // each segment so slow start opens cwnd — until a burst plateaus at the peer's (scaled) window. That a burst
+            // reaches 80000 (5000 ≪ 4) proves the negotiated send window exceeds the 65535 unscaled ceiling.
+            conn.Send(new byte[400000]);
+            uint ackNo = clientIss + 1;
+            int maxBurst = 0;
+            for (int round = 0; round < 12; round++)
+            {
+                List<byte[]> burst = sent.ToList();
+                sent.Clear();
+                int burstBytes = burst.Sum(PayloadLength);
+                if (burstBytes == 0) break;
+                maxBurst = Math.Max(maxBurst, burstBytes);
+                foreach (byte[] ip in burst) // one cumulative ACK per segment → slow start grows cwnd by ~1 MSS each
+                {
+                    ackNo += (uint)PayloadLength(ip);
+                    conn.OnSegment(Peer(seq: 9001, ack: ackNo, TcpFlags.Ack, window: 5000));
+                }
+            }
+            Assert.Equal(80000, maxBurst); // send window capped at the scaled 80000, well above the 64 KB ceiling
         }
 
         [Fact]

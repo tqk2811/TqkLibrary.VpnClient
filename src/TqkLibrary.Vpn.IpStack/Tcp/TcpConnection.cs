@@ -13,14 +13,14 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
     /// An active-open TCP connection over the userspace stack. The peer is a real host on the internet (reached
     /// through the VPN gateway), so this is a reliable stack: the send path holds every sequence-consuming segment
     /// in a retransmission queue, retransmits on an RFC 6298 RTO (RTT-estimated, exponentially backed-off, with a
-    /// give-up cap), and honours the peer's advertised receive window (sliding-window flow control + a zero-window
-    /// persist probe); the receive path reassembles out-of-order segments before delivering in order via
-    /// <see cref="ReadAsync"/>, and the close path runs the full half-close FSM (FINWAIT1/2, CLOSING, TIMEWAIT,
-    /// CLOSEWAIT, LASTACK) with a TIME-WAIT linger.
+    /// give-up cap), honours the peer's window (flow control + zero-window persist), and runs NewReno congestion
+    /// control (RFC 5681/6582) with window scaling (RFC 7323); the receive path reassembles out-of-order segments
+    /// before delivering in order via <see cref="ReadAsync"/>, and the close path runs the full half-close FSM
+    /// (FINWAIT1/2, CLOSING, TIMEWAIT, CLOSEWAIT, LASTACK) with a TIME-WAIT linger.
     /// </summary>
     /// <remarks>
-    /// Congestion control (cwnd/slow-start/fast-retransmit) is intentionally omitted — only flow control (the
-    /// receiver window) is implemented. Inbound IP fragments are assumed already reassembled by the IP layer.
+    /// SACK is intentionally omitted — loss recovery follows NewReno (recovered from the first hole onward). Inbound
+    /// IP fragments are assumed already reassembled by the IP layer.
     /// </remarks>
     public sealed class TcpConnection : IDisposable
     {
@@ -29,6 +29,7 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
         const ushort AssumedPeerMss = 536;   // RFC 1122: assume a 536-byte send MSS if the peer advertises none
         const ushort ReceiveWindow = 65535;
         const byte RcvWScale = 2;            // window scaling we advertise (RFC 7323): effective rwnd = 65535 << 2 ≈ 256 KB
+        const uint MaxCwnd = 16u * 1024 * 1024; // sanity ceiling so the congestion window can't overflow over time
 
         // RFC 6298 estimator constants.
         const double Alpha = 0.125;          // SRTT gain (1/8)
@@ -78,6 +79,15 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
         // accept on receive. Both stay 0/false unless the peer's SYN-ACK carries a Window Scale option.
         byte _sndWScale;
         bool _rcvScaleActive;
+
+        // Congestion control (RFC 5681 + NewReno RFC 6582). The send rate is bounded by min(_cwnd, _sndWnd) − flight.
+        // _cwnd grows on each new ACK (slow start while < _ssthresh, else congestion avoidance); 3 duplicate ACKs
+        // trigger fast retransmit + fast recovery, and an RTO collapses _cwnd to one segment. Set at the handshake.
+        uint _cwnd;
+        uint _ssthresh = uint.MaxValue;  // "infinity" → begin in slow start
+        int _dupAcks;
+        bool _inRecovery;
+        uint _recover;                   // NewReno: the highest sequence sent when fast recovery began
 
         // Unsent application bytes waiting for window space (a queue of arrays + an offset into the head array).
         readonly Queue<byte[]> _sndChunks = new();
@@ -255,7 +265,7 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
                     // Clamp our outbound segment size to the peer's advertised MSS (RFC 1122: assume 536 if absent).
                     ushort peerMss = TcpSegment.MaxSegmentSize(span);
                     _sendMss = (ushort)Math.Max(MinMss, Math.Min(_localMss, peerMss > 0 ? peerMss : AssumedPeerMss));
-                    ProcessAck(ack, seq, wnd);                 // acks our SYN, seeds the send window (SYN-ACK window is unscaled)
+                    ProcessAck(ack, seq, wnd, 0, flags);       // acks our SYN, seeds the send window (SYN-ACK window is unscaled)
                     // Window scaling takes effect only if the peer also offered it (RFC 7323); its window is scaled hereafter.
                     byte peerWScale = TcpSegment.WindowScale(span);
                     if (peerWScale != TcpSegment.NoWindowScale)
@@ -263,6 +273,7 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
                         _sndWScale = peerWScale > 14 ? (byte)14 : peerWScale; // RFC 7323 §2.3: clamp the shift count to 14
                         _rcvScaleActive = true;
                     }
+                    _cwnd = InitialCwnd(_sendMss);             // RFC 6928 initial window — set after the SYN-ACK is processed
                     EmitSegment(_sndNxt, TcpFlags.Ack, ReadOnlySpan<byte>.Empty);
                     _state = TcpState.Established;
                     _connected.TrySetResult(true);
@@ -274,7 +285,7 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
 
             // Data-transfer + closing states (Established/FinWait1/FinWait2/Closing/TimeWait/CloseWait/LastAck).
             bool fin = (flags & TcpFlags.Fin) != 0;
-            if ((flags & TcpFlags.Ack) != 0) ProcessAck(ack, seq, wnd);
+            if ((flags & TcpFlags.Ack) != 0) ProcessAck(ack, seq, wnd, len, flags);
             if (len > 0) ReceiveData(seq, payload);
             if (fin) NoteFin(seq, len);
             TryConsumePeerFin();
@@ -407,9 +418,10 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
             {
                 while (_sndBufferedBytes > 0)
                 {
-                    int usable = (int)((_sndUna + _sndWnd) - _sndNxt); // signed window space left
+                    long window = Math.Min(_cwnd, _sndWnd);           // bounded by congestion window + peer flow control
+                    long usable = window - (uint)(_sndNxt - _sndUna); // minus the bytes already in flight
                     if (usable <= 0) break;
-                    int chunk = Math.Min(Math.Min((int)_sendMss, usable), _sndBufferedBytes);
+                    int chunk = (int)Math.Min(Math.Min((long)_sendMss, usable), _sndBufferedBytes);
                     EmitData(_sndNxt, DequeueUpTo(chunk));
                 }
 
@@ -423,10 +435,14 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
             ArmRtoTimer();
         }
 
-        void ProcessAck(uint ack, uint segSeq, ushort segWnd)
+        void ProcessAck(uint ack, uint segSeq, ushort segWnd, int payloadLen, TcpFlags flags)
         {
+            uint advertised = (uint)segWnd << _sndWScale;
+
             if (SeqGreater(ack, _sndUna))
             {
+                // ---- new data acknowledged: free the retx queue, sample RTT, then advance congestion control ----
+                uint acked = ack - _sndUna;
                 long now = Now();
                 bool sampled = false;
                 double sampleMs = 0;
@@ -441,18 +457,76 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
                 _sndUna = ack;
                 _retxAttempts = 0;                  // forward progress resets the give-up counter
                 if (sampled) UpdateRto(sampleMs);
+
+                if (_inRecovery)
+                {
+                    if (SeqGeq(ack, _recover)) { _cwnd = _ssthresh; _inRecovery = false; } // full ACK → exit recovery
+                    else                                                                    // NewReno partial ACK
+                    {
+                        RetransmitOldest();                                  // fill the next hole immediately
+                        _cwnd = _cwnd > acked ? _cwnd - acked : 0;           // deflate by the newly-acked amount...
+                        if (acked >= _sendMss) _cwnd += _sendMss;            // ...then add one segment back (RFC 6582)
+                        if (_cwnd < _sendMss) _cwnd = _sendMss;
+                    }
+                }
+                else GrowCwnd(acked);               // slow start (< ssthresh) or congestion avoidance
+                _dupAcks = 0;
+            }
+            else if (ack == _sndUna && payloadLen == 0 && (flags & (TcpFlags.Syn | TcpFlags.Fin)) == 0
+                     && _sndNxt != _sndUna && advertised == _sndWnd)
+            {
+                // ---- duplicate ACK (RFC 5681 §2): pure ACK, no window change, data still outstanding ----
+                _dupAcks++;
+                if (_inRecovery) _cwnd += _sendMss;          // inflate while recovering (RFC 5681 §3.2 step 4)
+                else if (_dupAcks == 3) EnterFastRecovery(); // 3rd dup ACK → fast retransmit + fast recovery
             }
 
             // RFC 793 window update: accept only if this segment is newer (by seq, then by ack).
             if (SeqGreater(segSeq, _sndWl1) || (segSeq == _sndWl1 && !SeqGreater(_sndWl2, ack)))
             {
                 if (_sndWnd == 0 && segWnd > 0) _persistMs = _opts.PersistMin.TotalMilliseconds; // window reopened
-                _sndWnd = (uint)segWnd << _sndWScale; // apply the peer's negotiated window scale (RFC 7323)
+                _sndWnd = advertised;               // apply the peer's negotiated window scale (RFC 7323)
                 _sndWl1 = segSeq;
                 _sndWl2 = ack;
             }
 
             TrySendData();
+        }
+
+        // RFC 6928 initial congestion window: min(10·SMSS, max(2·SMSS, 14600)) bytes.
+        static uint InitialCwnd(ushort mss) => (uint)Math.Min(10 * mss, Math.Max(2 * mss, 14600));
+
+        // Opens the congestion window for one newly-acked stretch: exponential in slow start, ~+1 SMSS/RTT after.
+        void GrowCwnd(uint acked)
+        {
+            uint inc = _cwnd < _ssthresh
+                ? Math.Min(acked, _sendMss)                                   // slow start (RFC 5681 §3.1)
+                : Math.Max(1u, (uint)((long)_sendMss * _sendMss / _cwnd));    // congestion avoidance
+            _cwnd = Math.Min(_cwnd + inc, MaxCwnd);
+        }
+
+        // RFC 5681 §3.2 / RFC 6582: on the 3rd duplicate ACK, halve the window, inflate by the 3 dup ACKs, and
+        // retransmit the lost segment without waiting for the RTO.
+        void EnterFastRecovery()
+        {
+            uint flight = _sndNxt - _sndUna;
+            _ssthresh = Math.Max(flight / 2, (uint)(2 * _sendMss));
+            _cwnd = _ssthresh + 3u * _sendMss;
+            _recover = _sndNxt;
+            _inRecovery = true;
+            RetransmitOldest();
+        }
+
+        // Re-sends the oldest unacked segment (the head of the retx queue), re-advertising SYN options when it is a SYN.
+        void RetransmitOldest()
+        {
+            LinkedListNode<RetxUnit>? node = _retx.First;
+            if (node == null) return;
+            RetxUnit u = node.Value;
+            bool isSyn = (u.Flags & TcpFlags.Syn) != 0;
+            EmitSegment(u.Seq, u.Flags, u.Payload, isSyn ? _localMss : (ushort)0, isSyn ? RcvWScale : TcpSegment.NoWindowScale);
+            u.Retransmitted = true;
+            u.SentTicks = Now();
         }
 
         void UpdateRto(double rttMs)
@@ -535,11 +609,14 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
                     return;
                 }
 
-                RetxUnit u = node.Value;
-                bool isSyn = (u.Flags & TcpFlags.Syn) != 0;
-                EmitSegment(u.Seq, u.Flags, u.Payload, isSyn ? _localMss : (ushort)0, isSyn ? RcvWScale : TcpSegment.NoWindowScale);
-                u.Retransmitted = true;
-                u.SentTicks = now;
+                // RFC 5681 §3.1: an RTO is the strongest congestion signal — drop ssthresh to half the flight and
+                // collapse the congestion window to one segment, restarting slow start.
+                _ssthresh = Math.Max((_sndNxt - _sndUna) / 2, (uint)(2 * _sendMss));
+                _cwnd = _sendMss;
+                _inRecovery = false;
+                _dupAcks = 0;
+
+                RetransmitOldest();
                 _rtoMs = Math.Min(_rtoMs * 2, _opts.MaxRto.TotalMilliseconds); // exponential backoff (RFC 6298 §5.5)
                 ArmRtoTimer();
             }
