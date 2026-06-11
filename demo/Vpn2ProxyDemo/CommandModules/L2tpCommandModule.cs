@@ -26,7 +26,7 @@ namespace Vpn2ProxyDemo.CommandModules
                 Console.WriteLine($"[l2tp] tunnel up. assigned IP = {vpn.AssignedAddress}, dns = {vpn.AssignedDns}");
 
                 var stack = new TcpIpStack(vpn.PacketChannel, vpn.AssignedAddress);
-                return new VpnTunnel(stack, () => vpn.DisposeAsync());
+                return new VpnTunnel(stack, () => vpn.DisposeAsync(), vpn.AssignedDns);
             }
             catch
             {

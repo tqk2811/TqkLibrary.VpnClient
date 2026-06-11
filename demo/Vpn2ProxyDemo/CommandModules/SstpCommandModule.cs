@@ -24,7 +24,7 @@ namespace Vpn2ProxyDemo.CommandModules
                 Console.WriteLine($"[sstp] tunnel up. assigned IP = {vpn.AssignedAddress}, dns = {vpn.AssignedDns}");
 
                 var stack = new TcpIpStack(vpn.PacketChannel, vpn.AssignedAddress);
-                return new VpnTunnel(stack, () => { vpn.Dispose(); return ValueTask.CompletedTask; });
+                return new VpnTunnel(stack, () => { vpn.Dispose(); return ValueTask.CompletedTask; }, vpn.AssignedDns);
             }
             catch
             {

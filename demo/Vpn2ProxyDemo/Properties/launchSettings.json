@@ -1,28 +1,28 @@
 {
   "profiles": {
-    "sstp": {
-      "commandName": "Project",
-      "commandLineArgs": "sstp"
-    },
-    "l2tp": {
-      "commandName": "Project",
-      "commandLineArgs": "l2tp"
-    },
-    "sstp (host khác)": {
+    "sstp public-vpn-226.opengw.net": {
       "commandName": "Project",
       "commandLineArgs": "sstp --host public-vpn-226.opengw.net"
     },
-    "l2tp (host khác)": {
+    "l2tp public-vpn-226.opengw.net": {
       "commandName": "Project",
       "commandLineArgs": "l2tp --host public-vpn-226.opengw.net"
     },
-    "sstp (proxy cố định)": {
+    "sstp public-vpn-226.opengw.net as proxy": {
       "commandName": "Project",
-      "commandLineArgs": "sstp --proxy-host 127.0.0.1 --proxy-port 18080"
+      "commandLineArgs": "sstp --host public-vpn-226.opengw.net --proxy-host 127.0.0.1 --proxy-port 18080"
     },
-    "l2tp (proxy LAN)": {
+    "l2tp public-vpn-226.opengw.net as proxy": {
       "commandName": "Project",
-      "commandLineArgs": "l2tp --proxy-host 0.0.0.0 --proxy-port 18080"
+      "commandLineArgs": "l2tp --host public-vpn-226.opengw.net --proxy-host 0.0.0.0 --proxy-port 18080"
+    },
+    "sstp resolve example.com (UDP DNS via VPN-assigned DNS)": {
+      "commandName": "Project",
+      "commandLineArgs": "sstp --host public-vpn-226.opengw.net --resolve example.com"
+    },
+    "l2tp resolve github.com (UDP DNS via 8.8.8.8)": {
+      "commandName": "Project",
+      "commandLineArgs": "l2tp --host public-vpn-226.opengw.net --resolve github.com --dns-server 8.8.8.8"
     },
     "help": {
       "commandName": "Project",

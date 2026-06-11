@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http;
 using TqkLibrary.Proxy;
 using TqkLibrary.Proxy.Interfaces;
+using TqkLibrary.Vpn.IpStack.Tcp;
 using Vpn2ProxyDemo.CommandModules.Interfaces;
 
 namespace Vpn2ProxyDemo.CommandModules
@@ -23,6 +24,8 @@ namespace Vpn2ProxyDemo.CommandModules
         protected Option<string> CheckUrlOption { get; }
         protected Option<string> ProxyHostOption { get; }
         protected Option<int> ProxyPortOption { get; }
+        protected Option<string> DnsServerOption { get; }
+        protected Option<string> ResolveOption { get; }
 
         readonly Command _command;
         public Command Command => _command;
@@ -46,9 +49,21 @@ namespace Vpn2ProxyDemo.CommandModules
                 Description = "Cổng proxy local (0 = tự cấp một cổng trống; chỉ định cố định để client trỏ vào ổn định).",
                 DefaultValueFactory = _ => 0,
             };
+            DnsServerOption = new Option<string>("--dns-server")
+            {
+                Description = "DNS server (IPv4) cho phép thử UDP qua tunnel. Bỏ trống = dùng DNS do VPN cấp, fallback 8.8.8.8.",
+                DefaultValueFactory = _ => "",
+            };
+            ResolveOption = new Option<string>("--resolve")
+            {
+                Description = "Tên miền phân giải bằng DNS-over-UDP qua tunnel (đồng thời kiểm tra VPN có hỗ trợ UDP).",
+                DefaultValueFactory = _ => "google.com",
+            };
             _command.Options.Add(CheckUrlOption);
             _command.Options.Add(ProxyHostOption);
             _command.Options.Add(ProxyPortOption);
+            _command.Options.Add(DnsServerOption);
+            _command.Options.Add(ResolveOption);
 
             _command.SetAction(InvokeAsync);
         }
@@ -58,6 +73,8 @@ namespace Vpn2ProxyDemo.CommandModules
             string checkUrl = parseResult.GetValue(CheckUrlOption)!;
             string proxyHost = parseResult.GetValue(ProxyHostOption)!;
             int proxyPort = parseResult.GetValue(ProxyPortOption);
+            string dnsServer = parseResult.GetValue(DnsServerOption)!;
+            string resolveDomain = parseResult.GetValue(ResolveOption)!;
 
             if (!IPAddress.TryParse(proxyHost, out IPAddress? bindAddress))
             {
@@ -81,6 +98,9 @@ namespace Vpn2ProxyDemo.CommandModules
                 // Lớp con connect VPN và trả về tunnel (giữ vòng đời kết nối).
                 await using VpnTunnel tunnel = await ConnectAsync(parseResult, ct);
 
+                // Kiểm tra VPN có định tuyến UDP không + phân giải DNS-over-UDP qua tunnel.
+                await ProbeUdpDnsAsync(_command.Name, tunnel.Stack, tunnel.AssignedDns, dnsServer, resolveDomain, ct);
+
                 // Phần dùng chung: stack -> IProxySource -> ProxyServer; giữ proxy sống tới khi nhấn Enter.
                 IProxySource source = new VpnProxySource(tunnel.Stack);
                 await RunProxyUntilEnterAsync(_command.Name, source, new IPEndPoint(bindAddress, proxyPort), checkUrl, ct);
@@ -101,6 +121,48 @@ namespace Vpn2ProxyDemo.CommandModules
 
         /// <summary>Đọc option riêng của lớp con từ <paramref name="parseResult"/>, connect VPN, trả tunnel đã lên.</summary>
         protected abstract Task<VpnTunnel> ConnectAsync(ParseResult parseResult, CancellationToken ct);
+
+        /// <summary>
+        /// Gửi một truy vấn DNS (bản ghi A) cho <paramref name="domain"/> qua UDP xuyên tunnel để kiểm tra VPN có
+        /// định tuyến UDP hay không, và in IPv4 phân giải được. Đích DNS: <paramref name="dnsServerOpt"/> nếu là IP
+        /// hợp lệ; ngược lại dùng DNS do VPN cấp (<paramref name="assignedDns"/>), fallback 8.8.8.8. Lỗi chỉ in cảnh báo.
+        /// </summary>
+        async Task ProbeUdpDnsAsync(string tag, TcpIpStack stack, IPAddress? assignedDns, string dnsServerOpt, string domain, CancellationToken ct)
+        {
+            IPAddress dnsServer = !string.IsNullOrWhiteSpace(dnsServerOpt) && IPAddress.TryParse(dnsServerOpt, out IPAddress? parsed)
+                ? parsed
+                : assignedDns ?? IPAddress.Parse("8.8.8.8");
+
+            Console.WriteLine($"[{tag}] UDP test: gửi truy vấn DNS (A) cho '{domain}' tới {dnsServer}:53 qua tunnel...");
+            try
+            {
+                UdpDnsProbeResult result = await UdpDnsProbe.ResolveAsync(
+                    stack, dnsServer, domain, attempts: 3, perAttemptTimeout: TimeSpan.FromSeconds(3), ct);
+
+                if (result.UdpSupported)
+                {
+                    Console.WriteLine($"[{tag}] => VPN HỖ TRỢ UDP (nhận phản hồi ở lần thử {result.Attempts}, {result.Elapsed.TotalMilliseconds:F0} ms).");
+                    if (result.Addresses.Count > 0)
+                        Console.WriteLine($"[{tag}] => {domain} = {string.Join(", ", result.Addresses)}");
+                    else
+                        Console.WriteLine($"[{tag}] => (không có bản ghi A: {result.Error})");
+                }
+                else
+                {
+                    Console.WriteLine($"[{tag}] => VPN có thể KHÔNG hỗ trợ/định tuyến UDP: {result.Error} (đã chờ {result.Elapsed.TotalMilliseconds:F0} ms).");
+                    Console.WriteLine($"[{tag}]    (cũng có thể do DNS server {dnsServer} không reachable — thử --dns-server khác).");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[{tag}] UDP test lỗi (vẫn tiếp tục chạy proxy): {ex.GetType().Name}: {ex.Message}");
+            }
+            Console.WriteLine();
+        }
 
         /// <summary>
         /// Phần dùng chung: cắm <paramref name="source"/> vào ProxyServer (bind theo <paramref name="bind"/>),
