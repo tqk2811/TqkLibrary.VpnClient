@@ -90,6 +90,13 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
         }
 
         /// <summary>
+        /// Releases a UDP socket bound by <see cref="BindUdp()"/>: drops it from the demux table so later inbound
+        /// datagrams for <paramref name="localPort"/> get an ICMP port-unreachable instead of being queued on a socket
+        /// nobody reads. Unlike TCP (auto-removed on close), UDP sockets have no lifecycle, so callers unbind explicitly.
+        /// </summary>
+        public void UnbindUdp(ushort localPort) => _udpSockets.TryRemove(localPort, out _);
+
+        /// <summary>
         /// Sends an ICMP Echo Request through the tunnel and awaits the matching Echo Reply. Throws
         /// <see cref="IcmpUnreachableException"/> if the target replies Destination Unreachable, or
         /// <see cref="OperationCanceledException"/> if cancelled before a reply arrives. The ICMP version follows

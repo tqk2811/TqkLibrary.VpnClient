@@ -117,6 +117,7 @@ tcp.CloseSend(); // gửi FIN
 UdpConnection udp = stack.BindUdp();
 udp.SendTo(IPAddress.Parse("8.8.8.8"), 53, dnsQuery);
 UdpReceiveResult res = await udp.ReceiveAsync(ct);
+stack.UnbindUdp(udp.LocalPort); // gỡ socket khi dùng xong
 
 // ICMP: ping một host trong tunnel (đo RTT). Host được cấp IP trong tunnel cũng tự trả lời ping của người khác.
 PingReply pong = await stack.PingAsync(IPAddress.Parse("10.0.0.2"), cancellationToken: ct);
@@ -128,6 +129,7 @@ Các điểm vào public chính:
 - `new TcpIpStack(channel, IPAddress)` → [TcpIpStack.cs:36](Tcp/TcpIpStack.cs#L36): suy họ từ địa chỉ (v4 hoặc v6). Overload **dual-stack** `new TcpIpStack(channel, IPAddress? v4, IPAddress? v6)` → [TcpIpStack.cs:47](Tcp/TcpIpStack.cs#L47) (≥1 khác null) phục vụ cả 2 họ trên một instance; demux theo version, outbound chọn source theo họ remote.
 - `TcpIpStack.ConnectAsync(IPAddress, ushort, CancellationToken)` → [TcpIpStack.cs:66](Tcp/TcpIpStack.cs#L66): cấp local port ephemeral (bắt đầu 49152), tạo `TcpConnection` với source khớp họ remote, gửi SYN và chờ `Connected`.
 - `TcpIpStack.BindUdp()` / `BindUdp(ushort)` → [TcpIpStack.cs:82](Tcp/TcpIpStack.cs#L82): bind socket UDP userspace (dual-family).
+- `TcpIpStack.UnbindUdp(ushort)` → [TcpIpStack.cs:97](Tcp/TcpIpStack.cs#L97): gỡ socket UDP khỏi bảng demux (UDP không có vòng đời như TCP nên caller tự gỡ; sau đó datagram tới port đó nhận ICMP port-unreachable).
 - `TcpIpStack.PingAsync(IPAddress, ReadOnlyMemory<byte>, CancellationToken)` → [TcpIpStack.cs:98](Tcp/TcpIpStack.cs#L98): cấp sequence, gửi ICMP **hoặc ICMPv6** Echo Request (theo họ remote), chờ Echo Reply khớp identifier/sequence → `PingReply` (RTT); nhận Destination Unreachable ⇒ ném `IcmpUnreachableException`.
 - `TcpConnection.Send` / `ReadAsync` / `CloseSend` → [TcpConnection.cs:189](Tcp/TcpConnection.cs#L189), [TcpConnection.cs:204](Tcp/TcpConnection.cs#L204), [TcpConnection.cs:233](Tcp/TcpConnection.cs#L233). `Send` đệm dữ liệu rồi flush trong cửa sổ peer; `CloseSend` hoãn FIN tới khi đệm gửi cạn. `State` ([TcpConnection.cs:159](Tcp/TcpConnection.cs#L159)) phơi trạng thái FSM hiện tại để quan sát; `Closed` (event) báo connection đã terminal.
 - `UdpConnection.SendTo` / `ReceiveAsync` → [UdpConnection.cs:30](Tcp/UdpConnection.cs#L30), [UdpConnection.cs:38](Tcp/UdpConnection.cs#L38).
