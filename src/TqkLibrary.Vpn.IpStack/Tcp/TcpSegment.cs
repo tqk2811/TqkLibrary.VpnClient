@@ -9,27 +9,54 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
         /// <summary>A <paramref name="windowScale"/> value meaning "no Window Scale option" (RFC 7323).</summary>
         public const byte NoWindowScale = 0xFF;
 
+        /// <summary>The SACK-Permitted option kind (RFC 2018), carried on the SYN exchange to enable selective ACKs.</summary>
+        public const byte SackPermittedKind = 4;
+
+        /// <summary>The SACK option kind (RFC 2018), carrying selectively-acknowledged blocks on data ACKs.</summary>
+        public const byte SackKind = 5;
+
         /// <summary>
-        /// Builds a TCP segment. On a SYN, pass <paramref name="mss"/> &gt; 0 to include the MSS option (RFC 793) and
-        /// <paramref name="windowScale"/> ≠ <see cref="NoWindowScale"/> to include the Window Scale option (RFC 7323);
-        /// the options are padded to a 32-bit boundary with No-Operation bytes.
+        /// Builds a TCP segment. On a SYN, pass <paramref name="mss"/> &gt; 0 to include the MSS option (RFC 793),
+        /// <paramref name="windowScale"/> ≠ <see cref="NoWindowScale"/> for the Window Scale option (RFC 7323), and
+        /// <paramref name="sackPermitted"/> for the SACK-Permitted option (RFC 2018). On a data ACK, pass
+        /// <paramref name="sackBlocks"/> as consecutive (leftEdge, rightEdge) pairs (at most 4 blocks) to include a
+        /// SACK option. The options are padded to a 32-bit boundary with No-Operation bytes.
         /// </summary>
         public static byte[] Build(
             IPAddress sourceIp, IPAddress destinationIp,
             ushort sourcePort, ushort destinationPort,
             uint sequence, uint acknowledgment, TcpFlags flags, ushort window,
-            ReadOnlySpan<byte> payload, ushort mss = 0, byte windowScale = NoWindowScale)
+            ReadOnlySpan<byte> payload, ushort mss = 0, byte windowScale = NoWindowScale,
+            bool sackPermitted = false, ReadOnlySpan<uint> sackBlocks = default)
         {
-            Span<byte> options = stackalloc byte[8];
+            // Up to 40 option bytes (the 4-bit data offset caps the header at 60 bytes). SYN-time options
+            // (MSS/SACK-Permitted/Window Scale) and a data-time SACK block list are never combined by callers, so
+            // they never collide within that ceiling.
+            Span<byte> options = stackalloc byte[40];
             int optLen = 0;
             if (mss > 0)
             {
                 options[optLen++] = 2; options[optLen++] = 4;               // MSS: kind 2, length 4
                 options[optLen++] = (byte)(mss >> 8); options[optLen++] = (byte)mss;
             }
+            if (sackPermitted)
+            {
+                options[optLen++] = SackPermittedKind; options[optLen++] = 2; // SACK-Permitted (RFC 2018): kind 4, length 2
+            }
             if (windowScale != NoWindowScale)
             {
                 options[optLen++] = 3; options[optLen++] = 3; options[optLen++] = windowScale; // Window Scale: kind 3, length 3
+            }
+            if (sackBlocks.Length >= 2)
+            {
+                int pairs = Math.Min(sackBlocks.Length / 2, 4);             // RFC 2018: at most 4 SACK blocks
+                options[optLen++] = 1; options[optLen++] = 1;               // 2 NOPs to align the 8-byte block edges (RFC 2018 §3)
+                options[optLen++] = SackKind; options[optLen++] = (byte)(2 + pairs * 8); // SACK: kind 5, length 2 + 8·blocks
+                for (int b = 0; b < pairs; b++)
+                {
+                    PutU32(options, ref optLen, sackBlocks[b * 2]);         // left edge
+                    PutU32(options, ref optLen, sackBlocks[b * 2 + 1]);     // right edge
+                }
             }
             while ((optLen & 3) != 0) options[optLen++] = 1;                // pad to a 32-bit boundary with NOPs
 
@@ -100,6 +127,27 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
             return v >= 0 && valueLength == 1 ? segment[v] : NoWindowScale;
         }
 
+        /// <summary>True if the segment carries the SACK-Permitted option (RFC 2018), offered on the SYN exchange.</summary>
+        public static bool SackPermitted(ReadOnlySpan<byte> segment)
+            => FindOption(segment, SackPermittedKind, out int valueLength) >= 0 && valueLength == 0;
+
+        /// <summary>
+        /// Reads the SACK option (kind 5) blocks into <paramref name="blocks"/> as consecutive (leftEdge, rightEdge)
+        /// pairs and returns the block count (0 if no SACK option), capped by the destination span's capacity.
+        /// </summary>
+        public static int ReadSackBlocks(ReadOnlySpan<byte> segment, Span<uint> blocks)
+        {
+            int v = FindOption(segment, SackKind, out int valueLength);
+            if (v < 0) return 0;
+            int count = Math.Min(valueLength / 8, blocks.Length / 2);
+            for (int b = 0; b < count; b++)
+            {
+                blocks[b * 2] = ReadU32(segment, v + b * 8);
+                blocks[b * 2 + 1] = ReadU32(segment, v + b * 8 + 4);
+            }
+            return count;
+        }
+
         // Walks the options between the fixed 20-byte header and the data offset, skipping End-of-List/No-Operation
         // padding and tolerating malformed/truncated options. Returns the value offset (just past kind+length) of the
         // first option matching <paramref name="kind"/> (and its value length), or -1 if not found.
@@ -124,6 +172,7 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
 
         static void WriteU16(byte[] b, int o, ushort v) { b[o] = (byte)(v >> 8); b[o + 1] = (byte)v; }
         static void WriteU32(byte[] b, int o, uint v) { b[o] = (byte)(v >> 24); b[o + 1] = (byte)(v >> 16); b[o + 2] = (byte)(v >> 8); b[o + 3] = (byte)v; }
+        static void PutU32(Span<byte> b, ref int o, uint v) { b[o++] = (byte)(v >> 24); b[o++] = (byte)(v >> 16); b[o++] = (byte)(v >> 8); b[o++] = (byte)v; }
         static uint ReadU32(ReadOnlySpan<byte> b, int o) => ((uint)b[o] << 24) | ((uint)b[o + 1] << 16) | ((uint)b[o + 2] << 8) | b[o + 3];
     }
 }

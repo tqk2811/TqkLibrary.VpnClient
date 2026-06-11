@@ -20,8 +20,10 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
     /// (FINWAIT1/2, CLOSING, TIMEWAIT, CLOSEWAIT, LASTACK) with a TIME-WAIT linger.
     /// </summary>
     /// <remarks>
-    /// SACK is intentionally omitted — loss recovery follows NewReno (recovered from the first hole onward). Inbound
-    /// IP fragments are assumed already reassembled by the IP layer.
+    /// Selective Acknowledgment (RFC 2018/6675) is negotiated on the SYN exchange: when both peers offer SACK-Permitted
+    /// the receive path reports its out-of-order blocks and the send path retransmits only the missing holes (selective
+    /// retransmission, sending new data to keep the pipe full) instead of NewReno's recover-from-the-first-hole. With no
+    /// SACK the stack falls back to NewReno. Inbound IP fragments are assumed already reassembled by the IP layer.
     /// </remarks>
     public sealed class TcpConnection : IDisposable
     {
@@ -89,6 +91,14 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
         int _dupAcks;
         bool _inRecovery;
         uint _recover;                   // NewReno: the highest sequence sent when fast recovery began
+
+        // Selective acknowledgment (RFC 2018 / 6675), negotiated on the SYN exchange — we always offer SACK-Permitted;
+        // _sackEnabled flips on only if the peer offers it too. _sackedBytes is how much of the retx queue the peer has
+        // selectively acked; it is subtracted from the in-flight estimate so the send path can fill the pipe past holes.
+        // _lastOooEnd is the right edge of the most-recently-buffered out-of-order range (reported first, RFC 2018 §4).
+        bool _sackEnabled;
+        uint _sackedBytes;
+        uint _lastOooEnd;
 
         // Unsent application bytes waiting for window space (a queue of arrays + an offset into the head array).
         readonly Queue<byte[]> _sndChunks = new();
@@ -173,7 +183,7 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
                 uint iss = ((uint)r[0] << 24) | ((uint)r[1] << 16) | ((uint)r[2] << 8) | r[3];
                 _sndUna = iss;
                 _sndNxt = iss;
-                EmitSegment(iss, TcpFlags.Syn, ReadOnlySpan<byte>.Empty, mss: _localMss, windowScale: RcvWScale);
+                EmitSegment(iss, TcpFlags.Syn, ReadOnlySpan<byte>.Empty, mss: _localMss, windowScale: RcvWScale, sackPermitted: true);
                 EnqueueRetx(iss, TcpFlags.Syn, Array.Empty<byte>(), seqLen: 1);
                 _sndNxt = iss + 1;
                 _state = TcpState.SynSent;
@@ -267,7 +277,7 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
                     // Clamp our outbound segment size to the peer's advertised MSS (RFC 1122: assume 536 if absent).
                     ushort peerMss = TcpSegment.MaxSegmentSize(span);
                     _sendMss = (ushort)Math.Max(MinMss, Math.Min(_localMss, peerMss > 0 ? peerMss : AssumedPeerMss));
-                    ProcessAck(ack, seq, wnd, 0, flags);       // acks our SYN, seeds the send window (SYN-ACK window is unscaled)
+                    ProcessAck(ack, seq, wnd, 0, flags, span);  // acks our SYN, seeds the send window (SYN-ACK window is unscaled)
                     // Window scaling takes effect only if the peer also offered it (RFC 7323); its window is scaled hereafter.
                     byte peerWScale = TcpSegment.WindowScale(span);
                     if (peerWScale != TcpSegment.NoWindowScale)
@@ -275,6 +285,7 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
                         _sndWScale = peerWScale > 14 ? (byte)14 : peerWScale; // RFC 7323 §2.3: clamp the shift count to 14
                         _rcvScaleActive = true;
                     }
+                    _sackEnabled = TcpSegment.SackPermitted(span); // selective ACK is on only if the peer also offered it (RFC 2018)
                     _cwnd = InitialCwnd(_sendMss);             // RFC 6928 initial window — set after the SYN-ACK is processed
                     EmitSegment(_sndNxt, TcpFlags.Ack, ReadOnlySpan<byte>.Empty);
                     _state = TcpState.Established;
@@ -287,11 +298,11 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
 
             // Data-transfer + closing states (Established/FinWait1/FinWait2/Closing/TimeWait/CloseWait/LastAck).
             bool fin = (flags & TcpFlags.Fin) != 0;
-            if ((flags & TcpFlags.Ack) != 0) ProcessAck(ack, seq, wnd, len, flags);
+            if ((flags & TcpFlags.Ack) != 0) ProcessAck(ack, seq, wnd, len, flags, span);
             if (len > 0) ReceiveData(seq, payload);
             if (fin) NoteFin(seq, len);
             TryConsumePeerFin();
-            if (len > 0 || fin) EmitSegment(_sndNxt, TcpFlags.Ack, ReadOnlySpan<byte>.Empty); // cumulative / dup ACK
+            if (len > 0 || fin) EmitAck(); // cumulative / dup ACK (carries SACK blocks when out-of-order data is buffered)
             AdvanceClose();
             if (_state == TcpState.TimeWait && fin) ArmCloseTimer(); // refresh linger on a retransmitted peer FIN
         }
@@ -320,6 +331,7 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
             for (int i = 0; i < _ooo.Count; i++)                      // dedupe an identical out-of-order arrival
                 if (_ooo[i].Seq == seq) { _ooo.RemoveAt(i); break; }
             _ooo.Add((seq, payload.ToArray()));
+            _lastOooEnd = end;                                        // most-recent block → reported first in our SACK (RFC 2018 §4)
             DrainOoo();
         }
 
@@ -421,7 +433,7 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
                 while (_sndBufferedBytes > 0)
                 {
                     long window = Math.Min(_cwnd, _sndWnd);           // bounded by congestion window + peer flow control
-                    long usable = window - (uint)(_sndNxt - _sndUna); // minus the bytes already in flight
+                    long usable = window - InFlight();                // minus the bytes still in flight (SACKed holes excluded)
                     if (usable <= 0) break;
                     int chunk = (int)Math.Min(Math.Min((long)_sendMss, usable), _sndBufferedBytes);
                     EmitData(_sndNxt, DequeueUpTo(chunk));
@@ -437,9 +449,10 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
             ArmRtoTimer();
         }
 
-        void ProcessAck(uint ack, uint segSeq, ushort segWnd, int payloadLen, TcpFlags flags)
+        void ProcessAck(uint ack, uint segSeq, ushort segWnd, int payloadLen, TcpFlags flags, ReadOnlySpan<byte> segSpan)
         {
             uint advertised = (uint)segWnd << _sndWScale;
+            if (_sackEnabled) ApplySackBlocks(segSpan, ack); // mark selectively-acked segments before any congestion decision
 
             if (SeqGreater(ack, _sndUna))
             {
@@ -459,13 +472,14 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
                 _sndUna = ack;
                 _retxAttempts = 0;                  // forward progress resets the give-up counter
                 if (sampled) UpdateRto(sampleMs);
+                if (_sackEnabled) RecomputeSacked(); // some SACKed units were just cumulatively acked and removed
 
                 if (_inRecovery)
                 {
                     if (SeqGeq(ack, _recover)) { _cwnd = _ssthresh; _inRecovery = false; } // full ACK → exit recovery
                     else                                                                    // NewReno partial ACK
                     {
-                        RetransmitOldest();                                  // fill the next hole immediately
+                        RetransmitNext();                                    // SACK → the next hole(s); NewReno → the oldest segment
                         _cwnd = _cwnd > acked ? _cwnd - acked : 0;           // deflate by the newly-acked amount...
                         if (acked >= _sendMss) _cwnd += _sendMss;            // ...then add one segment back (RFC 6582)
                         if (_cwnd < _sendMss) _cwnd = _sendMss;
@@ -479,7 +493,11 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
             {
                 // ---- duplicate ACK (RFC 5681 §2): pure ACK, no window change, data still outstanding ----
                 _dupAcks++;
-                if (_inRecovery) _cwnd += _sendMss;          // inflate while recovering (RFC 5681 §3.2 step 4)
+                if (_inRecovery)
+                {
+                    _cwnd += _sendMss;                  // inflate while recovering (RFC 5681 §3.2 step 4)
+                    if (_sackEnabled) RetransmitNext(); // a fresh SACK block may have exposed another hole as lost
+                }
                 else if (_dupAcks == 3) EnterFastRecovery(); // 3rd dup ACK → fast retransmit + fast recovery
             }
 
@@ -508,15 +526,28 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
         }
 
         // RFC 5681 §3.2 / RFC 6582: on the 3rd duplicate ACK, halve the window, inflate by the 3 dup ACKs, and
-        // retransmit the lost segment without waiting for the RTO.
+        // retransmit the lost segment(s) without waiting for the RTO.
         void EnterFastRecovery()
         {
-            uint flight = _sndNxt - _sndUna;
+            uint flight = InFlight();
             _ssthresh = Math.Max(flight / 2, (uint)(2 * _sendMss));
             _cwnd = _ssthresh + 3u * _sendMss;
             _recover = _sndNxt;
             _inRecovery = true;
-            RetransmitOldest();
+            if (_sackEnabled) foreach (RetxUnit u in _retx) u.ResentInRecovery = false; // fresh scoreboard for this episode
+            RetransmitNext();
+        }
+
+        // Bytes still in flight: everything sent-but-not-cumulatively-acked, minus what the peer has SACKed (the RFC 6675
+        // pipe estimate). Equals _sndNxt − _sndUna when SACK is off (_sackedBytes stays 0), so the non-SACK path is unchanged.
+        uint InFlight() => (_sndNxt - _sndUna) - _sackedBytes;
+
+        // Selective-retransmission entry point: with SACK, resend the confirmed holes (RFC 6675); otherwise the single
+        // NewReno retransmit of the oldest unacked segment.
+        void RetransmitNext()
+        {
+            if (_sackEnabled) RetransmitHoles();
+            else RetransmitOldest();
         }
 
         // Re-sends the oldest unacked segment (the head of the retx queue), re-advertising SYN options when it is a SYN.
@@ -526,9 +557,67 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
             if (node == null) return;
             RetxUnit u = node.Value;
             bool isSyn = (u.Flags & TcpFlags.Syn) != 0;
-            EmitSegment(u.Seq, u.Flags, u.Payload, isSyn ? _localMss : (ushort)0, isSyn ? RcvWScale : TcpSegment.NoWindowScale);
+            EmitSegment(u.Seq, u.Flags, u.Payload, isSyn ? _localMss : (ushort)0, isSyn ? RcvWScale : TcpSegment.NoWindowScale, sackPermitted: isSyn);
             u.Retransmitted = true;
             u.SentTicks = Now();
+        }
+
+        // RFC 6675 NextSeg: resend each un-SACKed segment that sits below SACKed data (a confirmed hole) and hasn't yet
+        // been resent this recovery episode, injecting at most a congestion window's worth of bytes per call.
+        void RetransmitHoles()
+        {
+            uint highestSacked = HighestSacked();
+            long injected = 0;
+            for (LinkedListNode<RetxUnit>? node = _retx.First; node != null; node = node.Next)
+            {
+                RetxUnit u = node.Value;
+                if (u.Sacked || u.ResentInRecovery) continue;
+                if (!SeqGreater(highestSacked, u.Seq + (uint)u.SeqLen)) continue; // no SACK above it yet → not a confirmed hole
+                bool isSyn = (u.Flags & TcpFlags.Syn) != 0;
+                EmitSegment(u.Seq, u.Flags, u.Payload, isSyn ? _localMss : (ushort)0, isSyn ? RcvWScale : TcpSegment.NoWindowScale, sackPermitted: isSyn);
+                u.ResentInRecovery = true;
+                u.Retransmitted = true;
+                u.SentTicks = Now();
+                injected += u.SeqLen;
+                if (injected >= _cwnd) break;
+            }
+        }
+
+        // Highest right edge the peer has selectively acknowledged (≥ _sndUna when nothing is SACKed).
+        uint HighestSacked()
+        {
+            uint hi = _sndUna;
+            foreach (RetxUnit u in _retx)
+                if (u.Sacked && SeqGreater(u.Seq + (uint)u.SeqLen, hi)) hi = u.Seq + (uint)u.SeqLen;
+            return hi;
+        }
+
+        // Marks every retx unit fully covered by an incoming SACK block as SACKed (RFC 2018 §4), then refreshes the total.
+        void ApplySackBlocks(ReadOnlySpan<byte> segSpan, uint ack)
+        {
+            Span<uint> blocks = stackalloc uint[8];
+            int n = TcpSegment.ReadSackBlocks(segSpan, blocks);
+            if (n == 0) return;
+            foreach (RetxUnit u in _retx)
+            {
+                if (u.Sacked) continue;
+                uint uEnd = u.Seq + (uint)u.SeqLen;
+                for (int b = 0; b < n; b++)
+                {
+                    uint left = blocks[b * 2], right = blocks[b * 2 + 1];
+                    if (!SeqGreater(right, ack)) continue;                  // stale block at/below the cumulative ACK
+                    if (SeqGeq(u.Seq, left) && SeqGeq(right, uEnd)) { u.Sacked = true; break; }
+                }
+            }
+            RecomputeSacked();
+        }
+
+        // Re-totals the SACKed bytes still resident in the retx queue (after marking, or after cumulative removal).
+        void RecomputeSacked()
+        {
+            uint total = 0;
+            foreach (RetxUnit u in _retx) if (u.Sacked) total += (uint)u.SeqLen;
+            _sackedBytes = total;
         }
 
         void UpdateRto(double rttMs)
@@ -566,11 +655,59 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
             _retx.AddLast(new RetxUnit { Seq = seq, Flags = flags, Payload = payload, SeqLen = seqLen, SentTicks = Now() });
         }
 
-        void EmitSegment(uint seq, TcpFlags flags, ReadOnlySpan<byte> payload, ushort mss = 0, byte windowScale = TcpSegment.NoWindowScale)
+        void EmitSegment(uint seq, TcpFlags flags, ReadOnlySpan<byte> payload, ushort mss = 0, byte windowScale = TcpSegment.NoWindowScale,
+            bool sackPermitted = false, ReadOnlySpan<uint> sackBlocks = default)
         {
-            byte[] tcp = TcpSegment.Build(_localIp, _remoteIp, _localPort, _remotePort, seq, _rcvNxt, flags, ReceiveWindow, payload, mss, windowScale);
+            byte[] tcp = TcpSegment.Build(_localIp, _remoteIp, _localPort, _remotePort, seq, _rcvNxt, flags, ReceiveWindow, payload, mss, windowScale, sackPermitted, sackBlocks);
             byte[] ip = IpLayer.Build(_localIp, _remoteIp, Ipv4.ProtocolTcp, tcp, _ipId++); // TCP protocol number 6 is shared by IPv4/IPv6
             _sendIp(ip);
+        }
+
+        // Sends a bare ACK, attaching SACK blocks describing the buffered out-of-order data when SACK is in effect (RFC 2018).
+        void EmitAck()
+        {
+            if (_sackEnabled && _ooo.Count > 0)
+            {
+                Span<uint> blocks = stackalloc uint[8];
+                int pairs = BuildSackBlocks(blocks);
+                EmitSegment(_sndNxt, TcpFlags.Ack, ReadOnlySpan<byte>.Empty, sackBlocks: blocks.Slice(0, pairs * 2));
+            }
+            else EmitSegment(_sndNxt, TcpFlags.Ack, ReadOnlySpan<byte>.Empty);
+        }
+
+        // Coalesces the buffered out-of-order segments into maximal blocks and writes up to 4 (leftEdge, rightEdge) pairs
+        // into <paramref name="dst"/>, the block holding the most recently received data first (RFC 2018 §4). Returns the
+        // block count. Offsets are taken relative to _rcvNxt so the sort and merge stay wrap-safe within the receive window.
+        int BuildSackBlocks(Span<uint> dst)
+        {
+            var ranges = new List<(uint Start, uint End)>(_ooo.Count);
+            foreach ((uint seq, byte[] data) in _ooo) ranges.Add((seq, seq + (uint)data.Length));
+            uint baseSeq = _rcvNxt;
+            ranges.Sort((x, y) => ((uint)(x.Start - baseSeq)).CompareTo((uint)(y.Start - baseSeq)));
+
+            var merged = new List<(uint Start, uint End)>();
+            foreach ((uint start, uint end) in ranges)
+            {
+                int last = merged.Count - 1;
+                if (last >= 0 && SeqGeq(merged[last].End, start))
+                {
+                    if (SeqGreater(end, merged[last].End)) merged[last] = (merged[last].Start, end);
+                }
+                else merged.Add((start, end));
+            }
+
+            int firstIdx = -1; // the merged block that contains the most-recently-received segment (ends at _lastOooEnd)
+            for (int i = 0; i < merged.Count; i++)
+                if (SeqGreater(_lastOooEnd, merged[i].Start) && SeqGeq(merged[i].End, _lastOooEnd)) { firstIdx = i; break; }
+
+            int count = 0;
+            if (firstIdx >= 0) { dst[0] = merged[firstIdx].Start; dst[1] = merged[firstIdx].End; count = 1; }
+            for (int i = merged.Count - 1; i >= 0 && count < 4; i--)   // remaining blocks, most-recent (highest offset) first
+            {
+                if (i == firstIdx) continue;
+                dst[count * 2] = merged[i].Start; dst[count * 2 + 1] = merged[i].End; count++;
+            }
+            return count;
         }
 
         byte[] DequeueUpTo(int max)
@@ -609,6 +746,14 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
                 {
                     Fail($"retransmission timeout (no ACK after {_opts.MaxRetransmits} retries)");
                     return;
+                }
+
+                // RFC 6675 §5.1: an RTO may mean the peer reneged on its SACKs — clear the scoreboard and recover
+                // from the cumulative ACK via go-back-N.
+                if (_sackEnabled)
+                {
+                    foreach (RetxUnit u in _retx) { u.Sacked = false; u.ResentInRecovery = false; }
+                    _sackedBytes = 0;
                 }
 
                 // RFC 5681 §3.1: an RTO is the strongest congestion signal — drop ssthresh to half the flight and
@@ -749,6 +894,8 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
             public int SeqLen;       // sequence space consumed: payload length, or 1 for a lone SYN/FIN
             public long SentTicks;
             public bool Retransmitted;
+            public bool Sacked;            // peer selectively acknowledged this segment (RFC 2018) — excluded from the in-flight estimate
+            public bool ResentInRecovery;  // already retransmitted as a hole during the current recovery episode (RFC 6675)
         }
     }
 }
