@@ -262,10 +262,17 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
                 }
                 case Icmpv4.TypeDestinationUnreachable:
                 {
-                    // The error quotes our offending datagram: original IP header + first 8 bytes (the Echo Request).
+                    // The error quotes our offending datagram: original IP header + first 8 bytes.
                     ReadOnlySpan<byte> quoted = Icmpv4.Payload(icmp).Span;
                     if (quoted.Length < 20) break;
                     int ihl = (quoted[0] & 0x0F) * 4;
+                    if (quoted[9] == Ipv4.ProtocolTcp && Icmpv4.Code(span) == Icmpv4.CodeFragmentationNeeded)
+                    {
+                        // Fragmentation-Needed (RFC 1191): the quoted TCP header's first 8 bytes are both ports + the
+                        // sequence number — enough to route the Path MTU update to the connection that sent it.
+                        if (quoted.Length >= ihl + 8) DeliverPathMtu(quoted, ihl, Icmpv4.NextHopMtu(span));
+                        break;
+                    }
                     if (quoted[9] != Ipv4.ProtocolIcmp || quoted.Length < ihl + Icmpv4.HeaderSize) break;
                     ushort id = (ushort)((quoted[ihl + 4] << 8) | quoted[ihl + 5]);
                     if (id != _pingIdentifier) break;
@@ -297,6 +304,17 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
                         waiter.TrySetResult(new PingReply(source, TimeSpan.Zero, Icmpv6.Payload(icmp).ToArray()));
                     break;
                 }
+                case Icmpv6.TypePacketTooBig:
+                {
+                    // Packet Too Big (RFC 8201) quotes our oversized packet: walk to the embedded TCP segment and route
+                    // the Path MTU update to the connection that sent it.
+                    ReadOnlySpan<byte> quoted = Icmpv6.Payload(icmp).Span;
+                    if (quoted.Length < Ipv6.HeaderLength || IpLayer.Version(quoted) != 6) break;
+                    if (!Ipv6.TryGetUpperLayer(quoted, out byte ptbProto, out int ptbOffset)) break;
+                    if (ptbProto == Ipv6.NextHeaderTcp && quoted.Length >= ptbOffset + 8)
+                        DeliverPathMtu(quoted, ptbOffset, (int)Icmpv6.NextHopMtu(span));
+                    break;
+                }
                 case Icmpv6.TypeDestinationUnreachable:
                 {
                     // The error quotes our offending packet (full IPv6 packet up to the min MTU): find the embedded Echo Request.
@@ -312,6 +330,20 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
                     break;
                 }
             }
+        }
+
+        /// <summary>
+        /// Routes a Path MTU Discovery error (ICMPv4 Fragmentation-Needed / ICMPv6 Packet-Too-Big) to the TCP connection
+        /// that sent the quoted segment. The quote starts with the offending IP packet; <paramref name="tcpOffset"/> is
+        /// where its TCP header begins, whose source port is our local port and whose sequence number identifies the data.
+        /// </summary>
+        void DeliverPathMtu(ReadOnlySpan<byte> quoted, int tcpOffset, int nextHopMtu)
+        {
+            ushort localPort = (ushort)((quoted[tcpOffset] << 8) | quoted[tcpOffset + 1]); // our port = quoted segment's source
+            uint sequence = ((uint)quoted[tcpOffset + 4] << 24) | ((uint)quoted[tcpOffset + 5] << 16)
+                          | ((uint)quoted[tcpOffset + 6] << 8) | quoted[tcpOffset + 7];
+            if (_connections.TryGetValue(localPort, out TcpConnection? connection))
+                connection.OnIcmpPacketTooBig(nextHopMtu, sequence);
         }
 
         /// <summary>

@@ -47,6 +47,35 @@ namespace TqkLibrary.Vpn.IpStack.Tests
         }
 
         [Fact]
+        public void Icmpv4_FragmentationNeeded_CarriesNextHopMtu()
+        {
+            byte[] offending = Ipv4.Build(IPAddress.Parse("10.0.0.1"), IPAddress.Parse("8.8.8.8"),
+                Ipv4.ProtocolTcp, new byte[12], identification: 1);
+
+            byte[] msg = Icmpv4.BuildFragmentationNeeded(600, offending);
+
+            Assert.Equal(Icmpv4.TypeDestinationUnreachable, Icmpv4.Type(msg));
+            Assert.Equal(Icmpv4.CodeFragmentationNeeded, Icmpv4.Code(msg));
+            Assert.Equal(600, Icmpv4.NextHopMtu(msg));          // RFC 1191 §4: next-hop MTU in the low 16 bits
+            Assert.True(Icmpv4.VerifyChecksum(msg));
+            Assert.Equal(offending.AsSpan(0, 28).ToArray(), Icmpv4.Payload(msg).ToArray()); // IP header + 8 bytes quoted
+        }
+
+        [Fact]
+        public void Icmpv6_PacketTooBig_CarriesNextHopMtu()
+        {
+            IPAddress src = IPAddress.Parse("fd00::2"), dst = IPAddress.Parse("fd00::1");
+            byte[] offending = Ipv6.Build(dst, src, Ipv6.NextHeaderTcp, new byte[40]);
+
+            byte[] msg = Icmpv6.BuildPacketTooBig(1280, offending, src, dst);
+
+            Assert.Equal(Icmpv6.TypePacketTooBig, Icmpv6.Type(msg));
+            Assert.Equal(0, Icmpv6.Code(msg));
+            Assert.Equal(1280u, Icmpv6.NextHopMtu(msg));        // RFC 4443 §3.2: 32-bit MTU after the checksum
+            Assert.True(Icmpv6.VerifyChecksum(msg, src, dst));
+        }
+
+        [Fact]
         public async Task Ping_EchoesThroughTwoStacks()
         {
             var link = new LoopbackPair();

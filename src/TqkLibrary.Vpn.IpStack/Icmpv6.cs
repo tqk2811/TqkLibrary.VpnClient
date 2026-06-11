@@ -70,6 +70,24 @@ namespace TqkLibrary.Vpn.IpStack
             return msg;
         }
 
+        /// <summary>
+        /// Builds a Packet Too Big message (RFC 4443 §3.2) carrying the next-hop link's <paramref name="mtu"/> in the
+        /// 32-bit word after the checksum, quoting as much of the offending packet as fits within the IPv6 minimum MTU.
+        /// Drives Path MTU Discovery (RFC 8201).
+        /// </summary>
+        public static byte[] BuildPacketTooBig(uint mtu, ReadOnlySpan<byte> offendingIpPacket, IPAddress source, IPAddress destination)
+        {
+            int quote = Math.Min(offendingIpPacket.Length, MaxErrorQuote);
+            byte[] msg = new byte[HeaderSize + quote];
+            msg[0] = TypePacketTooBig;
+            msg[1] = 0; // code is always 0
+            // checksum (2..4) left zero; bytes 4..8 carry the next-hop MTU (RFC 4443 §3.2).
+            msg[4] = (byte)(mtu >> 24); msg[5] = (byte)(mtu >> 16); msg[6] = (byte)(mtu >> 8); msg[7] = (byte)mtu;
+            offendingIpPacket.Slice(0, quote).CopyTo(msg.AsSpan(HeaderSize));
+            WriteChecksum(msg, source, destination);
+            return msg;
+        }
+
         /// <summary>Message type.</summary>
         public static byte Type(ReadOnlySpan<byte> msg) => msg[0];
 

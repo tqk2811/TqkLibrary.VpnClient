@@ -18,6 +18,9 @@ namespace TqkLibrary.Vpn.IpStack
         /// <summary>Destination Unreachable code: port unreachable (RFC 792 §3.1).</summary>
         public const byte CodePortUnreachable = 3;
 
+        /// <summary>Destination Unreachable code: fragmentation needed and Don't-Fragment set (RFC 792 §3.1 / RFC 1191 — drives Path MTU Discovery).</summary>
+        public const byte CodeFragmentationNeeded = 4;
+
         /// <summary>Fixed ICMP header size in bytes: type(1) + code(1) + checksum(2) + rest-of-header(4).</summary>
         public const int HeaderSize = 8;
 
@@ -51,6 +54,24 @@ namespace TqkLibrary.Vpn.IpStack
             return msg;
         }
 
+        /// <summary>
+        /// Builds a Destination Unreachable / Fragmentation Needed message (code 4) advertising the next-hop link's
+        /// <paramref name="nextHopMtu"/> (RFC 1191 §4: the MTU goes in the low 16 bits of the unused word), quoting the
+        /// offending datagram (its IP header plus the first 8 bytes of payload, per RFC 792).
+        /// </summary>
+        public static byte[] BuildFragmentationNeeded(ushort nextHopMtu, ReadOnlySpan<byte> offendingIpPacket)
+        {
+            int quote = Math.Min(offendingIpPacket.Length, QuoteLength(offendingIpPacket));
+            byte[] msg = new byte[HeaderSize + quote];
+            msg[0] = TypeDestinationUnreachable;
+            msg[1] = CodeFragmentationNeeded;
+            // checksum (2..4) left zero; bytes 4..6 unused (zero); bytes 6..8 carry the next-hop MTU (RFC 1191).
+            msg[6] = (byte)(nextHopMtu >> 8); msg[7] = (byte)nextHopMtu;
+            offendingIpPacket.Slice(0, quote).CopyTo(msg.AsSpan(HeaderSize));
+            WriteChecksum(msg);
+            return msg;
+        }
+
         /// <summary>Message type.</summary>
         public static byte Type(ReadOnlySpan<byte> msg) => msg[0];
 
@@ -62,6 +83,12 @@ namespace TqkLibrary.Vpn.IpStack
 
         /// <summary>Echo sequence number (Echo Request/Reply).</summary>
         public static ushort Sequence(ReadOnlySpan<byte> msg) => (ushort)((msg[6] << 8) | msg[7]);
+
+        /// <summary>
+        /// Next-hop MTU advertised by a Destination Unreachable / Fragmentation Needed message (RFC 1191 §4: low 16 bits
+        /// of the word after the checksum). Pre-RFC-1191 routers leave it 0, signalling "unknown".
+        /// </summary>
+        public static ushort NextHopMtu(ReadOnlySpan<byte> msg) => (ushort)((msg[6] << 8) | msg[7]);
 
         /// <summary>The data after the 8-byte ICMP header (echo payload, or the quoted datagram for errors).</summary>
         public static ReadOnlyMemory<byte> Payload(ReadOnlyMemory<byte> msg) => msg.Slice(HeaderSize);

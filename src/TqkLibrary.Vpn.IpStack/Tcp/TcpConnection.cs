@@ -73,8 +73,13 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
 
         // MSS negotiation: _localMss (advertised, derived from the link MTU) caps what the peer may send us; _sendMss
         // (= min(_localMss, peer's advertised MSS)) caps what we send. Both keep TCP segments within the link MTU so
-        // SendIp never has to fragment them.
+        // SendIp never has to fragment them. Path MTU Discovery (RFC 1191 / RFC 8201) lowers _sendMss further when an
+        // ICMP "fragmentation needed" / ICMPv6 "packet too big" reports a path MTU below the link MTU: _mssOverhead is
+        // the IP+TCP header cost (40 IPv4 / 60 IPv6) subtracted from a reported path MTU, and _minPathMtu is the floor
+        // we clamp a too-small or unknown (0) advertised MTU to before deriving the MSS.
         readonly ushort _localMss;
+        readonly int _mssOverhead;
+        readonly int _minPathMtu;
         ushort _sendMss;
 
         // Window scaling (RFC 7323), negotiated on the SYN exchange. _sndWScale scales the peer's advertised window
@@ -154,8 +159,10 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
             // MSS = link MTU − IP header − TCP(20); the IP header is 20 (IPv4) or 40 (IPv6). Floored so a tiny MTU
             // can't yield a useless segment size, and capped so an absurd MTU stays within the 16-bit option field.
             // Until the peer's SYN-ACK is seen we send at our own MSS.
-            int ipHeaderOverhead = _localIp.AddressFamily == AddressFamily.InterNetworkV6 ? 60 : 40;
-            _localMss = (ushort)Math.Min(65495, Math.Max(MinMss, linkMtu - ipHeaderOverhead));
+            bool ipv6 = _localIp.AddressFamily == AddressFamily.InterNetworkV6;
+            _mssOverhead = ipv6 ? 60 : 40;          // IP header (20/40) + TCP header (20)
+            _minPathMtu = ipv6 ? 1280 : 576;        // RFC 8200 minimum link MTU / RFC 1191 §3 plateau floor
+            _localMss = (ushort)Math.Min(65495, Math.Max(MinMss, linkMtu - _mssOverhead));
             _sendMss = _localMss;
             _rtoMs = _opts.InitialRto.TotalMilliseconds;
             _persistMs = _opts.PersistMin.TotalMilliseconds;
@@ -169,6 +176,9 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
 
         /// <summary>The current TCP state (observable for diagnostics/tests; transitions happen under the connection lock).</summary>
         public TcpState State => _state;
+
+        /// <summary>The segment size we currently send at — lowered below the link-MTU MSS by Path MTU Discovery (observable for diagnostics/tests).</summary>
+        public int SendMss => _sendMss;
 
         /// <summary>Completes when the 3-way handshake finishes (or faults on RST).</summary>
         public Task Connected => _connected.Task;
@@ -250,6 +260,17 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
                 if (_state == TcpState.Established) { _finRequested = true; _finState = TcpState.FinWait1; TrySendData(); }
                 else if (_state == TcpState.CloseWait) { _finRequested = true; _finState = TcpState.LastAck; TrySendData(); }
             }
+        }
+
+        /// <summary>
+        /// Reports an ICMP "fragmentation needed" (IPv4, RFC 1191) or ICMPv6 "packet too big" (RFC 8201) for a segment we
+        /// sent: <paramref name="nextHopMtu"/> is the path MTU the router could forward, <paramref name="offendingSeq"/> the
+        /// sequence number the quoted segment carried. Lowers the send MSS below the link MTU and re-segments the in-flight
+        /// retransmission queue so the dropped data is resent small enough to traverse the path (Path MTU Discovery).
+        /// </summary>
+        public void OnIcmpPacketTooBig(int nextHopMtu, uint offendingSeq)
+        {
+            lock (_sync) ApplyPathMtu(nextHopMtu, offendingSeq);
         }
 
         void Handle(ReadOnlyMemory<byte> segment)
@@ -580,6 +601,80 @@ namespace TqkLibrary.Vpn.IpStack.Tcp
                 u.SentTicks = Now();
                 injected += u.SeqLen;
                 if (injected >= _cwnd) break;
+            }
+        }
+
+        // ---- Path MTU Discovery (RFC 1191 / RFC 8201) ------------------------------------------------------
+
+        // An ICMP error reported that a segment we sent was too big for some link on the path. Lower the send MSS below
+        // the link MTU, re-segment the in-flight queue to the new size, and retransmit it so the dropped data flows again
+        // without waiting for the RTO (and without black-holing forever on the same oversized segment).
+        void ApplyPathMtu(int nextHopMtu, uint offendingSeq)
+        {
+            if (_terminal) return;
+            // Ignore errors that don't quote currently-outstanding data (stale, or for a since-acked/foreign segment).
+            if (!SeqGeq(offendingSeq, _sndUna) || !SeqGreater(_sndNxt, offendingSeq)) return;
+
+            if (nextHopMtu < _minPathMtu) nextHopMtu = _minPathMtu; // router reported 0 (pre-RFC-1191) or an implausibly small MTU
+            int candidate = Math.Max(MinMss, nextHopMtu - _mssOverhead);
+            if (candidate >= _sendMss) return;                      // PMTUD only ever lowers the MSS — never raise it
+
+            _sendMss = (ushort)candidate;
+            ResegmentRetxQueue();
+            RetransmitAfterMtuDrop();
+            ArmRtoTimer();
+        }
+
+        // Splits every queued data segment larger than the (just-lowered) send MSS into MSS-sized pieces, preserving
+        // sequence numbers and flags, so each retransmission now fits the path. SYN/FIN units carry no splittable payload
+        // and are left alone. SACK state is reset on the pieces — a fresh SACK block re-marks whichever the peer already holds.
+        void ResegmentRetxQueue()
+        {
+            for (LinkedListNode<RetxUnit>? node = _retx.First; node != null;)
+            {
+                LinkedListNode<RetxUnit>? next = node.Next;
+                RetxUnit u = node.Value;
+                if (u.Payload.Length > _sendMss && (u.Flags & (TcpFlags.Syn | TcpFlags.Fin)) == 0)
+                {
+                    LinkedListNode<RetxUnit> anchor = node;
+                    for (int off = 0; off < u.Payload.Length; off += _sendMss)
+                    {
+                        int len = Math.Min(_sendMss, u.Payload.Length - off);
+                        byte[] piece = new byte[len];
+                        Buffer.BlockCopy(u.Payload, off, piece, 0, len);
+                        anchor = _retx.AddAfter(anchor, new RetxUnit
+                        {
+                            Seq = u.Seq + (uint)off,
+                            Flags = u.Flags,
+                            Payload = piece,
+                            SeqLen = len,
+                            SentTicks = u.SentTicks,
+                            Retransmitted = u.Retransmitted,
+                        });
+                    }
+                    _retx.Remove(node);
+                }
+                node = next;
+            }
+            if (_sackEnabled) RecomputeSacked();
+        }
+
+        // Retransmits the (now correctly-sized) outstanding segments after a PMTU drop, bounded by the send window so the
+        // burst stays within flow/congestion control; segments the peer has already SACKed are skipped.
+        void RetransmitAfterMtuDrop()
+        {
+            long limit = Math.Max(_sendMss, Math.Min(_cwnd, _sndWnd));
+            long injected = 0;
+            for (LinkedListNode<RetxUnit>? node = _retx.First; node != null; node = node.Next)
+            {
+                RetxUnit u = node.Value;
+                if (u.Sacked) continue;
+                bool isSyn = (u.Flags & TcpFlags.Syn) != 0;
+                EmitSegment(u.Seq, u.Flags, u.Payload, isSyn ? _localMss : (ushort)0, isSyn ? RcvWScale : TcpSegment.NoWindowScale, sackPermitted: isSyn);
+                u.Retransmitted = true;
+                u.SentTicks = Now();
+                injected += u.SeqLen;
+                if (injected >= limit) break;
             }
         }
 
