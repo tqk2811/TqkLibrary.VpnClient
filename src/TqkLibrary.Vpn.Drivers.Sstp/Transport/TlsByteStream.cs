@@ -39,7 +39,7 @@ namespace TqkLibrary.Vpn.Drivers.Sstp.Transport
         {
             var tcp = new TcpClient();
             _tcp = tcp;
-#if NET8_0_OR_GREATER
+#if NET5_0_OR_GREATER
             await tcp.ConnectAsync(_host, _port, cancellationToken).ConfigureAwait(false);
 #else
             // netstandard2.0 TcpClient.ConnectAsync has no CancellationToken overload — cancel by disposing the socket.
@@ -58,7 +58,7 @@ namespace TqkLibrary.Vpn.Drivers.Sstp.Transport
                 return true;
             });
             _ssl = ssl;
-#if NET8_0_OR_GREATER
+#if NET5_0_OR_GREATER
             await ssl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions { TargetHost = _host }, cancellationToken).ConfigureAwait(false);
 #else
             using (cancellationToken.Register(() => { try { ssl.Dispose(); } catch { } }))
@@ -74,7 +74,7 @@ namespace TqkLibrary.Vpn.Drivers.Sstp.Transport
         public async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
             SslStream ssl = _ssl ?? throw new InvalidOperationException("The TLS stream is not connected.");
-#if NET8_0_OR_GREATER
+#if NET5_0_OR_GREATER
             return await ssl.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
 #else
             if (MemoryMarshal.TryGetArray<byte>(buffer, out ArraySegment<byte> segment))
@@ -90,7 +90,7 @@ namespace TqkLibrary.Vpn.Drivers.Sstp.Transport
         public async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
         {
             SslStream ssl = _ssl ?? throw new InvalidOperationException("The TLS stream is not connected.");
-#if NET8_0_OR_GREATER
+#if NET5_0_OR_GREATER
             await ssl.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
 #else
             if (MemoryMarshal.TryGetArray(buffer, out ArraySegment<byte> segment))
