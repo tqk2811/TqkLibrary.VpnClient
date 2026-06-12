@@ -35,7 +35,7 @@ NuGet `TqkLibrary.Proxy` 1.0.35 + `Microsoft.Extensions.Logging`/`.Console` 10.0
 **Panel "VPN này hỗ trợ gì"** (in tự động sau MỌI lần connect, trước hành động — [`CommandModuleBase.PrintCapabilitiesAsync` @ :95](../demo/Vpn2ProxyDemo/CommandModules/CommandModuleBase.cs#L95)
 gọi [`VpnCapabilityProbe.RunAsync` @ :26](../demo/Vpn2ProxyDemo/VpnCapabilityProbe.cs#L26)): gộp **3 nguồn** — (1) **probe thật** qua tunnel: UDP =
 DNS-over-UDP (tái dùng [`UdpDnsProbe.ResolveAsync`](../demo/Vpn2ProxyDemo/UdpDnsProbe.cs#L29)), LAN ảo = ICMP ping gateway nội bộ
-([`TcpIpStack.PingAsync`](../src/TqkLibrary.Vpn.IpStack/Tcp/TcpIpStack.cs#L105) — [`ProbeVirtualLanAsync` @ :99](../demo/Vpn2ProxyDemo/VpnCapabilityProbe.cs#L99); **phát hiện LAN ảo thì panel thêm dòng "Gateway nội bộ"** ở phần Info); (2) **năng lực
+([`TcpIpStack.PingAsync`](../src/TqkLibrary.Vpn.IpStack/TcpIpStack.cs#L107) — [`ProbeVirtualLanAsync` @ :99](../demo/Vpn2ProxyDemo/VpnCapabilityProbe.cs#L99); **phát hiện LAN ảo thì panel thêm dòng "Gateway nội bộ"** ở phần Info); (2) **năng lực
 driver tĩnh** đọc thẳng từ [`SstpDriver.Capabilities`](../src/TqkLibrary.Vpn.Drivers.Sstp/SstpDriver.cs#L29)/[`L2tpIpsecDriver.Capabilities`](../src/TqkLibrary.Vpn.Drivers.L2tpIpsec/L2tpIpsecDriver.cs#L27)
 (transport/bảo mật/auth/cấp địa chỉ); (3) **heuristic** từ IP cấp: phân loại public/private (RFC1918/CGNAT) ⇒ suy listen-external,
 IPv6 = No vì chưa có IPv6CP. Panel tự bao timeout (mỗi sub-probe ngắn + chặn-trên 20s) và **nuốt mọi lỗi** (trừ hủy của caller) nên

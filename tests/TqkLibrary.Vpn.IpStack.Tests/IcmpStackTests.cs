@@ -2,7 +2,6 @@ using System.Net;
 using TqkLibrary.Vpn.Abstractions.Channels.Enums;
 using TqkLibrary.Vpn.Abstractions.Channels.Interfaces;
 using TqkLibrary.Vpn.IpStack;
-using TqkLibrary.Vpn.IpStack.Tcp;
 using Xunit;
 
 namespace TqkLibrary.Vpn.IpStack.Tests

@@ -5,7 +5,7 @@ using TqkLibrary.Vpn;
 using TqkLibrary.Vpn.Abstractions.Drivers.Interfaces;
 using TqkLibrary.Vpn.Abstractions.Drivers.Models;
 using TqkLibrary.Vpn.Drivers.Sstp;
-using TqkLibrary.Vpn.IpStack.Tcp;
+using TqkLibrary.Vpn.IpStack;
 using TqkLibrary.Vpn.Sockets;
 using TqkLibrary.Vpn.Sockets.Extensions;
 using Xunit;

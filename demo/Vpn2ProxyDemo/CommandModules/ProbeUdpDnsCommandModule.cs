@@ -1,6 +1,6 @@
 using System.CommandLine;
 using System.Net;
-using TqkLibrary.Vpn.IpStack.Tcp;
+using TqkLibrary.Vpn.IpStack;
 
 namespace Vpn2ProxyDemo.CommandModules
 {

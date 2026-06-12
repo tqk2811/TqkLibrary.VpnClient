@@ -2,7 +2,7 @@ using System.Net;
 
 namespace TqkLibrary.Vpn.IpStack
 {
-    /// <summary>The outcome of a successful <see cref="Tcp.TcpIpStack.PingAsync"/>: round-trip time, echoed data and responder.</summary>
+    /// <summary>The outcome of a successful <see cref="TcpIpStack.PingAsync"/>: round-trip time, echoed data and responder.</summary>
     public readonly struct PingReply
     {
         /// <summary>Creates a reply.</summary>

@@ -2,7 +2,8 @@ using Microsoft.Extensions.Logging;
 using System.Net;
 using System.Net.Sockets;
 using TqkLibrary.Proxy.Interfaces;
-using TqkLibrary.Vpn.IpStack.Tcp;
+using TqkLibrary.Vpn.IpStack;
+using TqkLibrary.Vpn.IpStack.Udp;
 
 namespace Vpn2ProxyDemo
 {

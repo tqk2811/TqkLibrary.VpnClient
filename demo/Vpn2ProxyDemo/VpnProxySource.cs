@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Logging;
 using TqkLibrary.Proxy.Interfaces;
-using TqkLibrary.Vpn.IpStack.Tcp;
+using TqkLibrary.Vpn.IpStack;
 
 namespace Vpn2ProxyDemo
 {

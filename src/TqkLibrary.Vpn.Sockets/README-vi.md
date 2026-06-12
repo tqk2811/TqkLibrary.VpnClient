@@ -56,20 +56,20 @@ TqkLibrary.Vpn.Sockets/
 
 | Type | Vai trò | Vị trí |
 | --- | --- | --- |
-| `VpnTcpClient` | Mở TCP qua tunnel (`ConnectAsync`), trả `Stream` qua `GetStream()`; bọc một `TcpConnection`. | [VpnTcpClient.cs:8](VpnTcpClient.cs#L8) |
-| `VpnTcpClient.ConnectAsync` | Gọi `stack.ConnectAsync(...)` để hoàn tất 3-way handshake rồi trả client. | [VpnTcpClient.cs:15](VpnTcpClient.cs#L15) |
+| `VpnTcpClient` | Mở TCP qua tunnel (`ConnectAsync`), trả `Stream` qua `GetStream()`; bọc một `TcpConnection`. | [VpnTcpClient.cs:9](VpnTcpClient.cs#L9) |
+| `VpnTcpClient.ConnectAsync` | Gọi `stack.ConnectAsync(...)` để hoàn tất 3-way handshake rồi trả client. | [VpnTcpClient.cs:16](VpnTcpClient.cs#L16) |
 | `VpnNetworkStream` | `Stream` duplex trên `TcpConnection`: `ReadAsync` -> `TcpConnection.ReadAsync`, `Write`/`WriteAsync` -> `TcpConnection.SendAsync` (**backpressure** theo cửa sổ peer + ném `IOException` khi connection fault — P0.3), `FlushAsync` surfaces fault, `Dispose` -> `CloseSend` (gửi FIN). Non-seekable. | [VpnNetworkStream.cs:7](VpnNetworkStream.cs#L7) |
-| `VpnUdpClient` | UDP client "connected" (remote endpoint cố định): `Send` / `ReceiveAsync`; bọc một `UdpConnection`. | [VpnUdpClient.cs:10](VpnUdpClient.cs#L10) |
-| `VpnUdpClient.ReceiveAsync` | Lọc datagram: chỉ trả về gói từ đúng `remoteAddress`:`remotePort`, bỏ qua nguồn khác. | [VpnUdpClient.cs:34](VpnUdpClient.cs#L34) |
+| `VpnUdpClient` | UDP client "connected" (remote endpoint cố định): `Send` / `ReceiveAsync`; bọc một `UdpConnection`. | [VpnUdpClient.cs:11](VpnUdpClient.cs#L11) |
+| `VpnUdpClient.ReceiveAsync` | Lọc datagram: chỉ trả về gói từ đúng `remoteAddress`:`remotePort`, bỏ qua nguồn khác. | [VpnUdpClient.cs:35](VpnUdpClient.cs#L35) |
 | `VpnSessionSocketsExtensions.CreateTcpStack` | Extension trên `IVpnSession`: dựng `TcpIpStack` từ `PacketChannel` + `Config.AssignedAddress` (ném `InvalidOperationException` nếu chưa có IP). | [VpnSessionSocketsExtensions.cs:10](Extensions/VpnSessionSocketsExtensions.cs#L10) |
 
 Các kiểu nền (ở project IpStack, không thuộc Sockets) mà API trên dựa vào:
 
 | Type | Vai trò | Vị trí |
 | --- | --- | --- |
-| `TcpIpStack` | Bind `IPacketChannel` + local IP, demux gói inbound theo local port, mở kết nối TCP/UDP. | [TcpIpStack.cs:11](../TqkLibrary.Vpn.IpStack/Tcp/TcpIpStack.cs#L11) |
+| `TcpIpStack` | Bind `IPacketChannel` + local IP, demux gói inbound theo local port, mở kết nối TCP/UDP. | [TcpIpStack.cs:19](../TqkLibrary.Vpn.IpStack/TcpIpStack.cs#L19) |
 | `TcpConnection` | TCP active-open **đầy đủ độ tin cậy**: handshake, retransmit/RTO (RFC 6298), flow-control + zero-window persist, NewReno congestion-control (RFC 5681/6582) + window scaling (RFC 7323), SACK (RFC 2018/6675), PMTUD (RFC 1191/8201), ráp out-of-order, half-close FSM (FIN/TIME-WAIT). | [TcpConnection.cs:13](../TqkLibrary.Vpn.IpStack/Tcp/TcpConnection.cs#L13) |
-| `UdpConnection` | UDP socket userspace bound một local port; `SendTo` / `ReceiveAsync` + `UdpReceiveResult`. | [UdpConnection.cs:10](../TqkLibrary.Vpn.IpStack/Tcp/UdpConnection.cs#L10) |
+| `UdpConnection` | UDP socket userspace bound một local port; `SendTo` / `ReceiveAsync` + `UdpReceiveResult`. | [UdpConnection.cs:12](../TqkLibrary.Vpn.IpStack/Udp/UdpConnection.cs#L12) |
 | `IVpnSession` | Một IP endpoint logic: `Config` (IP gán) + `PacketChannel`. | [IVpnSession.cs:10](../TqkLibrary.Vpn.Abstractions/Drivers/Interfaces/IVpnSession.cs#L10) |
 | `IPacketChannel` | Kênh L3 mang gói IPv4/IPv6 trần; stack bind vào đây. | [IPacketChannel.cs:6](../TqkLibrary.Vpn.Abstractions/Channels/Interfaces/IPacketChannel.cs#L6) |
 
@@ -81,8 +81,8 @@ Project Sockets **không hiện thực trực tiếp** chuẩn mạng nào — n
 
 | Chuẩn (RFC/FIPS/NIST/MS-*) | Class/Namespace áp dụng | Vị trí (link code) | Ghi chú |
 | --- | --- | --- | --- |
-| RFC 793 — TCP (handshake, ACK, FIN, sequence number) + reliability đầy đủ | `TcpConnection` (qua `VpnTcpClient` / `VpnNetworkStream`) | [TcpConnection.cs:13](../TqkLibrary.Vpn.IpStack/Tcp/TcpConnection.cs#L13) | **cited-in-code** (`... → RST (RFC 793)` tại [TcpIpStack.cs:190](../TqkLibrary.Vpn.IpStack/Tcp/TcpIpStack.cs#L190), pseudo-header checksum tại [InternetChecksum.cs:9](../TqkLibrary.Vpn.IpStack/InternetChecksum.cs#L9)); **không** bỏ qua reliability — retransmit/RTO, flow-control + zero-window persist, NewReno, SACK, window-scaling, PMTUD, ráp out-of-order, half-close FSM đều có — xem tóm tắt [TcpConnection.cs:13-27](../TqkLibrary.Vpn.IpStack/Tcp/TcpConnection.cs#L13-L27) |
-| RFC 768 — UDP (datagram không trạng thái) | `UdpConnection` / `VpnUdpClient` (build ở `UdpDatagram`) | [UdpConnection.cs:10](../TqkLibrary.Vpn.IpStack/Tcp/UdpConnection.cs#L10) | **cited-in-code** tại [UdpDatagram.cs:5](../TqkLibrary.Vpn.IpStack/UdpDatagram.cs#L5) (`... (RFC 768)`); `VpnUdpClient` thêm lọc theo remote endpoint cố định |
+| RFC 793 — TCP (handshake, ACK, FIN, sequence number) + reliability đầy đủ | `TcpConnection` (qua `VpnTcpClient` / `VpnNetworkStream`) | [TcpConnection.cs:13](../TqkLibrary.Vpn.IpStack/Tcp/TcpConnection.cs#L13) | **cited-in-code** (`... → RST (RFC 793)` tại [TcpIpStack.cs:192](../TqkLibrary.Vpn.IpStack/TcpIpStack.cs#L192), pseudo-header checksum tại [InternetChecksum.cs:9](../TqkLibrary.Vpn.IpStack/InternetChecksum.cs#L9)); **không** bỏ qua reliability — retransmit/RTO, flow-control + zero-window persist, NewReno, SACK, window-scaling, PMTUD, ráp out-of-order, half-close FSM đều có — xem tóm tắt [TcpConnection.cs:13-27](../TqkLibrary.Vpn.IpStack/Tcp/TcpConnection.cs#L13-L27) |
+| RFC 768 — UDP (datagram không trạng thái) | `UdpConnection` / `VpnUdpClient` (build ở `UdpDatagram`) | [UdpConnection.cs:12](../TqkLibrary.Vpn.IpStack/Udp/UdpConnection.cs#L12) | **cited-in-code** tại [UdpDatagram.cs:5](../TqkLibrary.Vpn.IpStack/UdpDatagram.cs#L5) (`... (RFC 768)`); `VpnUdpClient` thêm lọc theo remote endpoint cố định |
 | RFC 791 — IPv4 (header 20 byte, không option, set DF) | `Ipv4.Build` | [Ipv4.cs:18](../TqkLibrary.Vpn.IpStack/Ipv4.cs#L18) | header build tối giản tại `Ipv4.Build` (không cite RFC ngay đây — khớp hành vi); RFC 791 **cited-in-code** ở đường phân mảnh/ráp ([Ipv4.cs:80](../TqkLibrary.Vpn.IpStack/Ipv4.cs#L80) §2.3 / [Ipv4Reassembler.cs:6](../TqkLibrary.Vpn.IpStack/Ipv4Reassembler.cs#L6) §3.2); mọi gói TCP/UDP của Sockets đi qua `Ipv4.Build` |
 | RFC 1071 — Internet checksum (1's-complement) | `InternetChecksum` (qua `Ipv4.Build` / `TcpSegment.Build` / `UdpDatagram.Build`) | [InternetChecksum.cs:3](../TqkLibrary.Vpn.IpStack/InternetChecksum.cs#L3) | **cited-in-code** (`... Internet checksum (RFC 1071) ...`); hàm `Compute` ở [InternetChecksum.cs:7](../TqkLibrary.Vpn.IpStack/InternetChecksum.cs#L7), được `Ipv4.Build` gọi tại [Ipv4.cs:36](../TqkLibrary.Vpn.IpStack/Ipv4.cs#L36) |
 
@@ -135,19 +135,19 @@ byte[] reply = await dns.ReceiveAsync();  // chỉ nhận từ 8.8.8.8:53
 
 ### TCP — từ `ConnectAsync` tới `Stream`
 
-1. `VpnTcpClient.ConnectAsync` gọi `stack.ConnectAsync(remoteAddress, remotePort, ct)` — [VpnTcpClient.cs:15-19](VpnTcpClient.cs#L15-L19).
-2. `TcpIpStack.ConnectAsync` cấp local port ephemeral, tạo `TcpConnection` (chọn source theo address-family remote), `StartConnect()` (gửi SYN) rồi chờ `connection.Connected` (handshake xong) — [TcpIpStack.cs:65-79](../TqkLibrary.Vpn.IpStack/Tcp/TcpIpStack.cs#L65-L79).
-3. `GetStream()` bọc `TcpConnection` thành `VpnNetworkStream` — [VpnTcpClient.cs:22](VpnTcpClient.cs#L22).
+1. `VpnTcpClient.ConnectAsync` gọi `stack.ConnectAsync(remoteAddress, remotePort, ct)` — [VpnTcpClient.cs:16-20](VpnTcpClient.cs#L16-L20).
+2. `TcpIpStack.ConnectAsync` cấp local port ephemeral, tạo `TcpConnection` (chọn source theo address-family remote), `StartConnect()` (gửi SYN) rồi chờ `connection.Connected` (handshake xong) — [TcpIpStack.cs:67-81](../TqkLibrary.Vpn.IpStack/TcpIpStack.cs#L67-L81).
+3. `GetStream()` bọc `TcpConnection` thành `VpnNetworkStream` — [VpnTcpClient.cs:23](VpnTcpClient.cs#L23).
 4. Đọc/ghi qua stream: `WriteAsync`/`Write` → `TcpConnection.SendAsync` (**backpressure**: chờ cửa sổ peer khi buffer chưa-gửi đầy `SendBufferHighWaterMark`, ném `IOException` khi RST/give-up; chia theo MSS, gửi PSH|ACK), `FlushAsync` → `SendAsync(empty)` surfaces fault; `ReadAsync` → `TcpConnection.ReadAsync` — [VpnNetworkStream.cs:29-52](VpnNetworkStream.cs#L29-L52).
 5. `Dispose` gọi `_connection.CloseSend()` → gửi FIN, đóng nửa gửi — [VpnNetworkStream.cs:61-65](VpnNetworkStream.cs#L61-L65).
 
-Gói inbound đi ngược lại: `IPacketChannel.InboundIpPacket` → `TcpIpStack.OnInbound` ([:163](../TqkLibrary.Vpn.IpStack/Tcp/TcpIpStack.cs#L163)) chọn theo version nibble rồi `OnInboundV4`/`OnInboundV6` demux theo destination port → `TcpConnection.OnSegment` (không socket khớp → RST, RFC 793) — [TcpIpStack.cs:171-191](../TqkLibrary.Vpn.IpStack/Tcp/TcpIpStack.cs#L171-L191).
+Gói inbound đi ngược lại: `IPacketChannel.InboundIpPacket` → `TcpIpStack.OnInbound` ([:165](../TqkLibrary.Vpn.IpStack/TcpIpStack.cs#L165)) chọn theo version nibble rồi `OnInboundV4`/`OnInboundV6` demux theo destination port → `TcpConnection.OnSegment` (không socket khớp → RST, RFC 793) — [TcpIpStack.cs:173-193](../TqkLibrary.Vpn.IpStack/TcpIpStack.cs#L173-L193).
 
 ### UDP — connected client
 
-1. `VpnUdpClient.Connect` gọi `stack.BindUdp()` (ephemeral port) và nhớ remote endpoint — [VpnUdpClient.cs:27-28](VpnUdpClient.cs#L27-L28).
-2. `Send` → `UdpConnection.SendTo(_remoteAddress, _remotePort, data)` — [VpnUdpClient.cs:31](VpnUdpClient.cs#L31).
-3. `ReceiveAsync` vòng lặp `UdpConnection.ReceiveAsync` và chỉ trả về gói khớp `(_remoteAddress, _remotePort)`, bỏ qua nguồn khác — [VpnUdpClient.cs:34-42](VpnUdpClient.cs#L34-L42).
+1. `VpnUdpClient.Connect` gọi `stack.BindUdp()` (ephemeral port) và nhớ remote endpoint — [VpnUdpClient.cs:28-29](VpnUdpClient.cs#L28-L29).
+2. `Send` → `UdpConnection.SendTo(_remoteAddress, _remotePort, data)` — [VpnUdpClient.cs:32](VpnUdpClient.cs#L32).
+3. `ReceiveAsync` vòng lặp `UdpConnection.ReceiveAsync` và chỉ trả về gói khớp `(_remoteAddress, _remotePort)`, bỏ qua nguồn khác — [VpnUdpClient.cs:35-43](VpnUdpClient.cs#L35-L43).
 
 ---
 

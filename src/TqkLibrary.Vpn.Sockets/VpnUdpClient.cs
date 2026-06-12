@@ -1,5 +1,6 @@
 using System.Net;
-using TqkLibrary.Vpn.IpStack.Tcp;
+using TqkLibrary.Vpn.IpStack;
+using TqkLibrary.Vpn.IpStack.Udp;
 
 namespace TqkLibrary.Vpn.Sockets
 {

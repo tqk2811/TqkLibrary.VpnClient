@@ -2,7 +2,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
 using TqkLibrary.Vpn.Drivers.Sstp;
-using TqkLibrary.Vpn.IpStack.Tcp;
+using TqkLibrary.Vpn.IpStack;
 using TqkLibrary.Vpn.Sockets;
 using Xunit;
 using Xunit.Abstractions;

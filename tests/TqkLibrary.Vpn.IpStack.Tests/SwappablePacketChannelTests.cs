@@ -3,7 +3,7 @@ using System.Text;
 using TqkLibrary.Vpn.Abstractions.Channels;
 using TqkLibrary.Vpn.Abstractions.Channels.Enums;
 using TqkLibrary.Vpn.Abstractions.Channels.Interfaces;
-using TqkLibrary.Vpn.IpStack.Tcp;
+using TqkLibrary.Vpn.IpStack.Udp;
 using TqkLibrary.Vpn.Sockets;
 using Xunit;
 

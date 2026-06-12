@@ -3,7 +3,7 @@ using System.Text;
 using TqkLibrary.Vpn.Abstractions.Drivers.Models;
 using TqkLibrary.Vpn.Drivers.L2tpIpsec;
 using TqkLibrary.Vpn.Drivers.Sstp;
-using TqkLibrary.Vpn.IpStack.Tcp;
+using TqkLibrary.Vpn.IpStack;
 
 namespace Vpn2ProxyDemo
 {

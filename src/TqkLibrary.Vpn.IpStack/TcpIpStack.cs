@@ -4,9 +4,11 @@ using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using TqkLibrary.Vpn.Abstractions.Channels.Interfaces;
+using TqkLibrary.Vpn.IpStack.Tcp;
 using TqkLibrary.Vpn.IpStack.Tcp.Enums;
+using TqkLibrary.Vpn.IpStack.Udp;
 
-namespace TqkLibrary.Vpn.IpStack.Tcp
+namespace TqkLibrary.Vpn.IpStack
 {
     /// <summary>
     /// Binds an <see cref="IPacketChannel"/> and the local tunnel address(es), demultiplexes inbound TCP/UDP/ICMP

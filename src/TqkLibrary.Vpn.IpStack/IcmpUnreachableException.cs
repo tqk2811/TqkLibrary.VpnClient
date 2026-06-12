@@ -1,6 +1,6 @@
 namespace TqkLibrary.Vpn.IpStack
 {
-    /// <summary>Thrown by <see cref="Tcp.TcpIpStack.PingAsync"/> when the target replies with ICMP Destination Unreachable.</summary>
+    /// <summary>Thrown by <see cref="TcpIpStack.PingAsync"/> when the target replies with ICMP Destination Unreachable.</summary>
     public sealed class IcmpUnreachableException : Exception
     {
         /// <summary>Creates the exception carrying the ICMP Destination-Unreachable code.</summary>

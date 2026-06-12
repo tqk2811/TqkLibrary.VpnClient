@@ -1,7 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 
-namespace TqkLibrary.Vpn.IpStack.Tcp
+namespace TqkLibrary.Vpn.IpStack.Udp
 {
     /// <summary>
     /// A userspace UDP socket bound to one local port on the tunnel address(es). Datagrams are sent immediately;

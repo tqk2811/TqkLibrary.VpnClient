@@ -1,5 +1,5 @@
 using TqkLibrary.Vpn.Abstractions.Drivers.Interfaces;
-using TqkLibrary.Vpn.IpStack.Tcp;
+using TqkLibrary.Vpn.IpStack;
 
 namespace TqkLibrary.Vpn.Sockets.Extensions
 {
