@@ -9,4 +9,6 @@
 
 - Build phải xanh cả `netstandard2.0` + `net8.0`; tránh `record`/`init` (netstandard2.0 không có `IsExternalInit`).
 - Test live phụ thuộc VPN Gate đánh dấu `[Trait("Category","Integration")]` — chạy offline bằng `--filter "Category!=Integration"`.
+- **Hạn chế sử dụng hàm static**: ưu tiên instance method sau interface (dễ test/mock/DI, thay thế được trong test); chỉ dùng static cho pure function/codec không trạng thái.
+- **Tái sử dụng tối đa, không viết lại tính năng có sẵn**: trước khi viết mới, tìm type/helper sẵn có trong solution (và BCL) để dùng lại; nếu gần khớp thì mở rộng type sẵn có thay vì nhân bản logic.
 - Các quy tắc chung (link code, tiếng Việt, git, C#) theo `~/.claude/CLAUDE.md`, `~/.claude/git.md`, `~/.claude/csharp.md`.
