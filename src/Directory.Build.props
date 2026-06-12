@@ -18,6 +18,10 @@
     <PackageReference Include="System.Threading.Channels" Version="8.0.0" />
     <PackageReference Include="System.IO.Pipelines" Version="8.0.0" />
     <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="8.0.0" />
+    <!-- Source-only package: biên dịch IsExternalInit + RequiredMember/CompilerFeatureRequired/SetsRequiredMembers
+         thẳng vào assembly → cho phép dùng init/record/required trên netstandard2.0.
+         net8.0 đã có sẵn trong BCL (các #if guard tự loại), nên không cần ref cho net8.0. -->
+    <PackageReference Include="TqkLibrary.CompilerServices" Version="1.0.0.3" />
   </ItemGroup>
 
 </Project>
