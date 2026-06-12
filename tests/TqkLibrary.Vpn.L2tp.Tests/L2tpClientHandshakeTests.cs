@@ -16,7 +16,7 @@ namespace TqkLibrary.Vpn.L2tp.Tests
         {
             var link = new LoopbackLink();
             var lns = new SimulatedLns(link.Server);
-            var client = new L2tpClient(link.Client, retransmitInterval: TimeSpan.FromSeconds(30));
+            var client = new L2tpClient(link.Client, retransmitOptions: new L2tpRetransmitOptions { Interval = TimeSpan.FromSeconds(30) });
 
             string? echoed = null;
             var echoReceived = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);

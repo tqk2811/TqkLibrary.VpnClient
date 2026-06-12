@@ -16,7 +16,7 @@ namespace TqkLibrary.Vpn.L2tp.Tests
         {
             var link = new LoopbackLink();
             var lns = new RecordingLns(link.Server);
-            var client = new L2tpClient(link.Client, retransmitInterval: TimeSpan.FromSeconds(30));
+            var client = new L2tpClient(link.Client, retransmitOptions: new L2tpRetransmitOptions { Interval = TimeSpan.FromSeconds(30) });
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await client.ConnectAsync(cts.Token);

@@ -150,7 +150,7 @@ namespace TqkLibrary.Vpn.Drivers.L2tpIpsec
             _espActive = true;
 
             var l2tp = new L2tpClient(_dataTransport,
-                retransmitInterval: _timeouts.L2tpRetransmitInterval, maxRetransmits: _timeouts.L2tpMaxRetransmits);
+                retransmitOptions: _timeouts.BuildL2tpRetransmitOptions());
             _l2tp = l2tp;
             l2tp.Disconnected += OnLinkLost;
             await l2tp.ConnectAsync(cancellationToken).ConfigureAwait(false);
@@ -300,7 +300,7 @@ namespace TqkLibrary.Vpn.Drivers.L2tpIpsec
                 _ikeWaiter = waiter;
                 await natt.SendIkeAsync(request).ConfigureAwait(false);
 
-                Task completed = await Task.WhenAny(waiter.Task, Task.Delay(_timeouts.IkeRetransmitInterval, cancellationToken)).ConfigureAwait(false);
+                Task completed = await Task.WhenAny(waiter.Task, Task.Delay(WithJitter(_timeouts.IkeIntervalFor(attempt), _timeouts.RetransmitJitterFraction), cancellationToken)).ConfigureAwait(false);
                 if (completed == waiter.Task)
                 {
                     byte[] reply = await waiter.Task.ConfigureAwait(false);
@@ -508,7 +508,7 @@ namespace TqkLibrary.Vpn.Drivers.L2tpIpsec
                 _rekeyWaiter = waiter;
                 await natt.SendIkeAsync(request).ConfigureAwait(false);
 
-                Task completed = await Task.WhenAny(waiter.Task, Task.Delay(_timeouts.IkeRetransmitInterval)).ConfigureAwait(false);
+                Task completed = await Task.WhenAny(waiter.Task, Task.Delay(WithJitter(_timeouts.IkeIntervalFor(attempt), _timeouts.RetransmitJitterFraction))).ConfigureAwait(false);
                 _rekeyWaiter = null;
                 if (completed == waiter.Task) return await waiter.Task.ConfigureAwait(false);
             }
@@ -602,10 +602,16 @@ namespace TqkLibrary.Vpn.Drivers.L2tpIpsec
             Reconnected?.Invoke(new L2tpIpsecReconnectInfo(newAddress, changed));
         }
 
-        TimeSpan WithJitter(TimeSpan delay)
+        TimeSpan WithJitter(TimeSpan delay) => WithJitter(delay, _opts.JitterFraction);
+
+        // Shared by reconnect backoff and IKE retransmit backoff. _random is not thread-safe and is now reached from the
+        // reconnect supervisor, the handshake path and the rekey timer, so the draw is serialised.
+        TimeSpan WithJitter(TimeSpan delay, double fraction)
         {
-            if (_opts.JitterFraction <= 0) return delay;
-            double jitter = delay.TotalMilliseconds * _opts.JitterFraction * (_random.NextDouble() * 2 - 1);
+            if (fraction <= 0) return delay;
+            double r;
+            lock (_random) r = _random.NextDouble();
+            double jitter = delay.TotalMilliseconds * fraction * (r * 2 - 1);
             return TimeSpan.FromMilliseconds(Math.Max(0, delay.TotalMilliseconds + jitter));
         }
 

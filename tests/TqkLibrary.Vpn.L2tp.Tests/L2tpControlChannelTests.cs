@@ -19,7 +19,7 @@ namespace TqkLibrary.Vpn.L2tp.Tests
             Func<ReadOnlyMemory<byte>, Task> sink = _ => { Interlocked.Increment(ref sends); return Task.CompletedTask; };
 
             const int maxRetransmits = 3;
-            using var channel = new L2tpControlChannel(sink, TimeSpan.FromMilliseconds(50), maxRetransmits);
+            using var channel = new L2tpControlChannel(sink, new L2tpRetransmitOptions { Interval = TimeSpan.FromMilliseconds(50), MaxRetransmits = maxRetransmits });
 
             var failed = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             channel.Failed += reason => failed.TrySetResult(reason);
@@ -44,7 +44,7 @@ namespace TqkLibrary.Vpn.L2tp.Tests
             Func<ReadOnlyMemory<byte>, Task> sink = _ => { Interlocked.Increment(ref sends); return Task.CompletedTask; };
 
             const int maxRetransmits = 3;
-            using var channel = new L2tpControlChannel(sink, TimeSpan.FromMilliseconds(50), maxRetransmits);
+            using var channel = new L2tpControlChannel(sink, new L2tpRetransmitOptions { Interval = TimeSpan.FromMilliseconds(50), MaxRetransmits = maxRetransmits });
 
             bool failedFired = false;
             channel.Failed += _ => failedFired = true;

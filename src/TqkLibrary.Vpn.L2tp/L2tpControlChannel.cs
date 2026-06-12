@@ -15,24 +15,27 @@ namespace TqkLibrary.Vpn.L2tp
         readonly object _sync = new();
         readonly LinkedList<Outstanding> _unacked = new();
         readonly System.Threading.Timer _retransmitTimer;
-        readonly TimeSpan _retransmitInterval;
-        readonly int _maxRetransmits;
+        readonly L2tpRetransmitOptions _options;
+        readonly Random _random = new();
 
         ushort _ns;
         ushort _nr;
         bool _failed;
+        bool _disposed;
 
         /// <summary>
-        /// Creates the channel over a datagram sink. <paramref name="retransmitInterval"/> sets how often the head of
-        /// the unacked queue is resent (default 1s). <paramref name="maxRetransmits"/> caps how many times a single
-        /// message is resent before the channel gives up and raises <see cref="Failed"/>; 0 retransmits forever.
+        /// Creates the channel over a datagram sink. <paramref name="options"/> sets the head-of-queue resend interval,
+        /// its exponential backoff (multiplier/cap/jitter), and the retransmit cap that raises <see cref="Failed"/> when
+        /// the peer stops acking; pass null for the default (1s, no backoff, unbounded).
         /// </summary>
-        public L2tpControlChannel(Func<ReadOnlyMemory<byte>, Task> send, TimeSpan? retransmitInterval = null, int maxRetransmits = 0)
+        public L2tpControlChannel(Func<ReadOnlyMemory<byte>, Task> send, L2tpRetransmitOptions? options = null)
         {
             _send = send;
-            _retransmitInterval = retransmitInterval ?? TimeSpan.FromSeconds(1);
-            _maxRetransmits = maxRetransmits;
-            _retransmitTimer = new System.Threading.Timer(_ => Retransmit(), null, _retransmitInterval, _retransmitInterval);
+            _options = options ?? new L2tpRetransmitOptions();
+            // One-shot timer that reschedules itself after every tick: idle ticks poll at the base interval; an unacked
+            // head backs off (Interval × multiplier^resends, jittered) up to MaxInterval. A multiplier of 1.0 reproduces
+            // the old fixed-interval periodic behaviour.
+            _retransmitTimer = new System.Threading.Timer(_ => Retransmit(), null, WithJitter(_options.Interval), System.Threading.Timeout.InfiniteTimeSpan);
         }
 
         /// <summary>The peer's tunnel id, learned from its Assigned Tunnel ID AVP (used to address outgoing messages).</summary>
@@ -112,34 +115,61 @@ namespace TqkLibrary.Vpn.L2tp
         {
             byte[]? wire = null;
             bool giveUp = false;
+            int resends = 0;
+            bool idle = true;
             lock (_sync)
             {
-                if (_failed) return;
+                if (_disposed || _failed) return;
                 if (_unacked.First is { } node)
                 {
+                    idle = false;
                     Outstanding head = node.Value;
-                    if (_maxRetransmits > 0 && head.Attempts >= _maxRetransmits)
+                    if (_options.MaxRetransmits > 0 && head.Attempts >= _options.MaxRetransmits)
                         giveUp = _failed = true;
                     else
                     {
                         head.Attempts++;
                         wire = head.Wire;
+                        resends = head.Attempts;
                     }
                 }
             }
             if (giveUp)
             {
-                _retransmitTimer.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
-                Failed?.Invoke($"L2TP control-channel peer unresponsive: no ack after {_maxRetransmits} retransmits.");
+                Reschedule(System.Threading.Timeout.InfiniteTimeSpan); // stop: the peer is declared dead
+                Failed?.Invoke($"L2TP control-channel peer unresponsive: no ack after {_options.MaxRetransmits} retransmits.");
                 return;
             }
             if (wire != null) _ = _send(wire);
+            // Idle (empty queue) re-polls at the base interval; an unacked head backs off from its resend count.
+            Reschedule(WithJitter(idle ? _options.Interval : _options.IntervalFor(resends)));
+        }
+
+        // Rearms the single one-shot timer, tolerating a concurrent Dispose (Change on a disposed timer throws).
+        void Reschedule(TimeSpan delay)
+        {
+            lock (_sync) { if (_disposed) return; }
+            try { _retransmitTimer.Change(delay, System.Threading.Timeout.InfiniteTimeSpan); }
+            catch (ObjectDisposedException) { }
+        }
+
+        TimeSpan WithJitter(TimeSpan delay)
+        {
+            if (_options.JitterFraction <= 0) return delay;
+            double r;
+            lock (_random) r = _random.NextDouble();
+            double jitter = delay.TotalMilliseconds * _options.JitterFraction * (r * 2 - 1);
+            return TimeSpan.FromMilliseconds(Math.Max(0, delay.TotalMilliseconds + jitter));
         }
 
         static bool SeqLess(ushort a, ushort b) => (short)(a - b) < 0;
 
         /// <inheritdoc/>
-        public void Dispose() => _retransmitTimer.Dispose();
+        public void Dispose()
+        {
+            lock (_sync) _disposed = true;
+            _retransmitTimer.Dispose();
+        }
 
         // A queued control message awaiting ack. A class (not a struct) so Attempts persists across retransmit
         // ticks while the message sits at the head of the queue; a fresh head starts again from zero.

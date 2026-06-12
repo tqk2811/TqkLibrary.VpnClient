@@ -19,15 +19,15 @@ namespace TqkLibrary.Vpn.L2tp
 
         /// <summary>
         /// Creates a client over <paramref name="transport"/>; <paramref name="hostName"/> is sent as the Host Name AVP.
-        /// <paramref name="maxRetransmits"/> caps control-channel retransmits before the link is declared dead (0 = unbounded).
+        /// <paramref name="retransmitOptions"/> tunes the control channel's resend interval, backoff and cap (null = default).
         /// </summary>
-        public L2tpClient(IL2tpTransport transport, string hostName = "anonymous", TimeSpan? retransmitInterval = null, int maxRetransmits = 0)
+        public L2tpClient(IL2tpTransport transport, string hostName = "anonymous", L2tpRetransmitOptions? retransmitOptions = null)
         {
             _transport = transport;
             _hostName = hostName;
             LocalTunnelId = RandomId();
             LocalSessionId = RandomId();
-            _control = new L2tpControlChannel(transport.SendAsync, retransmitInterval, maxRetransmits);
+            _control = new L2tpControlChannel(transport.SendAsync, retransmitOptions);
             _control.ControlReceived += OnControl;
             _control.Failed += OnControlFailed;
             _transport.DatagramReceived += OnDatagram;

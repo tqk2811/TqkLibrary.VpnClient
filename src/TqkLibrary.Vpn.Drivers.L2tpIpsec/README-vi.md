@@ -36,7 +36,7 @@ TqkLibrary.Vpn.Drivers.L2tpIpsec/
 ├── UdpEncapsulation.cs          Build/parse UDP header (port 1701, checksum 0) cho ESP transport mode
 ├── L2tpPppFrameChannel.cs       Cầu nối L2TP data ↔ PPP engine (IPppFrameChannel)
 ├── L2tpIpsecReconnectOptions.cs Chính sách auto-reconnect (backoff/jitter/max attempts)
-├── L2tpIpsecTimeoutOptions.cs   Timeout/retransmit cap cho IKE + L2TP control channel
+├── L2tpIpsecTimeoutOptions.cs   Timeout + retransmit (exponential backoff/jitter/cap) cho IKE + L2TP control channel
 ├── L2tpIpsecVpnConnection.cs    Adapter sang IVpnConnection (một session)
 ├── L2tpIpsecVpnSession.cs       IVpnSession: facade ổn định + áp dụng reconnect vào TunnelConfig
 ├── Enums/                       L2tpIpsecConnectionState · L2tpIpsecNatTraversalMode (ForcedNatT/HonestFirst)
@@ -53,7 +53,7 @@ TqkLibrary.Vpn.Drivers.L2tpIpsec/
 | `UdpEncapsulation` | Build/parse UDP header (1701, checksum 0) mà ESP transport mode bảo vệ | [UdpEncapsulation.cs:8](UdpEncapsulation.cs#L8) |
 | `L2tpPppFrameChannel` | `IPppFrameChannel`: PPP frame đi trong L2TP data message | [L2tpPppFrameChannel.cs:7](L2tpPppFrameChannel.cs#L7) |
 | `L2tpIpsecReconnectOptions` | Chính sách auto-reconnect: backoff/jitter/max attempts | [L2tpIpsecReconnectOptions.cs:8](L2tpIpsecReconnectOptions.cs#L8) |
-| `L2tpIpsecTimeoutOptions` | Timeout cấu hình được: IKE retransmit interval/số lần (`ExchangeIkeAsync`/`ExchangeRekeyAsync`) + L2TP control-channel retransmit interval/cap | [L2tpIpsecTimeoutOptions.cs:8](L2tpIpsecTimeoutOptions.cs#L8) |
+| `L2tpIpsecTimeoutOptions` | Timeout cấu hình được: IKE retransmit interval/số lần + **exponential backoff** (`IkeBackoffMultiplier`/`IkeMaxRetransmitInterval`, `IkeIntervalFor`) cho `ExchangeIkeAsync`/`ExchangeRekeyAsync`; L2TP control-channel retransmit interval/cap + backoff (`BuildL2tpRetransmitOptions`); jitter chung `RetransmitJitterFraction` | [L2tpIpsecTimeoutOptions.cs:8](L2tpIpsecTimeoutOptions.cs#L8) |
 | `L2tpIpsecVpnConnection` | Adapter `IVpnConnection` (một PPP session/tunnel) | [L2tpIpsecVpnConnection.cs:6](L2tpIpsecVpnConnection.cs#L6) |
 | `L2tpIpsecVpnSession` | `IVpnSession`: facade ổn định + `ApplyReconnect` cập nhật `TunnelConfig` | [L2tpIpsecVpnSession.cs:10](L2tpIpsecVpnSession.cs#L10) |
 | `L2tpIpsecConnectionState` | Enum trạng thái vòng đời | [Enums/L2tpIpsecConnectionState.cs:4](Enums/L2tpIpsecConnectionState.cs#L4) |
@@ -116,7 +116,7 @@ Class hạ tầng `L2tpIpsecConnection` cũng public nếu cần điều khiển
 - **Keepalive:** L2TP HELLO (60s) + IKE DPD R-U-THERE (20s, miss ≥3 ⇒ link lost) — [L2tpIpsecConnection.cs:385-467](L2tpIpsecConnection.cs#L385-L467).
 - **Rekey (make-before-break) — 2 trigger:** (a) timer ~90% lifetime (3600s); (b) **sequence-exhaustion** — sequence ESP outbound chạm high-watermark ~75%×2³² thì `RekeyNeeded` kích rekey **trước khi** wrap (RFC 4303 §3.3.3, tránh `OverflowException`). Cả hai vào `RekeyPhase2Async` (guard `_rekeyInProgress`) → Quick Mode mới → `SwapSession` (gửi trên SA mới ngay + re-arm watermark, giữ SA cũ để nhận trong grace 10s rồi `DropPreviousInbound`) — [L2tpIpsecConnection.cs:474-516](L2tpIpsecConnection.cs#L474-L516) · [IpsecL2tpTransport.cs:54-91](IpsecL2tpTransport.cs#L54-L91).
 - **Link-loss + supervisor:** mọi nguồn (DPD chết, server Delete, L2TP teardown, Phase 1 hết hạn) gọi `OnLinkLost` → khởi động `ReconnectLoopAsync` với exponential backoff + jitter; thành công thì raise `Reconnected` (cập nhật `TunnelConfig` qua `L2tpIpsecVpnSession.ApplyReconnect`) — [L2tpIpsecConnection.cs:529-595](L2tpIpsecConnection.cs#L529-L595).
-- **Teardown:** `DisconnectAsync` hủy reconnect, gửi L2TP CDN + StopCCN và IKE Delete (ESP + ISAKMP), rồi đóng transport — [L2tpIpsecConnection.cs:644-692](L2tpIpsecConnection.cs#L644-L692).
+- **Teardown:** `DisconnectAsync` hủy reconnect, gửi L2TP CDN + StopCCN và IKE Delete (ESP + ISAKMP), rồi đóng transport — [L2tpIpsecConnection.cs:650-698](L2tpIpsecConnection.cs#L650-L698).
 - **Facade ổn định:** `SwappablePacketChannel` ([từ Abstractions](../TqkLibrary.Vpn.Abstractions)) cho phép tráo kênh PPP bên dưới khi reconnect mà socket trong tunnel ở tầng trên không bị đứt (nếu địa chỉ giữ nguyên).
 
 ## Trạng thái & ghi chú
