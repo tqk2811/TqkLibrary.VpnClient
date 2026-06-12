@@ -14,7 +14,7 @@ Toàn bộ ngăn xếp giao thức — IKE, ESP, L2TP, PPP, SSTP, và cả TCP/I
 - **Socket API quen thuộc**: `VpnTcpClient` trả `Stream` chuẩn (cắm `HttpClient`), `VpnUdpClient` (DNS-over-tunnel), tất cả chạy trong tunnel.
 - **Plugin theo driver**: mỗi giao thức là một `IVpnProtocolDriver` đăng ký theo tên; driver tự định nghĩa cũng nạp được qua `AddDriver`.
 - **Phân loại lỗi typed**: `VpnConnectionException` + 3 lớp con (sai credential / server từ chối / network timeout).
-- **Sẵn cho tương lai**: IKEv2 (IKE_SA_INIT + IKE_AUTH) đã build + test đầy đủ (chưa wire driver); nền tầng L2 Ethernet (codec frame/MAC + switch học MAC + `VirtualHost`) cho LAN ảo multi-host.
+- **Sẵn cho tương lai**: IKEv2 (IKE_SA_INIT + IKE_AUTH) đã build + test đầy đủ (chưa wire driver); nền tầng L2 Ethernet (codec frame/MAC + switch học MAC + `VirtualHost` + ARP RFC 826) cho LAN ảo multi-host.
 - **Demo tích hợp**: [demo/Vpn2ProxyDemo](demo/Vpn2ProxyDemo/README-vi.md) — biến tunnel thành HTTP/SOCKS proxy local (TCP CONNECT + SOCKS5 UDP-ASSOCIATE + probe DNS-over-UDP).
 
 ## Dùng nhanh
@@ -114,17 +114,17 @@ Hai triết lý: **plugin theo driver** (mỗi giao thức một `IVpnProtocolDr
 | Hạng mục | Trạng thái |
 |---|---|
 | Driver MS-SSTP + L2TP/IPsec | ✅ Live (VPN Gate), keepalive/rekey/teardown/auto-reconnect |
-| Userspace TCP/IP (IPv4+IPv6, TCP đầy đủ, UDP, ICMP) | ✅ Hoàn chỉnh, 267 test offline |
+| Userspace TCP/IP (IPv4+IPv6, TCP đầy đủ, UDP, ICMP) | ✅ Hoàn chỉnh, 282 test offline |
 | IKEv2 | ✅ Build + test, ⏳ chưa wire vào driver |
-| Tầng L2 Ethernet (LAN ảo multi-host) | ⏳ Nền L2.0–L2.2 xong (codec/switch/VirtualHost); ARP/DHCP/`EthernetAdapter` chưa |
-| OpenVPN / SoftEther / WireGuard / IKEv2-native | ⏳ Roadmap (xem [.docs/11](.docs/11-todo-roadmap.md)) |
+| Tầng L2 Ethernet (LAN ảo multi-host) | ⏳ Nền L2.0–L2.3 xong (codec/switch/VirtualHost/ARP); NDISC/DHCP/`EthernetAdapter` chưa |
+| IKEv2-native / OpenVPN / WireGuard / SoftEther / OpenConnect / PPTP | ⏳ Roadmap đa-VPN opensource (xem [.docs/11](.docs/11-todo-roadmap.md)) |
 | IPv6 end-to-end qua tunnel (IPV6CP) | ⏳ Stack đã dual-stack, PPP chưa có IPV6CP |
 
 ## Build & test
 
 ```powershell
 dotnet build                                          # xanh cả netstandard2.0 + net8.0
-dotnet test --filter "Category!=Integration"          # 267 test offline (test live VPN Gate đánh dấu Integration)
+dotnet test --filter "Category!=Integration"          # 282 test offline (test live VPN Gate đánh dấu Integration)
 ```
 
 ## Tài liệu
