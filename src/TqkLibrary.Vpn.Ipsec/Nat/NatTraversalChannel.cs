@@ -55,7 +55,7 @@ namespace TqkLibrary.Vpn.Ipsec.Nat
         /// </summary>
         public async Task<(NatTPacketKind Kind, byte[] Payload)> ReceiveAsync(CancellationToken cancellationToken = default)
         {
-#if NET8_0_OR_GREATER
+#if NET6_0_OR_GREATER
             UdpReceiveResult result = await _client.ReceiveAsync(cancellationToken).ConfigureAwait(false);
 #else
             cancellationToken.ThrowIfCancellationRequested();

@@ -1,5 +1,5 @@
 using TqkLibrary.Vpn.Crypto.Abstractions.Interfaces;
-#if NET8_0_OR_GREATER
+#if NET7_0_OR_GREATER
 using System.Security.Cryptography;
 #else
 // Alias specific types (not the whole namespace) so BouncyCastle's own IAeadCipher does not clash with ours.
@@ -12,8 +12,8 @@ using KeyParameter = Org.BouncyCastle.Crypto.Parameters.KeyParameter;
 namespace TqkLibrary.Vpn.Crypto.Aead
 {
     /// <summary>
-    /// AES-GCM AEAD. Uses the native <c>AesGcm</c> on net8.0 and a BouncyCastle fallback on netstandard2.0
-    /// (where the BCL has no AES-GCM). 12-byte nonce, 16-byte tag.
+    /// AES-GCM AEAD. Uses the native <c>AesGcm</c> on .NET 7+ (net8.0 in this build) and a BouncyCastle fallback on
+    /// netstandard2.0 (where the BCL has no AES-GCM). 12-byte nonce, 16-byte tag.
     /// </summary>
     public sealed class AesGcmCipher : IAeadCipher
     {
@@ -46,7 +46,7 @@ namespace TqkLibrary.Vpn.Crypto.Aead
             Span<byte> ciphertext,
             Span<byte> tag)
         {
-#if NET8_0_OR_GREATER
+#if NET7_0_OR_GREATER
             using var gcm = new AesGcm(key, TagBytes);
             gcm.Encrypt(nonce, plaintext, ciphertext.Slice(0, plaintext.Length), tag.Slice(0, TagBytes), associatedData);
 #else
@@ -71,7 +71,7 @@ namespace TqkLibrary.Vpn.Crypto.Aead
             ReadOnlySpan<byte> associatedData,
             Span<byte> plaintext)
         {
-#if NET8_0_OR_GREATER
+#if NET7_0_OR_GREATER
             try
             {
                 using var gcm = new AesGcm(key, TagBytes);
