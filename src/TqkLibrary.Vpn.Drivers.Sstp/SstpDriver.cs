@@ -1,3 +1,4 @@
+using System.Net.Security;
 using TqkLibrary.Vpn.Abstractions.Drivers.Enums;
 using TqkLibrary.Vpn.Abstractions.Drivers.Interfaces;
 using TqkLibrary.Vpn.Abstractions.Drivers.Models;
@@ -8,11 +9,17 @@ namespace TqkLibrary.Vpn.Drivers.Sstp
     public sealed class SstpDriver : IVpnProtocolDriver
     {
         readonly SstpReconnectOptions? _reconnectOptions;
+        readonly RemoteCertificateValidationCallback? _certificateValidationCallback;
 
-        /// <summary>Creates the driver; <paramref name="reconnectOptions"/> tunes (or disables) auto-reconnect.</summary>
-        public SstpDriver(SstpReconnectOptions? reconnectOptions = null)
+        /// <summary>
+        /// Creates the driver; <paramref name="reconnectOptions"/> tunes (or disables) auto-reconnect and
+        /// <paramref name="certificateValidationCallback"/> validates the server TLS certificate (<c>null</c> ⇒ accept
+        /// any cert — the SSTP identity is bound by its crypto binding, not PKI).
+        /// </summary>
+        public SstpDriver(SstpReconnectOptions? reconnectOptions = null, RemoteCertificateValidationCallback? certificateValidationCallback = null)
         {
             _reconnectOptions = reconnectOptions;
+            _certificateValidationCallback = certificateValidationCallback;
         }
 
         /// <inheritdoc/>
@@ -33,7 +40,8 @@ namespace TqkLibrary.Vpn.Drivers.Sstp
         /// <inheritdoc/>
         public async Task<IVpnConnection> ConnectAsync(VpnEndpoint endpoint, VpnCredentials credentials, CancellationToken cancellationToken = default)
         {
-            var connection = new SstpConnection(endpoint.Host, endpoint.Port, reconnectOptions: _reconnectOptions);
+            var connection = new SstpConnection(endpoint.Host, endpoint.Port, reconnectOptions: _reconnectOptions,
+                certificateValidationCallback: _certificateValidationCallback);
             try
             {
                 await connection.ConnectAsync(credentials.Username ?? string.Empty, credentials.Password ?? string.Empty, cancellationToken)

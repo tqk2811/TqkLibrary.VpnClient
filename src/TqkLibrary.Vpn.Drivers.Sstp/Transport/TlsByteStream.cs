@@ -9,26 +9,34 @@ namespace TqkLibrary.Vpn.Drivers.Sstp.Transport
     /// <summary>
     /// The real TLS-over-TCP byte stream behind <see cref="ITlsByteStream"/>: a <see cref="TcpClient"/> wrapped in an
     /// <see cref="SslStream"/>. SSTP authenticates the server through its crypto binding rather than PKI, so the TLS
-    /// validation callback accepts any certificate and captures it for <see cref="RemoteCertificate"/>.
+    /// validation accepts any certificate by default (capturing it for <see cref="RemoteCertificate"/>); an optional
+    /// <see cref="RemoteCertificateValidationCallback"/> can be supplied to validate it instead (roadmap P0.6).
     /// <para>
     /// This is the concrete implementation of the byte-pipe seam injected into <see cref="SstpTransport"/>; a future
-    /// shared <c>Transport.Tls</c> project (roadmap F.1) and a configurable certificate-validation callback
-    /// (roadmap P0.6) build on it. <see cref="ConnectAsync"/> honours its <see cref="CancellationToken"/> on both
-    /// target frameworks (native overloads on net8.0; cancel-by-dispose on netstandard2.0).
+    /// shared <c>Transport.Tls</c> project (roadmap F.1) builds on it. <see cref="ConnectAsync"/> honours its
+    /// <see cref="CancellationToken"/> on both target frameworks (native overloads on net8.0; cancel-by-dispose on
+    /// netstandard2.0).
     /// </para>
     /// </summary>
     public sealed class TlsByteStream : ITlsByteStream, IDisposable
     {
         readonly string _host;
         readonly int _port;
+        readonly RemoteCertificateValidationCallback? _certificateValidationCallback;
         TcpClient? _tcp;
         SslStream? _ssl;
 
-        /// <summary>Creates a TLS byte stream to <paramref name="host"/>:<paramref name="port"/> (not yet connected).</summary>
-        public TlsByteStream(string host, int port = 443)
+        /// <summary>
+        /// Creates a TLS byte stream to <paramref name="host"/>:<paramref name="port"/> (not yet connected).
+        /// <paramref name="certificateValidationCallback"/> validates the server certificate during the TLS handshake;
+        /// when <c>null</c> (the default) any certificate is accepted (SSTP binds the server identity through its crypto
+        /// binding, not PKI). The server certificate is captured into <see cref="RemoteCertificate"/> either way.
+        /// </summary>
+        public TlsByteStream(string host, int port = 443, RemoteCertificateValidationCallback? certificateValidationCallback = null)
         {
             _host = host;
             _port = port;
+            _certificateValidationCallback = certificateValidationCallback;
         }
 
         /// <inheritdoc/>
@@ -51,11 +59,12 @@ namespace TqkLibrary.Vpn.Drivers.Sstp.Transport
             cancellationToken.ThrowIfCancellationRequested();
 #endif
 
-            // The TLS cert is authenticated by the SSTP crypto binding, not PKI, so accept it and capture it.
-            var ssl = new SslStream(tcp.GetStream(), leaveInnerStreamOpen: false, (_, certificate, _, _) =>
+            // Capture the cert (the SSTP crypto binding hashes it), then defer the accept/reject decision to the
+            // configured callback; no callback ⇒ accept any certificate (identity is bound by the crypto binding, not PKI).
+            var ssl = new SslStream(tcp.GetStream(), leaveInnerStreamOpen: false, (sender, certificate, chain, sslPolicyErrors) =>
             {
                 if (certificate != null) RemoteCertificate = new X509Certificate2(certificate);
-                return true;
+                return _certificateValidationCallback?.Invoke(sender, certificate, chain, sslPolicyErrors) ?? true;
             });
             _ssl = ssl;
 #if NET5_0_OR_GREATER

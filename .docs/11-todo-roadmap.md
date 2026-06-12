@@ -18,7 +18,6 @@
 > tối đa, không viết lại tính năng có sẵn**), và mỗi mục xong phải cập nhật [`10`](10-codebase-architecture-and-flow.md)
 > + README project bị ảnh hưởng.
 
-- [ ] **P0.6 — Callback xác thực cert TLS cho SSTP** (mô hình `HttpClientHandler.ServerCertificateCustomValidationCallback`): thêm option callback kiểu `RemoteCertificateValidationCallback` cho driver SSTP (option ở [SstpDriver](../src/TqkLibrary.Vpn.Drivers.Sstp/SstpDriver.cs) + overload `UseSstp(...)` ở [VpnClientBuilder](../src/TqkLibrary.Vpn/VpnClientBuilder.cs)), wire qua `SstpConnection` → `Func<ITlsByteStream>` factory → tham số callback mới của [`TlsByteStream`](../src/TqkLibrary.Vpn.Drivers.Sstp/Transport/TlsByteStream.cs#L20) (seam `ITlsByteStream` **đã có từ P0.1**; chỉ cần thêm tham số callback + đường dẫn option vào `SslStream`). **Không truyền callback ⇒ mặc định chấp nhận mọi cert** (giữ hành vi hiện tại — danh tính vẫn ràng buộc qua crypto binding). Cập nhật README driver + cảnh báo bảo mật ở README root.
 - [ ] **P0.7 — Verify HASH(2) của responder ở Quick Mode** ([IkeV1Client.cs:205-216](../src/TqkLibrary.Vpn.Ipsec/Ike/V1/IkeV1Client.cs#L205-L216) hiện bỏ qua — nợ bảo mật): tính HASH(2) theo RFC 2409 §5.5 `prf(SKEYID_a, M-ID | Ni_b | payload sau hash)` — **tái dùng** [`IkeV1QuickMode.ComputeHash2`](../src/TqkLibrary.Vpn.Ipsec/Ike/V1/IkeV1QuickMode.cs) sẵn có — rồi so sánh; mismatch ⇒ `VpnServerRejectedException`. Áp cho cả `ProcessRekeyQuickMode2`. Đối chiếu live VPN Gate + thêm case HASH(2) sai phải fail ở [IkeV1HandshakeTests.cs](../tests/TqkLibrary.Vpn.Ipsec.Ike.Tests/IkeV1HandshakeTests.cs).
 - [ ] **P0.8 — Fallback khi gateway từ chối forced-NAT-T** (rủi ro #1 plan gốc): bậc thang 3 bước — (a) **phát hiện + phân loại**: no-response sau float 4500 / NOTIFY từ chối ⇒ `VpnNetworkTimeoutException`/`VpnServerRejectedException` thông điệp chỉ rõ nghi forced-NAT-T; (b) **retry bind src-port 500/4500 thật** khi cổng trống (vẫn UDP userspace, không cần raw; Windows thử-bind để tránh đụng IKEEXT, fail thì bỏ qua); (c) **native ESP proto-50** qua `Transport.RawIp` (elevate) — phụ thuộc **F.9**, làm sau cùng. Test theo từng server qua lab Docker (**Q.1**).
 - [ ] **P0.9 — Cập nhật README Sockets (stale)** ([README-vi.md](../src/TqkLibrary.Vpn.Sockets/README-vi.md)): bảng "Chuẩn/RFC" còn ghi `TcpConnection` "bỏ qua retransmission/SACK vì tunnel bên dưới đã tin cậy" + link số dòng cũ (`TcpConnection.cs:13`/`TcpIpStack.cs:11`) — viết lại theo as-built (TCP reliability/NewReno/SACK/PMTUD đầy đủ, link `:25`/`:14`); rà lại phần `VpnNetworkStream` sau khi P0.3 đổi hành vi.
@@ -62,7 +61,7 @@
 
 | Driver | Transport | Bảo mật data plane | Framing | PPP | L2 fabric | Nền cần |
 |---|---|---|---|---|---|---|
-| SSTP (live) | TCP+TLS → F.1 | TLS | SSTP 4-byte | ✅ | — | P0.6 |
+| SSTP (live) | TCP+TLS → F.1 | TLS | SSTP 4-byte | ✅ | — | — (P0.6 ✓) |
 | L2TP/IPsec (live) | UDP `Ipsec/Nat` | ESP transport | L2TP + HDLC-PPP | ✅ | — | — |
 | IKEv2-native (V.1) | UDP `Ipsec/Nat` | **ESP tunnel** | non-ESP marker (có sẵn) | — | — | F.7 F.8 |
 | OpenVPN (V.2) | UDP + TCP (F.1) | OpenVPN DC (F.2) | opcode/key-id (F.2) | — | tap-mode: L2.x | F.1 F.2 F.5 |
@@ -127,7 +126,7 @@
 
 ## Gợi ý thứ tự
 
-0. **P0** — dọn kiến trúc & nợ review (P0.6 → … → P0.11, như §P0; **P0.1–P0.5 đã xong** — `IByteStreamTransport`/`TlsByteStream` seam + xóa `ISecuritySession`/`IPacketEncapsulator`; bỏ ref `Crypto` thừa ở façade; `VpnNetworkStream`/`TcpConnection.SendAsync` backpressure + propagate fault; bỏ PSK mặc định `"vpn"` khỏi `L2tpIpsecDriver` → ném `ArgumentException`, demo nhận PSK qua `?psk=`; gom `GetCapabilities`/`ConnectAsync` về 1 helper `ResolveDriver` → cùng ném `NotSupportedException`).
+0. **P0** — dọn kiến trúc & nợ review (P0.7 → … → P0.11, như §P0; **P0.1–P0.6 đã xong** — `IByteStreamTransport`/`TlsByteStream` seam + xóa `ISecuritySession`/`IPacketEncapsulator`; bỏ ref `Crypto` thừa ở façade; `VpnNetworkStream`/`TcpConnection.SendAsync` backpressure + propagate fault; bỏ PSK mặc định `"vpn"` khỏi `L2tpIpsecDriver` → ném `ArgumentException`, demo nhận PSK qua `?psk=`; gom `GetCapabilities`/`ConnectAsync` về 1 helper `ResolveDriver` → cùng ném `NotSupportedException`; callback `RemoteCertificateValidationCallback` tùy chọn cho SSTP qua `SstpDriver`/`UseSstp` → wire vào `SslStream`, không truyền ⇒ chấp nhận mọi cert).
 1. **P1** — SSTP + L2TP/IPsec đạt 100%: P1.1 IPV6CP → P1.2 outer IPv6 → P1.3 rekey Phase 1 in-place → P1.4/P1.5 retransmit/timeout → P1.6 test SSTP offline → P1.7 multi-session L2TP (best-effort). **Q.1 lab Docker dựng sớm** trong giai đoạn này (điều kiện test P1.1/P1.2/P1.7 + P0.8).
 2. **V.1 IKEv2-native** + F.7/F.8 (driver mới đầu tiên, chi phí thấp nhất — validate mô hình F + F.6 supervisor chung).
 3. **V.2 OpenVPN** (tun + UDP trước) + F.1/F.2/F.5 — driver "đinh" của hệ opensource, sinh consumer thật cho contracts F.2.

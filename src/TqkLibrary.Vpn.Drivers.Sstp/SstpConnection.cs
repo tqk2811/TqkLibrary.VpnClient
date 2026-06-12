@@ -1,5 +1,6 @@
 using System.IO;
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Security.Cryptography;
@@ -58,15 +59,17 @@ namespace TqkLibrary.Vpn.Drivers.Sstp
         /// Creates a connection to the given SSTP server. <paramref name="transportFactory"/> supplies the TLS byte
         /// stream for each attempt (default: a real <see cref="TlsByteStream"/>); an offline test injects a fake stream
         /// here to exercise the handshake/keepalive/reconnect supervisor without a live server (roadmap P1.6).
+        /// <paramref name="certificateValidationCallback"/> validates the server TLS certificate of the default
+        /// transport (null ⇒ accept any cert); it is ignored when an explicit <paramref name="transportFactory"/> is given.
         /// </summary>
         public SstpConnection(string host, int port = 443, uint magic = 0x1A2B3C4D, SstpReconnectOptions? reconnectOptions = null,
-            Func<ITlsByteStream>? transportFactory = null)
+            Func<ITlsByteStream>? transportFactory = null, RemoteCertificateValidationCallback? certificateValidationCallback = null)
         {
             _host = host;
             _port = port;
             _magic = magic;
             _opts = reconnectOptions ?? new SstpReconnectOptions();
-            _transportFactory = transportFactory ?? (() => new TlsByteStream(_host, _port));
+            _transportFactory = transportFactory ?? (() => new TlsByteStream(_host, _port, certificateValidationCallback));
         }
 
         /// <summary>The stable L3 packet channel (valid after a successful connect; survives reconnect).</summary>

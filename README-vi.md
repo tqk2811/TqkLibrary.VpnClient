@@ -114,7 +114,7 @@ Hai triết lý: **plugin theo driver** (mỗi giao thức một `IVpnProtocolDr
 | Hạng mục | Trạng thái |
 |---|---|
 | Driver MS-SSTP + L2TP/IPsec | ✅ Live (VPN Gate), keepalive/rekey/teardown/auto-reconnect |
-| Userspace TCP/IP (IPv4+IPv6, TCP đầy đủ, UDP, ICMP) | ✅ Hoàn chỉnh, 282 test offline |
+| Userspace TCP/IP (IPv4+IPv6, TCP đầy đủ, UDP, ICMP) | ✅ Hoàn chỉnh, 300 test offline |
 | IKEv2 | ✅ Build + test, ⏳ chưa wire vào driver |
 | Tầng L2 Ethernet (LAN ảo multi-host) | ⏳ Nền L2.0–L2.3 xong (codec/switch/VirtualHost/ARP); NDISC/DHCP/`EthernetAdapter` chưa |
 | IKEv2-native / OpenVPN / WireGuard / SoftEther / OpenConnect / PPTP | ⏳ Roadmap đa-VPN opensource (xem [.docs/11](.docs/11-todo-roadmap.md)) |
@@ -124,7 +124,7 @@ Hai triết lý: **plugin theo driver** (mỗi giao thức một `IVpnProtocolDr
 
 ```powershell
 dotnet build                                          # xanh cả netstandard2.0 + net8.0
-dotnet test --filter "Category!=Integration"          # 282 test offline (test live VPN Gate đánh dấu Integration)
+dotnet test --filter "Category!=Integration"          # 300 test offline (test live VPN Gate đánh dấu Integration)
 ```
 
 ## Tài liệu
@@ -135,4 +135,4 @@ dotnet test --filter "Category!=Integration"          # 282 test offline (test l
 - [.docs/12](.docs/12-demo-vpn2proxy.md) — demo Vpn2Proxy as-built.
 - Mỗi project trong `src/` có `README-vi.md` riêng (bảng trên).
 
-> ⚠️ MS-CHAPv2/MD4/DES là cơ chế yếu — dùng vì giao thức L2TP/SSTP bắt buộc, không dùng cho mục đích bảo mật mới. SSTP chấp nhận mọi cert TLS (danh tính xác thực bằng crypto binding); chỉ nên dùng với server tin cậy.
+> ⚠️ MS-CHAPv2/MD4/DES là cơ chế yếu — dùng vì giao thức L2TP/SSTP bắt buộc, không dùng cho mục đích bảo mật mới. SSTP **mặc định** chấp nhận mọi cert TLS (danh tính xác thực bằng crypto binding chứ không PKI); có thể truyền `RemoteCertificateValidationCallback` qua `UseSstp(...)` / `SstpDriver` để validate cert khi cần. Chỉ nên dùng với server tin cậy.

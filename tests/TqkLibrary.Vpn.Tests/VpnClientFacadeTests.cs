@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using TqkLibrary.Vpn;
 using TqkLibrary.Vpn.Abstractions.Drivers.Interfaces;
 using TqkLibrary.Vpn.Abstractions.Drivers.Models;
+using TqkLibrary.Vpn.Drivers.Sstp;
 using TqkLibrary.Vpn.IpStack.Tcp;
 using TqkLibrary.Vpn.Sockets;
 using TqkLibrary.Vpn.Sockets.Extensions;
@@ -45,6 +46,26 @@ namespace TqkLibrary.Vpn.Tests
                 new VpnCredentials { Username = "vpn", Password = "vpn" }));
             Assert.Contains("No VPN driver registered for protocol 'nope'", ex.Message);
             Assert.Contains("sstp", ex.Message);
+        }
+
+        [Fact]
+        public void Builder_UseSstp_WithCertCallback_RegistersDriver()
+        {
+            bool invoked = false;
+            VpnClient client = new VpnClientBuilder()
+                .UseSstp((sender, certificate, chain, errors) => { invoked = true; return true; })
+                .Build();
+            Assert.Contains("sstp", client.Protocols);
+            Assert.False(invoked); // the callback fires only during a real TLS handshake, not at registration
+        }
+
+        [Fact]
+        public void Builder_UseSstp_WithReconnectOptionsAndCertCallback_RegistersDriver()
+        {
+            VpnClient client = new VpnClientBuilder()
+                .UseSstp(new SstpReconnectOptions { Enabled = false }, (sender, certificate, chain, errors) => true)
+                .Build();
+            Assert.Contains("sstp", client.Protocols);
         }
 
         [Fact]

@@ -1,3 +1,4 @@
+using System.Net.Security;
 using TqkLibrary.Vpn.Abstractions.Drivers.Interfaces;
 using TqkLibrary.Vpn.Drivers.L2tpIpsec;
 using TqkLibrary.Vpn.Drivers.Sstp;
@@ -21,6 +22,14 @@ namespace TqkLibrary.Vpn
 
         /// <summary>Registers the MS-SSTP driver with explicit auto-reconnect options (e.g. to disable it).</summary>
         public VpnClientBuilder UseSstp(SstpReconnectOptions reconnectOptions) => AddDriver(new SstpDriver(reconnectOptions));
+
+        /// <summary>Registers the MS-SSTP driver with a TLS server-certificate validation callback (default behavior accepts any cert).</summary>
+        public VpnClientBuilder UseSstp(RemoteCertificateValidationCallback certificateValidationCallback)
+            => AddDriver(new SstpDriver(certificateValidationCallback: certificateValidationCallback));
+
+        /// <summary>Registers the MS-SSTP driver with explicit auto-reconnect options and a TLS server-certificate validation callback.</summary>
+        public VpnClientBuilder UseSstp(SstpReconnectOptions reconnectOptions, RemoteCertificateValidationCallback certificateValidationCallback)
+            => AddDriver(new SstpDriver(reconnectOptions, certificateValidationCallback));
 
         /// <summary>Registers the L2TP/IPsec driver (IKEv1 PSK + NAT-T) with auto-reconnect enabled by default.</summary>
         public VpnClientBuilder UseL2tpIpsec() => AddDriver(new L2tpIpsecDriver());
