@@ -141,7 +141,7 @@ byte[] reply = await dns.ReceiveAsync();  // chỉ nhận từ 8.8.8.8:53
 4. Đọc/ghi qua stream: `WriteAsync`/`Write` → `TcpConnection.SendAsync` (**backpressure**: chờ cửa sổ peer khi buffer chưa-gửi đầy `SendBufferHighWaterMark`, ném `IOException` khi RST/give-up; chia theo MSS, gửi PSH|ACK), `FlushAsync` → `SendAsync(empty)` surfaces fault; `ReadAsync` → `TcpConnection.ReadAsync` — [VpnNetworkStream.cs:29-52](VpnNetworkStream.cs#L29-L52).
 5. `Dispose` gọi `_connection.CloseSend()` → gửi FIN, đóng nửa gửi — [VpnNetworkStream.cs:61-65](VpnNetworkStream.cs#L61-L65).
 
-Gói inbound đi ngược lại: `IPacketChannel.InboundIpPacket` → `TcpIpStack.OnInbound` ([:165](../TqkLibrary.Vpn.IpStack/TcpIpStack.cs#L165)) chọn theo version nibble rồi `OnInboundV4`/`OnInboundV6` demux theo destination port → `TcpConnection.OnSegment` (không socket khớp → RST, RFC 793) — [TcpIpStack.cs:173-193](../TqkLibrary.Vpn.IpStack/TcpIpStack.cs#L173-L193).
+Gói inbound đi ngược lại: `IPacketChannel.InboundIpPacket` → `TcpIpStack.OnInbound` ([:165](../TqkLibrary.Vpn.IpStack/TcpIpStack.cs#L170)) chọn theo version nibble rồi `OnInboundV4`/`OnInboundV6` demux theo destination port → `TcpConnection.OnSegment` (không socket khớp → RST, RFC 793) — [TcpIpStack.cs:178-198](../TqkLibrary.Vpn.IpStack/TcpIpStack.cs#L178-L198).
 
 ### UDP — connected client
 

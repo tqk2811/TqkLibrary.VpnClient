@@ -112,19 +112,7 @@ namespace TqkLibrary.Vpn.IpStack
             while (!_pings.TryAdd(sequence, waiter));                               // pending after a 65536-wrap
             try
             {
-                ReadOnlySpan<byte> payload = data.IsEmpty ? DefaultPingData : data.Span;
-                IPAddress local = LocalFor(remoteAddress);
-                byte[] ip;
-                if (remoteAddress.AddressFamily == AddressFamily.InterNetworkV6)
-                {
-                    byte[] icmp = Icmpv6.BuildEcho(Icmpv6.TypeEchoRequest, _pingIdentifier, sequence, payload, local, remoteAddress);
-                    ip = IpLayer.Build(local, remoteAddress, Ipv6.NextHeaderIcmpv6, icmp, 0);
-                }
-                else
-                {
-                    byte[] icmp = Icmpv4.BuildEcho(Icmpv4.TypeEchoRequest, _pingIdentifier, sequence, payload);
-                    ip = IpLayer.Build(local, remoteAddress, Ipv4.ProtocolIcmp, icmp, (ushort)Interlocked.Increment(ref _replyIpId));
-                }
+                byte[] ip = BuildEchoRequest(remoteAddress, data, sequence);
 
                 var stopwatch = Stopwatch.StartNew();
                 SendIp(ip);
@@ -138,6 +126,23 @@ namespace TqkLibrary.Vpn.IpStack
             {
                 _pings.TryRemove(sequence, out _);
             }
+        }
+
+        // Encodes the ICMP Echo Request IP packet. Kept non-async so the ReadOnlySpan<byte> payload local is legal on
+        // C# 12 as well (declaring a ref-struct local inside an async method is a C# 13-only feature); behaviour and the
+        // zero-copy span are unchanged.
+        byte[] BuildEchoRequest(IPAddress remoteAddress, ReadOnlyMemory<byte> data, ushort sequence)
+        {
+            ReadOnlySpan<byte> payload = data.IsEmpty ? DefaultPingData : data.Span;
+            IPAddress local = LocalFor(remoteAddress);
+            if (remoteAddress.AddressFamily == AddressFamily.InterNetworkV6)
+            {
+                byte[] icmp = Icmpv6.BuildEcho(Icmpv6.TypeEchoRequest, _pingIdentifier, sequence, payload, local, remoteAddress);
+                return IpLayer.Build(local, remoteAddress, Ipv6.NextHeaderIcmpv6, icmp, 0);
+            }
+
+            byte[] icmpv4 = Icmpv4.BuildEcho(Icmpv4.TypeEchoRequest, _pingIdentifier, sequence, payload);
+            return IpLayer.Build(local, remoteAddress, Ipv4.ProtocolIcmp, icmpv4, (ushort)Interlocked.Increment(ref _replyIpId));
         }
 
         IPAddress LocalFor(IPAddress remote)
