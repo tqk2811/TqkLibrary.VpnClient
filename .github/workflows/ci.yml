@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, dev ]
+  pull_request:
+    branches: [ master, dev ]
+
+jobs:
+  build-test:
+    name: Build + offline tests (Linux)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore src/TqkLibrary.Vpn.sln
+
+      # Builds every project on both target frameworks (netstandard2.0 + net8.0) — must stay green on both.
+      - name: Build
+        run: dotnet build src/TqkLibrary.Vpn.sln -c Release --no-restore
+
+      # Tests use xUnit v3, so each test project is a self-contained Microsoft.Testing.Platform executable.
+      # Run them directly (not `dotnet test`) so the runner matches the local Termux/PRoot arm64 dev flow.
+      # `-trait- "Category=Integration"` skips live tests that need a real VPN Gate / lab server.
+      - name: Test (offline)
+        run: |
+          set -euo pipefail
+          status=0
+          for proj in tests/*/; do
+            name=$(basename "$proj")
+            dll="${proj}bin/Release/net8.0/${name}.dll"
+            if [ ! -f "$dll" ]; then
+              echo "::warning::no test assembly for ${name} (skipped)"
+              continue
+            fi
+            echo "::group::${name}"
+            dotnet exec "$dll" -trait- "Category=Integration" || status=$?
+            echo "::endgroup::"
+          done
+          exit $status
