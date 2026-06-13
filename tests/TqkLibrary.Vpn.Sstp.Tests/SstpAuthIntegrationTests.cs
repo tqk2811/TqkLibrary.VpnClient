@@ -5,7 +5,6 @@ using TqkLibrary.Vpn.Drivers.Sstp.Models;
 using TqkLibrary.Vpn.Ppp;
 using TqkLibrary.Vpn.Ppp.Auth;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace TqkLibrary.Vpn.Sstp.Tests
 {

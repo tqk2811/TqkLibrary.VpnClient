@@ -9,7 +9,6 @@ using TqkLibrary.Vpn.IpStack;
 using TqkLibrary.Vpn.Sockets;
 using TqkLibrary.Vpn.Sockets.Extensions;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace TqkLibrary.Vpn.Tests
 {

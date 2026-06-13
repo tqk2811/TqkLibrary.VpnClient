@@ -1,0 +1,25 @@
+<Project>
+
+  <!--
+    Common settings for every test project. The suite uses xUnit v3, which builds each test project into a
+    self-contained executable run via Microsoft.Testing.Platform (OutputType=Exe). This is deliberate: the older
+    VSTest runner (`dotnet test` with xUnit v2 + Microsoft.NET.Test.Sdk) cannot resolve the dotnet host on the
+    Termux/PRoot arm64 dev environment ("Could not find 'dotnet' host for the 'ARM64' architecture"), because under
+    PRoot the running process is libproot-loader.so rather than the dotnet muxer. xUnit v3 runs the test assembly
+    directly, sidestepping that probe. Run a project with:  dotnet exec <Tests>.dll -trait- "Category=Integration"
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" Version="2.0.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.0.2" />
+  </ItemGroup>
+
+</Project>
