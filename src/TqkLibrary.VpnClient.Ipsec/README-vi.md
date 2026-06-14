@@ -36,6 +36,8 @@ TqkLibrary.VpnClient.Ipsec/
 │  └─ Enums/NatTPacketKind.cs   phân loại datagram trên 4500: Invalid / Ike / Esp
 ├─ Esp/                         ESP data plane (RFC 4303) — đóng/mở gói, anti-replay, các cipher suite
 │  ├─ EspSession.cs             Cặp SA hai chiều: outbound (sequence) + inbound (anti-replay) — đơn vị data plane gửi qua
+│  ├─ EspDataPlane.cs           Base dùng chung: giữ SA hiện tại + SA cũ (make-before-break), watermark rekey 2³² (transport & tunnel mode)
+│  ├─ EspTunnelChannel.cs       ESP tunnel mode (RFC 4303) → IPacketChannel: bọc nguyên gói IP (NextHeader 4/41), decap demux theo NextHeader
 │  ├─ EspCipherSuite.cs         Lớp trừu tượng cho 1 ESP transform + 3 factory (CBC/SHA256, CBC/SHA1, GCM)
 │  ├─ EspCbcHmacSuite.cs        Suite AES-CBC + HMAC (encrypt-then-MAC): SPI|Seq|IV|ct|ICV
 │  ├─ EspGcmSuite.cs            Suite AES-GCM AEAD (RFC 4106): salt+explicit-IV, AAD = SPI|Seq
@@ -79,6 +81,8 @@ TqkLibrary.VpnClient.Ipsec/
 | Type | Vai trò | Vị trí |
 |------|---------|--------|
 | `EspSession` | Cặp SA hai chiều: `Protect` (gán sequence) + `TryUnprotect` (check SPI/replay/integrity rồi giải mã) | [EspSession.cs:7](Esp/EspSession.cs#L7) |
+| `EspDataPlane` | Base scaffolding ESP dùng chung 2 mode: `ProtectOutbound`/`TryUnprotectInbound` + `SwapSession`/`DropPreviousInbound` (make-before-break) + watermark `RekeyNeeded` quanh 2³² | [EspDataPlane.cs:12](Esp/EspDataPlane.cs#L12) |
+| `EspTunnelChannel` | ESP **tunnel mode** → `IPacketChannel`: gói IP nguyên gói với NextHeader 4 (IPv4)/41 (IPv6), inbound demux theo NextHeader → `InboundIpPacket` (không PPP/L2TP) — data plane của IKEv2 | [EspTunnelChannel.cs:14](Esp/EspTunnelChannel.cs#L14) |
 | `EspCipherSuite` | Lớp trừu tượng 1 ESP transform + factory `AesCbcHmacSha256` / `AesCbcHmacSha1` / `AesGcm` | [EspCipherSuite.cs:10](Esp/EspCipherSuite.cs#L10) |
 | `EspCbcHmacSuite` | AES-CBC + HMAC, encrypt-then-MAC, layout `SPI\|Seq\|IV\|ct\|ICV` | [EspCbcHmacSuite.cs:11](Esp/EspCbcHmacSuite.cs#L11) |
 | `EspGcmSuite` | AES-GCM AEAD, nonce = salt(4)‖seq-IV(8), AAD = `SPI\|Seq` | [EspGcmSuite.cs:11](Esp/EspGcmSuite.cs#L11) |
@@ -130,7 +134,7 @@ TqkLibrary.VpnClient.Ipsec/
 
 | Chuẩn (RFC/FIPS/NIST) | Class/Namespace áp dụng | Vị trí (link code) | Ghi chú |
 |------------------------|--------------------------|---------------------|---------|
-| **RFC 4303** (ESP) | `EspConstants` (header §2/§2.6), `EspSession` (§3.3.3), `AntiReplayWindow` (§3.4.3), `EspCipherSuite.TryStripTrailer` (§2.4 padding) | [EspConstants.cs:3](Esp/EspConstants.cs#L3), [EspSession.cs:14](Esp/EspSession.cs#L14), [AntiReplayWindow.cs:4](Esp/AntiReplayWindow.cs#L4), [EspCipherSuite.cs:50](Esp/EspCipherSuite.cs#L50) | Có trong comment |
+| **RFC 4303** (ESP) | `EspConstants` (header §2/§2.6 + NextHeader 4/41 tunnel mode §3.1.1), `EspSession` (§3.3.3), `EspTunnelChannel` (tunnel mode §3.1.1), `AntiReplayWindow` (§3.4.3), `EspCipherSuite.TryStripTrailer` (§2.4 padding) | [EspConstants.cs:3](Esp/EspConstants.cs#L3), [EspSession.cs:14](Esp/EspSession.cs#L14), [EspTunnelChannel.cs:7](Esp/EspTunnelChannel.cs#L7), [AntiReplayWindow.cs:4](Esp/AntiReplayWindow.cs#L4), [EspCipherSuite.cs:50](Esp/EspCipherSuite.cs#L50) | Có trong comment |
 | **RFC 3602** (AES-CBC cho IPsec) | `EspCbcHmacSuite` (confidentiality) | [EspCbcHmacSuite.cs:7](Esp/EspCbcHmacSuite.cs#L7), [EspCipherSuite.cs:20](Esp/EspCipherSuite.cs#L20) | Có trong comment |
 | **RFC 4868** (HMAC-SHA-256-128) | `EspCbcHmacSuite` (integrity mặc định, IKEv2) | [EspCbcHmacSuite.cs:8](Esp/EspCbcHmacSuite.cs#L8), [EspCipherSuite.cs:20](Esp/EspCipherSuite.cs#L20) | Có trong comment |
 | **RFC 2404** (HMAC-SHA-1-96) | `EspCipherSuite.AesCbcHmacSha1` (ESP SA của IKEv1) | [EspCipherSuite.cs:24](Esp/EspCipherSuite.cs#L24) | Có trong comment |

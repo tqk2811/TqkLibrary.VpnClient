@@ -9,6 +9,12 @@ namespace TqkLibrary.VpnClient.Ipsec.Esp
         /// <summary>Common IP protocol numbers used as the ESP Next Header value.</summary>
         public const byte NextHeaderUdp = 17;
 
+        /// <summary>Tunnel-mode Next Header for an encapsulated IPv4 packet (IP protocol 4, "IP-in-IP").</summary>
+        public const byte NextHeaderIpv4 = 4;
+
+        /// <summary>Tunnel-mode Next Header for an encapsulated IPv6 packet (IP protocol 41).</summary>
+        public const byte NextHeaderIpv6 = 41;
+
         /// <summary>The "no next header" dummy-packet marker (RFC 4303 §2.6).</summary>
         public const byte NextHeaderNone = 59;
 
