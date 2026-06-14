@@ -1,8 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
-using TqkLibrary.VpnClient.Crypto;
 
-namespace TqkLibrary.VpnClient.Ppp.Auth
+namespace TqkLibrary.VpnClient.Crypto
 {
     /// <summary>
     /// MS-CHAPv2 client-side crypto (RFC 2759): NT password hash (MD4), challenge hash (SHA-1),

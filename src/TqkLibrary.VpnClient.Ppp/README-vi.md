@@ -39,8 +39,8 @@ TqkLibrary.VpnClient.Ppp/
 ├─ Ipv6cpNegotiator.cs     # IPV6CP (RFC 5072): thương lượng Interface-Identifier -> link-local fe80::/64
 ├─ PppControlCodec.cs      # Encode/decode gói control + TLV option
 ├─ Auth/
-│  ├─ MsChapV2.cs              # Crypto MS-CHAPv2 (NT hash, challenge hash, NT-Response) + dẫn xuất HLAK/MPPE
 │  └─ MsChapV2Authenticator.cs # Authenticator client trên CHAP: trả lời Challenge 49 byte, báo Success/Failure
+│                              #   (codec MS-CHAPv2 thuần đã chuyển sang TqkLibrary.VpnClient.Crypto/MsChapV2.cs)
 ├─ Framing/
 │  ├─ Fcs16.cs            # FCS-16 (CRC-CCITT phản chiếu, poly 0x8408)
 │  ├─ HdlcFramer.cs       # Khung hoá HDLC-async: cờ 0x7E, byte-stuffing 0x7D, gắn FCS
@@ -72,8 +72,7 @@ TqkLibrary.VpnClient.Ppp/
 | `IpcpNegotiator` | IPCP cụ thể: client xin IP (0.0.0.0) + DNS rồi học giá trị Nak; server gán IP cho peer | [IpcpNegotiator.cs:12](IpcpNegotiator.cs#L12) |
 | `Ipv6cpNegotiator` | IPV6CP cụ thể (RFC 5072): thương lượng Interface-Identifier 8 byte (client xin/học Nak, server gán), reject Compression; lộ `LinkLocalAddress` fe80::/64 | [Ipv6cpNegotiator.cs:14](Ipv6cpNegotiator.cs#L14) |
 | `PppControlCodec` | Encode/decode gói control (Code/Id/Length) và TLV option | [PppControlCodec.cs:9](PppControlCodec.cs#L9) |
-| `MsChapV2` | Crypto MS-CHAPv2 client-side: NT hash (MD4), challenge hash (SHA-1), NT-Response (3×DES) + dẫn xuất HLAK/MPPE | [Auth/MsChapV2.cs:11](Auth/MsChapV2.cs#L11) |
-| `MsChapV2Authenticator` | Authenticator client trên CHAP: nhận Challenge → trả Response 49 byte, báo Success/Failure, giữ NtResponse cho HLAK | [Auth/MsChapV2Authenticator.cs:12](Auth/MsChapV2Authenticator.cs#L12) |
+| `MsChapV2Authenticator` | Authenticator client trên CHAP: nhận Challenge → trả Response 49 byte, báo Success/Failure, giữ NtResponse cho HLAK; codec mật mã ủy thác cho [`MsChapV2`](../TqkLibrary.VpnClient.Crypto/MsChapV2.cs) ở Crypto | [Auth/MsChapV2Authenticator.cs:12](Auth/MsChapV2Authenticator.cs#L12) |
 | `HdlcFramer` | Khung hoá HDLC-async: cờ 0x7E, byte-stuffing 0x7D, ACCM mặc định escape C0, gắn FCS-16 | [Framing/HdlcFramer.cs:7](Framing/HdlcFramer.cs#L7) |
 | `HdlcDecoder` | Giải khung HDLC-async dạng streaming (`Push`): un-stuff, tách theo cờ, kiểm FCS, raise `FrameReceived` | [Framing/HdlcDecoder.cs:7](Framing/HdlcDecoder.cs#L7) |
 | `Fcs16` | FCS-16 (CRC-CCITT phản chiếu, poly 0x8408) — `Compute`, `Update`, `GoodFcs` | [Framing/Fcs16.cs:4](Framing/Fcs16.cs#L4) |
@@ -94,11 +93,8 @@ TqkLibrary.VpnClient.Ppp/
 | **RFC 1662** (PPP trong HDLC-like framing) | `HdlcFramer`, `HdlcDecoder` | [Framing/HdlcFramer.cs:4](Framing/HdlcFramer.cs#L4), [Framing/HdlcDecoder.cs:4](Framing/HdlcDecoder.cs#L4) | Cờ 0x7E, escape 0x7D, ACCM C0 |
 | **RFC 1662** (FCS-16, CRC-CCITT poly 0x8408) | `Fcs16` | [Framing/Fcs16.cs:3](Framing/Fcs16.cs#L3) | `GoodFcs=0xF0B8` (§C.2) tại [Framing/Fcs16.cs:6](Framing/Fcs16.cs#L6) |
 | **RFC 1994** (PPP CHAP) | `MsChapV2Authenticator` | [Auth/MsChapV2Authenticator.cs:9](Auth/MsChapV2Authenticator.cs#L9) | Khung Challenge/Response/Success/Failure |
-| **RFC 2759** (MS-CHAPv2) | `MsChapV2`, `MsChapV2Authenticator` | [Auth/MsChapV2.cs:8](Auth/MsChapV2.cs#L8), [Auth/MsChapV2Authenticator.cs:9](Auth/MsChapV2Authenticator.cs#L9) | NtPasswordHash §8.3 [L13](Auth/MsChapV2.cs#L13), ChallengeHash §8.2 [L17](Auth/MsChapV2.cs#L17), ChallengeResponse §8.5 [L33](Auth/MsChapV2.cs#L33), GenerateNTResponse §8.1 [L49](Auth/MsChapV2.cs#L49) |
-| **RFC 3079** (dẫn xuất khoá MPPE) | `MsChapV2.DeriveHlak` | [Auth/MsChapV2.cs:75](Auth/MsChapV2.cs#L75), [Auth/MsChapV2.cs:83-99](Auth/MsChapV2.cs#L83-L99) | Master/Send/Receive key → HLAK 32 byte cho SSTP crypto binding |
-| **RFC 1320** (MD4) | qua `Md4.Hash` (NT password hash) | [Auth/MsChapV2.cs:15](Auth/MsChapV2.cs#L15), [Auth/MsChapV2.cs:90](Auth/MsChapV2.cs#L90) | (suy luận) MD4 ở `TqkLibrary.VpnClient.Crypto`; gọi để tạo NT hash & password-hash-hash |
-| **FIPS 46-3 / SP 800-67** (DES) | qua `Des.EncryptBlock` (3 khối NT-Response) | [Auth/MsChapV2.cs:43](Auth/MsChapV2.cs#L43) | (suy luận) DES ở `TqkLibrary.VpnClient.Crypto`; key 7→8 byte parity tại [Auth/MsChapV2.cs:58-73](Auth/MsChapV2.cs#L58-L73) |
-| **FIPS 180-4** (SHA-1) | `System.Security.Cryptography.SHA1` | [Auth/MsChapV2.cs:26](Auth/MsChapV2.cs#L26), [Auth/MsChapV2.cs:103](Auth/MsChapV2.cs#L103), [Auth/MsChapV2.cs:119](Auth/MsChapV2.cs#L119) | (suy luận) dùng cho ChallengeHash và dẫn xuất khoá MPPE |
+| **RFC 2759** (MS-CHAPv2) | `MsChapV2Authenticator` (framing CHAP); codec ở [`MsChapV2`](../TqkLibrary.VpnClient.Crypto/MsChapV2.cs) (Crypto) | [Auth/MsChapV2Authenticator.cs:9](Auth/MsChapV2Authenticator.cs#L9) | NtPasswordHash/ChallengeHash/GenerateNTResponse §8.x nay ở Crypto (xem README Crypto) |
+| **RFC 3079** (dẫn xuất khoá MPPE) | `MsChapV2Authenticator.DeriveHlak` → [`MsChapV2.DeriveHlak`](../TqkLibrary.VpnClient.Crypto/MsChapV2.cs) (Crypto) | [Auth/MsChapV2Authenticator.cs:42](Auth/MsChapV2Authenticator.cs#L42) | HLAK 32 byte cho SSTP crypto binding; thuật toán Master/Send/Receive key ở Crypto |
 | **[MS-CHAP]** (Microsoft, response value 49 byte) | `MsChapV2Authenticator.BuildResponse` | [Auth/MsChapV2Authenticator.cs:86-90](Auth/MsChapV2Authenticator.cs#L86-L90) | (suy luận) PeerChallenge(16)+Reserved(8)+NT-Response(24)+Flags(1) |
 
 > Lưu ý: MS-CHAPv2 là cơ chế yếu, được dùng ở đây chỉ vì L2TP/IPsec và SSTP bắt buộc nó — xem ghi chú tại [Auth/MsChapV2.cs:9](Auth/MsChapV2.cs#L9).

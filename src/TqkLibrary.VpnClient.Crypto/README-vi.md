@@ -39,6 +39,7 @@ TqkLibrary.VpnClient.Crypto/
 ├── AesCtr.cs              # AES-CTR (static, dựng từ AES-ECB)
 ├── Md4.cs                 # MD4 (IHashAlgo) — NT hash cho MS-CHAPv2
 ├── Des.cs                 # DES 1 block ECB-encrypt, không check weak key — MS-CHAPv2
+├── MsChapV2.cs            # Codec MS-CHAPv2 (RFC 2759) + dẫn xuất khoá MPPE/MSK (RFC 3079) — dùng chung Ppp + IKEv2 EAP
 ├── ModpDhGroup.cs         # DH MODP group 2 / 14 (IDhGroup)
 ├── HmacPrf.cs             # HMAC-PRF (IPrf)
 ├── HmacIntegrity.cs       # HMAC integrity với ICV cắt ngắn (IIntegrityAlgo)
@@ -72,6 +73,7 @@ TqkLibrary.VpnClient.Crypto/
 | `HmacPrf` | HMAC-PRF (`IPrf`); factory `Sha256()` | [HmacPrf.cs:7](HmacPrf.cs#L7) |
 | `HmacIntegrity` | HMAC integrity ICV cắt ngắn (`IIntegrityAlgo`); factory `HmacSha256_128()`, `HmacSha1_96()` | [HmacIntegrity.cs:7](HmacIntegrity.cs#L7) |
 | `PrfPlus` | IKEv2 `prf+` key expansion, `static Expand(IPrf, key, seed, length)` | [PrfPlus.cs:9](PrfPlus.cs#L9) |
+| `MsChapV2` | Codec MS-CHAPv2 client-side (RFC 2759): NT hash (MD4), challenge hash (SHA-1), NT-Response (3×DES) + dẫn xuất HLAK/MPPE (RFC 3079); dùng chung cho PPP auth & IKEv2 EAP | [MsChapV2.cs:11](MsChapV2.cs#L11) |
 | `HmacUtil` | Internal: chọn `HMACMD5/SHA1/SHA256/SHA384/SHA512` theo `HashAlgorithmName` | [HmacUtil.cs:6](HmacUtil.cs#L6) |
 
 ## Chuẩn / RFC tuân thủ
@@ -91,7 +93,8 @@ TqkLibrary.VpnClient.Crypto/
 | FIPS 197 (AES) | `AesCbcCipher`, `AesCtr`, `AesGcmCipher` | [AesCbcCipher.cs:10](AesCbcCipher.cs#L10), [AesCtr.cs:9](AesCtr.cs#L9), [Aead/AesGcmCipher.cs:18](Aead/AesGcmCipher.cs#L18) | (suy luận) AES không ghi tên FIPS trong comment |
 | NIST SP 800-38D (AES-GCM / GCM) | `AesGcmCipher` | [Aead/AesGcmCipher.cs:18](Aead/AesGcmCipher.cs#L18) | (suy luận) comment chỉ nói "AES-GCM AEAD" |
 | RFC 2104 / FIPS 198-1 (HMAC) | `HmacUtil`, `HmacPrf`, `HmacIntegrity` | [HmacUtil.cs:6](HmacUtil.cs#L6) | (suy luận) dùng `HMAC*` của BCL |
-| RFC 2759 (MS-CHAPv2) | `Md4` + `Des` (làm primitive) | [Md4.cs:6](Md4.cs#L6), [Des.cs:5-6](Des.cs#L5-L6) | (suy luận) primitive ở đây; thuật toán CHAPv2 thực thi ở project `TqkLibrary.VpnClient.Ppp` |
+| RFC 2759 (MS-CHAPv2) | `MsChapV2` (codec) trên `Md4`+`Des`+SHA-1 | [MsChapV2.cs:11](MsChapV2.cs#L11) | NtPasswordHash §8.3 [L14](MsChapV2.cs#L14), ChallengeHash §8.2 [L18](MsChapV2.cs#L18), ChallengeResponse §8.5 [L34](MsChapV2.cs#L34), GenerateNTResponse §8.1 [L50](MsChapV2.cs#L50) |
+| RFC 3079 (dẫn xuất khoá MPPE) | `MsChapV2.DeriveHlak` | [MsChapV2.cs:87](MsChapV2.cs#L87) | Master/Send/Receive key → HLAK 32 byte cho SSTP crypto binding |
 
 ## API / cách dùng
 

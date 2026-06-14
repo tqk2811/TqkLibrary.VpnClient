@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using TqkLibrary.VpnClient.Crypto;
 using TqkLibrary.VpnClient.Ppp.Enums;
 using TqkLibrary.VpnClient.Ppp.Interfaces;
 

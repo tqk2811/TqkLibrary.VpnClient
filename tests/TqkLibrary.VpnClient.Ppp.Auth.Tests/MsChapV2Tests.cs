@@ -1,4 +1,4 @@
-using TqkLibrary.VpnClient.Ppp.Auth;
+using TqkLibrary.VpnClient.Crypto;
 using Xunit;
 
 namespace TqkLibrary.VpnClient.Ppp.Auth.Tests
