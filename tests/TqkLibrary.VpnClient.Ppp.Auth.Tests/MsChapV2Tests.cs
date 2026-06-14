@@ -31,5 +31,30 @@ namespace TqkLibrary.VpnClient.Ppp.Auth.Tests
             byte[] response = MsChapV2.GenerateNTResponse(AuthenticatorChallenge, PeerChallenge, UserName, Password);
             Assert.Equal("82309ECD8D708B5EA08FAA3981CD83544233114A3D85D6DF", Convert.ToHexString(response));
         }
+
+        [Fact]
+        public void GenerateAuthenticatorResponse_MatchesRfc2759()
+        {
+            // RFC 2759 §D worked example: AuthenticatorResponse = "S=407A5589115FD0D6209F510FE9C04566932CDA56".
+            byte[] ntResponse = MsChapV2.GenerateNTResponse(AuthenticatorChallenge, PeerChallenge, UserName, Password);
+            byte[] digest = MsChapV2.GenerateAuthenticatorResponse(
+                AuthenticatorChallenge, PeerChallenge, ntResponse, UserName, Password);
+            Assert.Equal("407A5589115FD0D6209F510FE9C04566932CDA56", Convert.ToHexString(digest));
+        }
+
+        [Fact]
+        public void DeriveMsk_IsRecvThenSend_PaddedTo64()
+        {
+            // EAP-MSCHAPv2 MSK = MasterReceiveKey || MasterSendKey || zeros(32); HLAK = MasterSendKey || MasterReceiveKey.
+            // Cross-checking against HLAK pins the peer-perspective ordering without an external vector.
+            byte[] ntResponse = MsChapV2.GenerateNTResponse(AuthenticatorChallenge, PeerChallenge, UserName, Password);
+            byte[] msk = MsChapV2.DeriveMsk(Password, ntResponse);
+            byte[] hlak = MsChapV2.DeriveHlak(Password, ntResponse);
+
+            Assert.Equal(64, msk.Length);
+            Assert.Equal(hlak[16..32], msk[0..16]);   // MSK receive-key = HLAK's second half
+            Assert.Equal(hlak[0..16], msk[16..32]);   // MSK send-key    = HLAK's first half
+            Assert.All(msk[32..64], b => Assert.Equal(0, b));
+        }
     }
 }

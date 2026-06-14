@@ -97,6 +97,56 @@ namespace TqkLibrary.VpnClient.Crypto
             return hlak;
         }
 
+        /// <summary>
+        /// Derives the 64-byte EAP-MSK for EAP-MSCHAPv2 (RFC 3079 / draft-kamath-pppext-eap-mschapv2): the IKEv2
+        /// EAP exchange feeds this key into the AUTH payload (RFC 7296 §2.16). Layout matches strongSwan /
+        /// wpa_supplicant — <c>MasterReceiveKey(16) || MasterSendKey(16) || 32 zero bytes</c>, both keys computed
+        /// from the peer's perspective (IsServer = false).
+        /// </summary>
+        public static byte[] DeriveMsk(string password, byte[] ntResponse)
+        {
+            byte[] passwordHash = NtPasswordHash(password);   // MD4(unicode(password))
+            byte[] passwordHashHash = Md4.Hash(passwordHash); // MD4 of the NT hash
+            byte[] masterKey = GetMasterKey(passwordHashHash, ntResponse);
+            byte[] recvKey = GetAsymmetricStartKey(masterKey, isSend: false); // MasterReceiveKey (peer)
+            byte[] sendKey = GetAsymmetricStartKey(masterKey, isSend: true);  // MasterSendKey (peer)
+
+            byte[] msk = new byte[64]; // last 32 bytes stay zero (RFC 3079 pads the 32-byte key set to a 64-byte MSK)
+            Buffer.BlockCopy(recvKey, 0, msk, 0, 16);
+            Buffer.BlockCopy(sendKey, 0, msk, 16, 16);
+            return msk;
+        }
+
+        // ----- Authenticator Response (RFC 2759 §8.7): the "S=" the peer verifies on MS-CHAPv2 Success -----
+
+        static readonly byte[] AuthMagic1 = Encoding.ASCII.GetBytes("Magic server to client signing constant");
+        static readonly byte[] AuthMagic2 = Encoding.ASCII.GetBytes("Pad to make it do more than one iteration");
+
+        /// <summary>
+        /// Computes the 20-byte MS-CHAPv2 Authenticator Response (RFC 2759 §8.7) — the digest the server sends as
+        /// <c>"S=&lt;hex&gt;"</c> and the peer verifies. <c>SHA1(SHA1(PasswordHashHash | NTResponse | Magic1) |
+        /// ChallengeHash | Magic2)</c>.
+        /// </summary>
+        public static byte[] GenerateAuthenticatorResponse(
+            byte[] authenticatorChallenge, byte[] peerChallenge, byte[] ntResponse, string userName, string password)
+        {
+            byte[] passwordHash = NtPasswordHash(password);
+            byte[] passwordHashHash = Md4.Hash(passwordHash);
+
+            using var sha1 = SHA1.Create();
+            sha1.TransformBlock(passwordHashHash, 0, 16, null, 0);
+            sha1.TransformBlock(ntResponse, 0, 24, null, 0);
+            sha1.TransformFinalBlock(AuthMagic1, 0, AuthMagic1.Length);
+            byte[] digest1 = (byte[])sha1.Hash!.Clone();
+
+            byte[] challenge = ChallengeHash(peerChallenge, authenticatorChallenge, userName); // 8 bytes
+            using var sha1b = SHA1.Create();
+            sha1b.TransformBlock(digest1, 0, 20, null, 0);
+            sha1b.TransformBlock(challenge, 0, 8, null, 0);
+            sha1b.TransformFinalBlock(AuthMagic2, 0, AuthMagic2.Length);
+            return (byte[])sha1b.Hash!.Clone();
+        }
+
         static byte[] GetMasterKey(byte[] passwordHashHash, byte[] ntResponse)
         {
             using var sha1 = SHA1.Create();

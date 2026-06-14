@@ -73,7 +73,7 @@ TqkLibrary.VpnClient.Crypto/
 | `HmacPrf` | HMAC-PRF (`IPrf`); factory `Sha256()` | [HmacPrf.cs:7](HmacPrf.cs#L7) |
 | `HmacIntegrity` | HMAC integrity ICV cắt ngắn (`IIntegrityAlgo`); factory `HmacSha256_128()`, `HmacSha1_96()` | [HmacIntegrity.cs:7](HmacIntegrity.cs#L7) |
 | `PrfPlus` | IKEv2 `prf+` key expansion, `static Expand(IPrf, key, seed, length)` | [PrfPlus.cs:9](PrfPlus.cs#L9) |
-| `MsChapV2` | Codec MS-CHAPv2 client-side (RFC 2759): NT hash (MD4), challenge hash (SHA-1), NT-Response (3×DES) + dẫn xuất HLAK/MPPE (RFC 3079); dùng chung cho PPP auth & IKEv2 EAP | [MsChapV2.cs:11](MsChapV2.cs#L11) |
+| `MsChapV2` | Codec MS-CHAPv2 client-side (RFC 2759): NT hash (MD4), challenge hash (SHA-1), NT-Response (3×DES), Authenticator-Response §8.7 (`GenerateAuthenticatorResponse`) + dẫn xuất HLAK/MPPE (RFC 3079) & EAP-MSK 64B (`DeriveMsk`); dùng chung cho PPP auth & IKEv2 EAP | [MsChapV2.cs:11](MsChapV2.cs#L11) |
 | `HmacUtil` | Internal: chọn `HMACMD5/SHA1/SHA256/SHA384/SHA512` theo `HashAlgorithmName` | [HmacUtil.cs:6](HmacUtil.cs#L6) |
 
 ## Chuẩn / RFC tuân thủ
@@ -93,8 +93,8 @@ TqkLibrary.VpnClient.Crypto/
 | FIPS 197 (AES) | `AesCbcCipher`, `AesCtr`, `AesGcmCipher` | [AesCbcCipher.cs:10](AesCbcCipher.cs#L10), [AesCtr.cs:9](AesCtr.cs#L9), [Aead/AesGcmCipher.cs:18](Aead/AesGcmCipher.cs#L18) | (suy luận) AES không ghi tên FIPS trong comment |
 | NIST SP 800-38D (AES-GCM / GCM) | `AesGcmCipher` | [Aead/AesGcmCipher.cs:18](Aead/AesGcmCipher.cs#L18) | (suy luận) comment chỉ nói "AES-GCM AEAD" |
 | RFC 2104 / FIPS 198-1 (HMAC) | `HmacUtil`, `HmacPrf`, `HmacIntegrity` | [HmacUtil.cs:6](HmacUtil.cs#L6) | (suy luận) dùng `HMAC*` của BCL |
-| RFC 2759 (MS-CHAPv2) | `MsChapV2` (codec) trên `Md4`+`Des`+SHA-1 | [MsChapV2.cs:11](MsChapV2.cs#L11) | NtPasswordHash §8.3 [L14](MsChapV2.cs#L14), ChallengeHash §8.2 [L18](MsChapV2.cs#L18), ChallengeResponse §8.5 [L34](MsChapV2.cs#L34), GenerateNTResponse §8.1 [L50](MsChapV2.cs#L50) |
-| RFC 3079 (dẫn xuất khoá MPPE) | `MsChapV2.DeriveHlak` | [MsChapV2.cs:87](MsChapV2.cs#L87) | Master/Send/Receive key → HLAK 32 byte cho SSTP crypto binding |
+| RFC 2759 (MS-CHAPv2) | `MsChapV2` (codec) trên `Md4`+`Des`+SHA-1 | [MsChapV2.cs:11](MsChapV2.cs#L11) | NtPasswordHash §8.3 [L14](MsChapV2.cs#L14), ChallengeHash §8.2 [L18](MsChapV2.cs#L18), ChallengeResponse §8.5 [L34](MsChapV2.cs#L34), GenerateNTResponse §8.1 [L50](MsChapV2.cs#L50), GenerateAuthenticatorResponse §8.7 [L130](MsChapV2.cs#L130) |
+| RFC 3079 (dẫn xuất khoá MPPE / EAP-MSK) | `MsChapV2.DeriveHlak` / `MsChapV2.DeriveMsk` | [MsChapV2.cs:86](MsChapV2.cs#L86), [DeriveMsk L106](MsChapV2.cs#L106) | HLAK 32B (SSTP crypto binding) + EAP-MSK 64B = recv\|\|send\|\|zeros (khớp strongSwan/wpa_supplicant) cho IKEv2 EAP AUTH |
 
 ## API / cách dùng
 
