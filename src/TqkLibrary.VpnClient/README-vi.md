@@ -8,7 +8,7 @@ Project này là **điểm vào (entry point)** duy nhất của toàn bộ thư
 
 - Cho ứng dụng một API gọn để **đăng ký các protocol driver** (SSTP, L2TP/IPsec...) theo kiểu fluent rồi **mở kết nối theo tên giao thức**.
 - Giấu toàn bộ độ phức tạp của stack bên dưới (IKE/ESP/L2TP/PPP/IP stack): app chỉ thấy `VpnClient.ConnectAsync(...)` trả về một `IVpnConnection`.
-- Là nơi **đảo ngược phụ thuộc** hội tụ: façade biết về các driver cụ thể (`SstpDriver`, `L2tpIpsecDriver`), còn mọi tầng dưới chỉ phụ thuộc vào abstractions.
+- Là nơi **đảo ngược phụ thuộc** hội tụ: façade biết về các driver cụ thể (`SstpDriver`, `L2tpIpsecDriver`, `Ikev2Driver`), còn mọi tầng dưới chỉ phụ thuộc vào abstractions.
 
 Vì sao tồn tại: tách "ai dùng giao thức nào" (ứng dụng) khỏi "giao thức được lắp ráp ra sao" (driver + protocol + crypto). App chỉ cần `TqkLibrary.VpnClient`, không phải tham chiếu trực tiếp tới Ipsec/L2tp/Ppp...
 
@@ -19,6 +19,7 @@ Vì sao tồn tại: tách "ai dùng giao thức nào" (ứng dụng) khỏi "gi
 - **Phụ thuộc (ProjectReference):**
   - [TqkLibrary.VpnClient.Sockets](../TqkLibrary.VpnClient.Sockets) — API socket chạy trong tunnel (re-export cho app).
   - [TqkLibrary.VpnClient.Drivers.L2tpIpsec](../TqkLibrary.VpnClient.Drivers.L2tpIpsec) — nơi `L2tpIpsecDriver` được khai báo.
+  - [TqkLibrary.VpnClient.Drivers.Ikev2](../TqkLibrary.VpnClient.Drivers.Ikev2) — nơi `Ikev2Driver` (V.1) được khai báo.
   - [TqkLibrary.VpnClient.Drivers.Sstp](../TqkLibrary.VpnClient.Drivers.Sstp) — nơi `SstpDriver` được khai báo.
   - Không có `PackageReference` đặc thù. Façade **không** ref `Crypto` trực tiếp (2 file `VpnClient`/`VpnClientBuilder` không chạm primitive nào — P0.2); `Crypto` vẫn có trong output theo **transitive** qua Drivers → Ipsec/Ppp.
 - **Được dùng bởi:** ứng dụng tiêu thụ (không project nào khác trong solution ref tới project này).
@@ -27,7 +28,7 @@ Vì sao tồn tại: tách "ai dùng giao thức nào" (ứng dụng) khỏi "gi
 
 ```
 TqkLibrary.VpnClient/
-├── VpnClientBuilder.cs   # Builder fluent: AddDriver / UseSstp / UseL2tpIpsec → Build()
+├── VpnClientBuilder.cs   # Builder fluent: AddDriver / UseSstp / UseL2tpIpsec / UseIkev2 → Build()
 └── VpnClient.cs          # Client đã build: giữ map driver theo tên, ConnectAsync / Protocols / GetCapabilities
 ```
 
@@ -37,10 +38,11 @@ Project chỉ gồm 2 type — toàn bộ "logic" thực sự nằm ở các pro
 
 | Type | Vai trò | Vị trí |
 | --- | --- | --- |
-| `VpnClientBuilder` | Builder fluent: đăng ký driver theo `Name`, có shortcut `UseSstp()`/`UseL2tpIpsec()`, kết thúc bằng `Build()` | [VpnClientBuilder.cs:8](VpnClientBuilder.cs#L8) |
+| `VpnClientBuilder` | Builder fluent: đăng ký driver theo `Name`, có shortcut `UseSstp()`/`UseL2tpIpsec()`/`UseIkev2()`, kết thúc bằng `Build()` | [VpnClientBuilder.cs:8](VpnClientBuilder.cs#L8) |
 | `VpnClientBuilder.AddDriver` | Đăng ký một `IVpnProtocolDriver` bất kỳ (keyed theo `driver.Name`) | [VpnClientBuilder.cs:13](VpnClientBuilder.cs#L13) |
 | `VpnClientBuilder.UseSstp` | Đăng ký `SstpDriver` (key `"sstp"`), auto-reconnect bật mặc định; overload nhận `SstpReconnectOptions` và/hoặc `RemoteCertificateValidationCallback` (cert TLS, P0.6 — null ⇒ accept all) | [VpnClientBuilder.cs:20-32](VpnClientBuilder.cs#L20-L32) |
 | `VpnClientBuilder.UseL2tpIpsec` | Đăng ký `L2tpIpsecDriver` (key `"l2tp-ipsec"`), auto-reconnect bật mặc định; overload nhận `L2tpIpsecReconnectOptions` và `(reconnect, L2tpIpsecTimeoutOptions)` | [VpnClientBuilder.cs:35-42](VpnClientBuilder.cs#L35-L42) |
+| `VpnClientBuilder.UseIkev2` | Đăng ký `Ikev2Driver` (key `"ikev2"`, IKEv2-native RFC 7296 PSK + ESP tunnel mode, V.1), auto-reconnect bật mặc định; overload nhận `Ikev2ReconnectOptions` | [VpnClientBuilder.cs:45-48](VpnClientBuilder.cs#L45-L48) |
 | `VpnClient` | Client đã build: giữ `IReadOnlyDictionary<string, IVpnProtocolDriver>` các driver | [VpnClient.cs:8](VpnClient.cs#L8) |
 | `VpnClient.ConnectAsync` | Tra driver theo tên giao thức (qua helper `ResolveDriver`) rồi ủy thác `driver.ConnectAsync(endpoint, credentials, ct)` | [VpnClient.cs:18](VpnClient.cs#L18) |
 | `VpnClient.Protocols` | Liệt kê tên các giao thức đã đăng ký | [VpnClient.cs:15](VpnClient.cs#L15) |
@@ -68,6 +70,7 @@ Bản thân project façade **không hiện thực chuẩn mạng nào** — nó
 | [MS-SSTP] (Secure Socket Tunneling Protocol) | `SstpDriver` qua `UseSstp()` | [VpnClientBuilder.cs:20-32](VpnClientBuilder.cs#L20-L32), [SstpDriver.cs:7-8](../TqkLibrary.VpnClient.Drivers.Sstp/SstpDriver.cs#L7-L8) | Comment "MS-SSTP driver" ở façade; driver mô tả "TLS over 443, PPP, MS-CHAPv2"; cert TLS validate qua callback tùy chọn (P0.6) |
 | RFC 2759 (MS-CHAPv2) | `SstpDriver` + `L2tpIpsecDriver` (PPP auth) | [VpnClientBuilder.cs:20](VpnClientBuilder.cs#L20), [VpnClientBuilder.cs:35](VpnClientBuilder.cs#L35) | (suy luận) — hiện thực thực tế ở Ppp/`MsChapV2` |
 | RFC 2409 (IKEv1 / ISAKMP) | `L2tpIpsecDriver` qua `UseL2tpIpsec()` | [VpnClientBuilder.cs:26-29](VpnClientBuilder.cs#L26-L29), [L2tpIpsecDriver.cs:7](../TqkLibrary.VpnClient.Drivers.L2tpIpsec/L2tpIpsecDriver.cs#L7) | (suy luận) — comment driver "IKEv1 PSK over NAT-T"; logic ở Ipsec `Ike/V1` |
+| RFC 7296 (IKEv2) + ESP tunnel mode + CP | `Ikev2Driver` qua `UseIkev2()` (V.1) | [VpnClientBuilder.cs:45-48](VpnClientBuilder.cs#L45-L48), [Ikev2Driver.cs:9](../TqkLibrary.VpnClient.Drivers.Ikev2/Ikev2Driver.cs#L9) | (suy luận) — comment driver "IKEv2 PSK over NAT-T, CP, ESP tunnel mode, no PPP"; logic ở Ipsec `Ike/V2` + `Esp` |
 | RFC 4303 (ESP) | `L2tpIpsecDriver` (data plane) | [L2tpIpsecDriver.cs:7](../TqkLibrary.VpnClient.Drivers.L2tpIpsec/L2tpIpsecDriver.cs#L7), [L2tpIpsecDriver.cs:33](../TqkLibrary.VpnClient.Drivers.L2tpIpsec/L2tpIpsecDriver.cs#L33) | (suy luận) — `SecurityKinds = Esp`; hiện thực ở Ipsec `Esp` |
 | RFC 3948 (UDP encapsulation / NAT-T) | `L2tpIpsecDriver` (transport UDP) | [L2tpIpsecDriver.cs:7](../TqkLibrary.VpnClient.Drivers.L2tpIpsec/L2tpIpsecDriver.cs#L7), [L2tpIpsecDriver.cs:32](../TqkLibrary.VpnClient.Drivers.L2tpIpsec/L2tpIpsecDriver.cs#L32) | (suy luận) — "NAT-T"; hiện thực ở [`Ipsec/Nat`](../TqkLibrary.VpnClient.Ipsec/Nat) |
 | RFC 2661 (L2TPv2) | `L2tpIpsecDriver` | [L2tpIpsecDriver.cs:7](../TqkLibrary.VpnClient.Drivers.L2tpIpsec/L2tpIpsecDriver.cs#L7) | (suy luận) — comment driver "L2TP"; hiện thực ở L2tp |
@@ -80,7 +83,7 @@ Bản thân project façade **không hiện thực chuẩn mạng nào** — nó
 
 Điểm vào public:
 
-- `VpnClientBuilder` → `UseSstp()`, `UseSstp(SstpReconnectOptions)`, `UseSstp(RemoteCertificateValidationCallback)`, `UseSstp(SstpReconnectOptions, RemoteCertificateValidationCallback)`, `UseL2tpIpsec()`, `UseL2tpIpsec(L2tpIpsecReconnectOptions)`, `UseL2tpIpsec(L2tpIpsecReconnectOptions, L2tpIpsecTimeoutOptions)`, `AddDriver(IVpnProtocolDriver)`, `Build()`.
+- `VpnClientBuilder` → `UseSstp()`, `UseSstp(SstpReconnectOptions)`, `UseSstp(RemoteCertificateValidationCallback)`, `UseSstp(SstpReconnectOptions, RemoteCertificateValidationCallback)`, `UseL2tpIpsec()`, `UseL2tpIpsec(L2tpIpsecReconnectOptions)`, `UseL2tpIpsec(L2tpIpsecReconnectOptions, L2tpIpsecTimeoutOptions)`, `UseIkev2()`, `UseIkev2(Ikev2ReconnectOptions)`, `AddDriver(IVpnProtocolDriver)`, `Build()`.
 - `VpnClient` → `ConnectAsync(protocol, endpoint, credentials, ct)`, `Protocols`, `GetCapabilities(protocol)`.
 
 Ví dụ tối thiểu:
@@ -121,11 +124,11 @@ Façade rất mỏng, gồm hai bước:
 1. **Đăng ký (build-time).** `UseSstp()`/`UseL2tpIpsec()` tạo driver cụ thể và gọi `AddDriver` để nạp vào `Dictionary<string, IVpnProtocolDriver>` keyed theo `driver.Name` (`"sstp"`, `"l2tp-ipsec"`) — [VpnClientBuilder.cs:13-42](VpnClientBuilder.cs#L13-L42). `Build()` đóng gói dictionary đó vào `VpnClient` — [VpnClientBuilder.cs:45](VpnClientBuilder.cs#L45).
 2. **Kết nối (run-time).** `ConnectAsync` và `GetCapabilities` đều tra driver qua helper chung `ResolveDriver`: nếu không có → `NotSupportedException` kèm danh sách giao thức đã đăng ký (P0.5, đồng nhất 2 đường); nếu có → `ConnectAsync` ủy thác thẳng `driver.ConnectAsync(endpoint, credentials, ct)` và trả `IVpnConnection` — [VpnClient.cs:18-31](VpnClient.cs#L18-L31).
 
-Toàn bộ việc lắp ráp stack (IKE → ESP → L2TP → PPP → IP) diễn ra **bên trong driver**, không nằm ở project này. Hai driver nằm ở hai project anh em: [TqkLibrary.VpnClient.Drivers.L2tpIpsec](../TqkLibrary.VpnClient.Drivers.L2tpIpsec) và [TqkLibrary.VpnClient.Drivers.Sstp](../TqkLibrary.VpnClient.Drivers.Sstp). Ví dụ điều phối L2TP/IPsec: `L2tpIpsecDriver.ConnectAsync` dựng `L2tpIpsecConnection` rồi gọi `ConnectAsync` của nó — [L2tpIpsecDriver.cs:43-57](../TqkLibrary.VpnClient.Drivers.L2tpIpsec/L2tpIpsecDriver.cs#L43-L57). Chi tiết luồng handshake xem [.docs/10 §6](../../.docs/10-codebase-architecture-and-flow.md).
+Toàn bộ việc lắp ráp stack (IKE → ESP → L2TP → PPP → IP) diễn ra **bên trong driver**, không nằm ở project này. Ba driver nằm ở ba project anh em: [TqkLibrary.VpnClient.Drivers.L2tpIpsec](../TqkLibrary.VpnClient.Drivers.L2tpIpsec), [TqkLibrary.VpnClient.Drivers.Ikev2](../TqkLibrary.VpnClient.Drivers.Ikev2) (V.1, IKEv2 + ESP tunnel mode, không PPP) và [TqkLibrary.VpnClient.Drivers.Sstp](../TqkLibrary.VpnClient.Drivers.Sstp). Ví dụ điều phối L2TP/IPsec: `L2tpIpsecDriver.ConnectAsync` dựng `L2tpIpsecConnection` rồi gọi `ConnectAsync` của nó — [L2tpIpsecDriver.cs:43-57](../TqkLibrary.VpnClient.Drivers.L2tpIpsec/L2tpIpsecDriver.cs#L43-L57). Chi tiết luồng handshake xem [.docs/10 §6](../../.docs/10-codebase-architecture-and-flow.md).
 
 ## Trạng thái & ghi chú
 
-- **Driver đã wire:** `sstp` và `l2tp-ipsec` (qua `UseSstp()`/`UseL2tpIpsec()`). Driver tùy ý khác có thể nạp qua `AddDriver(IVpnProtocolDriver)`.
+- **Driver đã wire:** `sstp`, `l2tp-ipsec` và `ikev2` (qua `UseSstp()`/`UseL2tpIpsec()`/`UseIkev2()`). Driver tùy ý khác có thể nạp qua `AddDriver(IVpnProtocolDriver)`.
 - **L2TP/IPsec chạy trên IKEv1** (đã kiểm chứng live trên VPN Gate). IKEv2 trong project Ipsec đã đủ và có test nhưng **chưa driver nào dùng** — façade hiện không có `UseIkeV2()`.
 - **PSK bắt buộc:** `L2tpIpsecDriver` **không** nhét PSK mặc định — `VpnCredentials.PreSharedKey` null/rỗng ⇒ ném `ArgumentException` (default credential đặc thù VPN Gate không thuộc lib chung) — [L2tpIpsecDriver.cs:41-45](../TqkLibrary.VpnClient.Drivers.L2tpIpsec/L2tpIpsecDriver.cs#L41-L45). Group PSK `"vpn"` của VPN Gate nằm ở tầng demo ([VpnTarget ctor `?psk=` default :16](../../demo/Vpn2ProxyDemo/CommandModules/Models/VpnTarget.cs#L16)).
 - **Multi-host:** `OpenSessionAsync` được khai báo ở `IVpnConnection` nhưng cả SSTP lẫn L2TP đều đặt `MultiHostModel.None` → chỉ một session/kết nối.
