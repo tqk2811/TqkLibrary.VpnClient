@@ -10,8 +10,7 @@ namespace TqkLibrary.Vpn.Sstp.Tests
 {
     /// <summary>
     /// Offline coverage for the <see cref="ITlsByteStream"/> seam introduced in P0.1: the SSTP_DUPLEX_POST handshake
-    /// and the 4-byte control/data framing run over a fake in-memory byte stream, with no live server. This is the
-    /// groundwork the SSTP supervisor/keepalive offline tests (roadmap P1.6) build on.
+    /// and the 4-byte control/data framing run over a fake in-memory byte stream, with no live server.
     /// </summary>
     public class SstpTransportSeamTests
     {

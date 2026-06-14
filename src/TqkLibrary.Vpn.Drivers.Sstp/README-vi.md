@@ -125,7 +125,7 @@ Class hạ tầng `SstpConnection` cũng public nếu cần điều khiển chi 
 - **Seam byte-stream (P0.1):** TLS-over-TCP tách vào [`TlsByteStream`](Transport/TlsByteStream.cs#L20) sau [`ITlsByteStream`](Transport/ITlsByteStream.cs#L14) (impl đầu tiên của `IByteStreamTransport`), inject qua `Func<ITlsByteStream>` ở `SstpConnection`; framing chạy offline qua fake stream trong [SstpTransportSeamTests](../../tests/TqkLibrary.Vpn.Sstp.Tests/SstpTransportSeamTests.cs). `ConnectAsync` nay **honor `CancellationToken`** cả 2 TFM (overload native net8.0; cancel-by-dispose netstandard2.0).
 - **Hạn chế đã biết:**
   - SSTP **mặc định** chấp nhận mọi cert TLS (xác thực bằng crypto binding, không qua PKI); truyền `RemoteCertificateValidationCallback` qua `SstpDriver`/`UseSstp` để validate cert (P0.6 — callback vẫn nhận cert đã bắt giữ cho crypto binding) — [Transport/TlsByteStream.cs:62-68](Transport/TlsByteStream.cs#L62-L68).
-  - Supervisor/keepalive/reconnect của SSTP hiện mới phủ ở mức transport (seam trên) + **live integration test**; test offline đầy đủ supervisor (chèn fake stream + cert giả) là roadmap P1.6.
+  - Supervisor/keepalive/reconnect của SSTP hiện phủ ở mức transport (seam trên) + **live integration test**; test offline trọn vẹn supervisor sẽ cần giả lập **server** PPP (LCP+MS-CHAPv2 phía authenticator) — ngoài phạm vi thư viện client, không làm.
   - Mỗi connection chỉ một PPP session; `OpenSessionAsync` ném `NotSupportedException` — [SstpVpnConnection.cs:22-23](SstpVpnConnection.cs#L22-L23).
 
 > Tài liệu as-built tổng thể: [.docs/10-codebase-architecture-and-flow.md](../../.docs/10-codebase-architecture-and-flow.md) §7/§7.1 · roadmap: [.docs/11-todo-roadmap.md](../../.docs/11-todo-roadmap.md).

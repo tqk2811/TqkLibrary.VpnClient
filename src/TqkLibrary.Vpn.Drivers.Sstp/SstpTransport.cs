@@ -10,7 +10,7 @@ namespace TqkLibrary.Vpn.Drivers.Sstp
     /// The SSTP transport: the SSTP_DUPLEX_POST HTTP handshake and framing of SSTP control/data packets over a TLS
     /// byte stream ([MS-SSTP] §2.2.1, §3). The TLS connection itself is an injected <see cref="ITlsByteStream"/>
     /// (default <see cref="TlsByteStream"/>), so the framing logic can be exercised offline over a fake stream
-    /// (roadmap P1.6) and the TLS layer can later be shared (roadmap F.1).
+    /// and the TLS layer can later be shared (roadmap F.1).
     /// </summary>
     public sealed class SstpTransport : IDisposable
     {

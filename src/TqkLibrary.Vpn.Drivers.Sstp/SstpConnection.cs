@@ -58,7 +58,7 @@ namespace TqkLibrary.Vpn.Drivers.Sstp
         /// <summary>
         /// Creates a connection to the given SSTP server. <paramref name="transportFactory"/> supplies the TLS byte
         /// stream for each attempt (default: a real <see cref="TlsByteStream"/>); an offline test injects a fake stream
-        /// here to exercise the handshake/keepalive/reconnect supervisor without a live server (roadmap P1.6).
+        /// here to exercise the handshake/keepalive/reconnect supervisor without a live server.
         /// <paramref name="certificateValidationCallback"/> validates the server TLS certificate of the default
         /// transport (null ⇒ accept any cert); it is ignored when an explicit <paramref name="transportFactory"/> is given.
         /// </summary>
