@@ -29,6 +29,9 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
         // Rekey the ESP CHILD_SA at ~90% of a conventional 1-hour lifetime; the sequence-exhaustion watermark rekeys
         // sooner on a very busy tunnel (EspTunnelChannel raises RekeyNeeded near 2^32).
         static readonly TimeSpan RekeyInterval = TimeSpan.FromSeconds(3600 * 9 / 10);
+        // Rekey the IKE SA (control channel) at ~90% of a conventional 8-hour lifetime — mirrors the L2TP/IPsec
+        // Phase-1 rekey cadence. This refreshes only the SK_* keys; the ESP CHILD_SA / data plane is untouched.
+        static readonly TimeSpan RekeyIkeSaInterval = TimeSpan.FromSeconds(3600 * 8 * 9 / 10);
         static readonly TimeSpan RekeyGrace = TimeSpan.FromSeconds(10);
         static readonly TimeSpan ExchangeTimeout = TimeSpan.FromSeconds(2.5);
         const int ExchangeMaxAttempts = 5;
@@ -60,6 +63,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
 
         System.Threading.Timer? _dpdTimer;
         System.Threading.Timer? _rekeyTimer;
+        System.Threading.Timer? _rekeyIkeTimer;
         System.Threading.Timer? _dropTimer;
         int _dpdMissed;
         int _rekeyInProgress;
@@ -278,6 +282,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
             SetState(Ikev2ConnectionState.Connected);
             _dpdTimer = new System.Threading.Timer(_ => _ = SendDpdTickAsync(), null, DpdInterval, DpdInterval);
             _rekeyTimer = new System.Threading.Timer(_ => _ = RekeyChildSaAsync(), null, RekeyInterval, RekeyInterval);
+            _rekeyIkeTimer = new System.Threading.Timer(_ => _ = RekeyIkeSaAsync(), null, RekeyIkeSaInterval, RekeyIkeSaInterval);
         }
 
         void StopKeepalive()
@@ -285,9 +290,11 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
             _keepaliveRunning = false;
             _dpdTimer?.Dispose();
             _rekeyTimer?.Dispose();
+            _rekeyIkeTimer?.Dispose();
             _dropTimer?.Dispose();
             _dpdTimer = null;
             _rekeyTimer = null;
+            _rekeyIkeTimer = null;
             _dropTimer = null;
         }
 
@@ -396,6 +403,27 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
             _dropTimer?.Dispose();
             _dropTimer = new System.Threading.Timer(_ => { try { dataPlane.DropPreviousInbound(); } catch { } },
                 null, RekeyGrace, System.Threading.Timeout.InfiniteTimeSpan);
+        }
+
+        // ---- rekey: replace the IKE SA in place (RFC 7296 §1.3.2/§2.18) ----
+        // Refreshes the control-channel SK_* keys (new SPIs, new D-H, message-id reset to 0). The ESP CHILD_SA / data
+        // plane is unaffected, so there is no make-before-break on traffic — the request rides the old SK channel and the
+        // IkeClient swings onto the new keys once the response is verified. Shares the _rekeyInProgress guard with the
+        // CHILD_SA rekey so the two never run concurrently on the same IKE SA.
+        async Task RekeyIkeSaAsync()
+        {
+            if (!_keepaliveRunning) return;
+            if (Interlocked.CompareExchange(ref _rekeyInProgress, 1, 0) != 0) return;
+            try
+            {
+                IkeClient? ike = _ike;
+                if (ike is null) return;
+
+                byte[] reply = await SendRequestAwaitResponseAsync(ike.BuildRekeyIkeSaRequest()).ConfigureAwait(false);
+                ike.ProcessRekeyIkeSaResponse(reply); // false ⇒ keep the current IKE SA; the lifetime timer retries
+            }
+            catch { /* a failed rekey keeps the current IKE SA; the lifetime timer retries */ }
+            finally { Interlocked.Exchange(ref _rekeyInProgress, 0); }
         }
 
         // ---- link-loss handling + auto-reconnect supervisor (mirrors the L2TP/IPsec driver) ----

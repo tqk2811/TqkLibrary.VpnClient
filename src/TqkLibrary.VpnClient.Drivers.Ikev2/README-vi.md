@@ -36,7 +36,7 @@ TqkLibrary.VpnClient.Drivers.Ikev2/
 | Type | Vai trò | Vị trí |
 |------|---------|--------|
 | `Ikev2Driver` | `IVpnProtocolDriver`: capabilities (L3Ip, **không PPP**, ESP, **PSK\|EAP**, ConfigPush), `ConnectAsync` dựng `Ikev2Connection`; có username+password ⇒ EAP, không ⇒ PSK (lệch một nửa ⇒ `ArgumentException`) | [Ikev2Driver.cs:8](Ikev2Driver.cs#L8) |
-| `Ikev2Connection` | Bộ điều phối: forced NAT-T (500→4500) → IKE_SA_INIT → IKE_AUTH (PSK **hoặc** EAP-MSCHAPv2 loop `RunEapAuthAsync`) +CP → `EspTunnelChannel`; keepalive DPD, rekey CHILD_SA make-before-break, DELETE teardown, supervisor reconnect sau `SwappablePacketChannel` ổn định | [Ikev2Connection.cs:25](Ikev2Connection.cs#L25) |
+| `Ikev2Connection` | Bộ điều phối: forced NAT-T (500→4500) → IKE_SA_INIT → IKE_AUTH (PSK **hoặc** EAP-MSCHAPv2 loop `RunEapAuthAsync`) +CP → `EspTunnelChannel`; keepalive DPD, rekey CHILD_SA make-before-break **+ rekey IKE SA** (`RekeyIkeSaAsync`, ~90% lifetime 8h), DELETE teardown, supervisor reconnect sau `SwappablePacketChannel` ổn định | [Ikev2Connection.cs:25](Ikev2Connection.cs#L25) |
 | `Ikev2VpnConnection` | `IVpnConnection`: 1 session; `OpenSessionAsync` ⇒ `NotSupportedException` (IKEv2 strictly 1 CHILD_SA ở driver này) | [Ikev2VpnConnection.cs:7](Ikev2VpnConnection.cs#L7) |
 | `Ikev2VpnSession` | `IVpnSession`: `PacketChannel` (facade) + `Config`; `ApplyReconnect` cập nhật IP/DNS sau reconnect | [Ikev2VpnSession.cs:10](Ikev2VpnSession.cs#L10) |
 | `Ikev2ReconnectOptions` | `Enabled`/`MaxAttempts`/backoff/jitter | [Ikev2ReconnectOptions.cs:8](Ikev2ReconnectOptions.cs#L8) |
@@ -56,11 +56,12 @@ TqkLibrary.VpnClient.Drivers.Ikev2/
 
 - **DPD keepalive** (RFC 7296 §2.4): mỗi 20s gửi INFORMATIONAL rỗng (`BuildDeadPeerDetection`) qua exchange-gate; quá 3 lần không hồi đáp ⇒ link lost. Probe đến từ gateway (INFORMATIONAL rỗng) ⇒ ack bằng `BuildInformationalResponse`.
 - **Rekey CHILD_SA** (make-before-break): timer ~90% lifetime (1h) **hoặc** watermark sequence ESP ~2³² (`EspTunnelChannel.RekeyNeeded`) → `BuildRekeyChildSaRequest`/`ProcessRekeyChildSaResponse` → `EspTunnelChannel.SwapSession` (gửi SA mới ngay, giữ SA cũ nhận thêm 10s rồi `DropPreviousInbound`).
+- **Rekey IKE SA** (Phase-1-equivalent, RFC 7296 §1.3.2/§2.18): timer ~90% lifetime (8h) → `RekeyIkeSaAsync` gửi `BuildRekeyIkeSaRequest` (CREATE_CHILD_SA: SPI/DH/Nonce mới) trên SK channel **cũ** → `ProcessRekeyIkeSaResponse` swing SK_* mới + reset message-id về 0. **Chỉ refresh khóa control-channel** — ESP CHILD_SA/data plane không đổi nên không cần make-before-break trên traffic. Chung guard `_rekeyInProgress` với rekey CHILD_SA (không chạy chồng).
 - **Teardown** (`DisconnectAsync`): gửi `BuildDeleteIkeSa` (best-effort), hủy receive loop, đóng socket.
 - **Auto-reconnect**: gateway DELETE / DPD chết ⇒ supervisor dựng lại tunnel sau `SwappablePacketChannel`; backoff mũ + jitter.
 
 ## Trạng thái & ghi chú
 
 - **Validate live cần lab Q.1** (strongSwan Docker) — môi trường Termux/PRoot không có Docker. Toán protocol (handshake, CP, DPD/DELETE, rekey) đã test offline ở [`Ipsec.Ike.Tests`](../../tests/TqkLibrary.VpnClient.Ipsec.Ike.Tests) + data plane ở [`Ipsec.Esp.Tests`](../../tests/TqkLibrary.VpnClient.Ipsec.Esp.Tests); test client của driver (capabilities + guard) ở [`Drivers.Ikev2.Tests`](../../tests/TqkLibrary.VpnClient.Drivers.Ikev2.Tests).
-- **PSK hoặc EAP-MSCHAPv2** + **forced NAT-T** + **1 CHILD_SA / 1 IP ảo**. **Chưa**: rekey IKE SA (Phase-1 equivalent) gắn vào driver, honest-first NAT-T, multi-traffic-selector, responder AUTH bằng cert (EAP hiện verify responder bằng PSK) — xem roadmap V.1/[`11`](../../.docs/11-todo-roadmap.md).
+- **PSK hoặc EAP-MSCHAPv2** + **forced NAT-T** + **1 CHILD_SA / 1 IP ảo** + rekey **CHILD_SA và IKE SA** đều gắn timer trong driver. **Chưa**: honest-first NAT-T, multi-traffic-selector, responder AUTH bằng cert (EAP hiện verify responder bằng PSK), DELETE SA cũ sau rekey IKE SA (hiện bỏ SA cũ cho gateway tự timeout) — xem roadmap V.1/[`11`](../../.docs/11-todo-roadmap.md).
 - **Thuần client**: không có code server; "responder" trong test chỉ là harness in-process.
