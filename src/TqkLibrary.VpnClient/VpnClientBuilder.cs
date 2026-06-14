@@ -1,5 +1,6 @@
 using System.Net.Security;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
+using TqkLibrary.VpnClient.Drivers.Ikev2;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec;
 using TqkLibrary.VpnClient.Drivers.Sstp;
 
@@ -40,6 +41,12 @@ namespace TqkLibrary.VpnClient
         /// <summary>Registers the L2TP/IPsec driver with explicit auto-reconnect and IKE/L2TP timeout options.</summary>
         public VpnClientBuilder UseL2tpIpsec(L2tpIpsecReconnectOptions reconnectOptions, L2tpIpsecTimeoutOptions timeoutOptions)
             => AddDriver(new L2tpIpsecDriver(reconnectOptions, timeoutOptions));
+
+        /// <summary>Registers the IKEv2-native driver (RFC 7296 PSK + NAT-T, CP virtual IP, ESP tunnel mode) with auto-reconnect enabled by default.</summary>
+        public VpnClientBuilder UseIkev2() => AddDriver(new Ikev2Driver());
+
+        /// <summary>Registers the IKEv2-native driver with explicit auto-reconnect options (e.g. to disable it).</summary>
+        public VpnClientBuilder UseIkev2(Ikev2ReconnectOptions reconnectOptions) => AddDriver(new Ikev2Driver(reconnectOptions));
 
         /// <summary>Builds the client.</summary>
         public VpnClient Build() => new VpnClient(_drivers);

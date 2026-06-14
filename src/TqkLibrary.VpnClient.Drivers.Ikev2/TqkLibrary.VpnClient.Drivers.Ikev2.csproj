@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>IKEv2-native VPN protocol driver (RFC 7296): IKE_SA_INIT + IKE_AUTH (PSK) over NAT-T, Configuration Payload for the virtual IP/DNS, ESP tunnel mode straight to an IP channel (no PPP); DPD keepalive, CREATE_CHILD_SA rekey, DELETE teardown, auto-reconnect.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Ipsec\TqkLibrary.VpnClient.Ipsec.csproj" />
+  </ItemGroup>
+
+</Project>
