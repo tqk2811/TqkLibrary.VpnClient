@@ -52,10 +52,57 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             int integrityKeyLength,
             int prfKeyLength)
         {
+            // SKEYSEED = prf(Ni|Nr, g^ir) — the nonces key the PRF over the fresh D-H secret (RFC 7296 §2.14).
             byte[] noncesKey = Concat(nonceInitiator, nonceResponder);
             byte[] skeyseed = new byte[prf.OutputSizeInBytes];
             prf.Compute(noncesKey, sharedSecret, skeyseed);
+            return Expand(prf, skeyseed, nonceInitiator, nonceResponder, spiInitiator, spiResponder,
+                encryptionKeyLength, integrityKeyLength, prfKeyLength);
+        }
 
+        /// <summary>
+        /// Derives the key set for an IKE SA rekeyed via CREATE_CHILD_SA (RFC 7296 §2.18): the new SKEYSEED is
+        /// seeded from the <em>old</em> SA's SK_d — <c>SKEYSEED = prf(SK_d(old), g^ir(new) | Ni | Nr)</c> — then
+        /// expanded with prf+ exactly as the initial derivation. <paramref name="oldSkD"/> is the previous IKE SA's
+        /// SK_d; the nonces and SPIs are the new SA's. Symmetric to the IKEv1 Phase-1 in-place rekey.
+        /// </summary>
+        public static IkeKeyMaterial DeriveRekey(
+            IPrf prf,
+            byte[] oldSkD,
+            byte[] nonceInitiator,
+            byte[] nonceResponder,
+            byte[] sharedSecret,
+            byte[] spiInitiator,
+            byte[] spiResponder,
+            int encryptionKeyLength,
+            int integrityKeyLength,
+            int prfKeyLength)
+        {
+            // SKEYSEED = prf(SK_d(old), g^ir(new) | Ni | Nr) — chains the new SA to the old via SK_d (RFC 7296 §2.18).
+            byte[] seed = Concat(sharedSecret, nonceInitiator, nonceResponder);
+            byte[] skeyseed = new byte[prf.OutputSizeInBytes];
+            prf.Compute(oldSkD, seed, skeyseed);
+            return Expand(prf, skeyseed, nonceInitiator, nonceResponder, spiInitiator, spiResponder,
+                encryptionKeyLength, integrityKeyLength, prfKeyLength);
+        }
+
+        /// <summary>Derives with the project's default IKE suite: AES-CBC-256, HMAC-SHA-256-128, PRF-HMAC-SHA-256.</summary>
+        public static IkeKeyMaterial DeriveDefault(
+            byte[] nonceInitiator, byte[] nonceResponder, byte[] sharedSecret, byte[] spiInitiator, byte[] spiResponder)
+            => Derive(HmacPrf.Sha256(), nonceInitiator, nonceResponder, sharedSecret, spiInitiator, spiResponder,
+                encryptionKeyLength: 32, integrityKeyLength: 32, prfKeyLength: 32);
+
+        /// <summary>Rekey derivation with the project's default IKE suite (mirrors <see cref="DeriveDefault"/>).</summary>
+        public static IkeKeyMaterial DeriveRekeyDefault(
+            byte[] oldSkD, byte[] nonceInitiator, byte[] nonceResponder, byte[] sharedSecret, byte[] spiInitiator, byte[] spiResponder)
+            => DeriveRekey(HmacPrf.Sha256(), oldSkD, nonceInitiator, nonceResponder, sharedSecret, spiInitiator, spiResponder,
+                encryptionKeyLength: 32, integrityKeyLength: 32, prfKeyLength: 32);
+
+        // Common prf+ expansion: {SK_d | SK_ai | SK_ar | SK_ei | SK_er | SK_pi | SK_pr} = prf+(SKEYSEED, Ni|Nr|SPIi|SPIr).
+        static IkeKeyMaterial Expand(
+            IPrf prf, byte[] skeyseed, byte[] nonceInitiator, byte[] nonceResponder,
+            byte[] spiInitiator, byte[] spiResponder, int encryptionKeyLength, int integrityKeyLength, int prfKeyLength)
+        {
             byte[] seed = Concat(nonceInitiator, nonceResponder, spiInitiator, spiResponder);
             int total = prfKeyLength + integrityKeyLength * 2 + encryptionKeyLength * 2 + prfKeyLength * 2;
             byte[] keys = PrfPlus.Expand(prf, skeyseed, seed, total);
@@ -70,12 +117,6 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             byte[] skPr = Slice(keys, ref o, prfKeyLength);
             return new IkeKeyMaterial(skeyseed, skD, skAi, skAr, skEi, skEr, skPi, skPr);
         }
-
-        /// <summary>Derives with the project's default IKE suite: AES-CBC-256, HMAC-SHA-256-128, PRF-HMAC-SHA-256.</summary>
-        public static IkeKeyMaterial DeriveDefault(
-            byte[] nonceInitiator, byte[] nonceResponder, byte[] sharedSecret, byte[] spiInitiator, byte[] spiResponder)
-            => Derive(HmacPrf.Sha256(), nonceInitiator, nonceResponder, sharedSecret, spiInitiator, spiResponder,
-                encryptionKeyLength: 32, integrityKeyLength: 32, prfKeyLength: 32);
 
         static byte[] Slice(byte[] source, ref int offset, int length)
         {

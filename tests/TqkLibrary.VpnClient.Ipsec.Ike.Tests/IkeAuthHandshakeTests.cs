@@ -197,6 +197,33 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.Tests
             Assert.Equal("rekey pong", System.Text.Encoding.ASCII.GetString(gotByClient));
         }
 
+        [Fact]
+        public void CreateChildSa_RekeysTheIkeSa_AndTheNewKeysCarryTheSkChannel()
+        {
+            IkeClient client = HandshakeReady(out SimulatedResponder responder);
+            byte[] originalInitiatorSpi = responder.InitiatorSpi; // the old IKE SA's initiator SPI
+
+            // CREATE_CHILD_SA rekeying the IKE SA: built on the OLD SA (message ID 2), then swing onto the new SA.
+            byte[] rekeyRequest = client.BuildRekeyIkeSaRequest();
+            Assert.True(client.ProcessRekeyIkeSaResponse(responder.HandleRekeyIkeSa(rekeyRequest)));
+
+            Assert.Equal(0u, client.NextMessageId);                       // the replacement IKE SA counts from 0
+            Assert.Equal(8, responder.NewInitiatorSpi.Length);
+            Assert.NotEqual(originalInitiatorSpi, responder.NewInitiatorSpi); // a fresh 8-byte initiator SPI
+
+            // A DPD now rides the NEW SK channel: new SPIs in the header, message ID 0, readable only by the new keys.
+            byte[] dpdWire = client.BuildDeadPeerDetection();
+            IkeMessage dpd = responder.DecryptRekeyed(dpdWire)!;
+            Assert.Equal(IkeExchangeType.Informational, dpd.ExchangeType);
+            Assert.Empty(dpd.Payloads);
+            Assert.Equal(0u, dpd.MessageId);
+            Assert.Equal(responder.NewInitiatorSpi, dpd.InitiatorSpi);
+            Assert.Equal(responder.NewResponderSpi, dpd.ResponderSpi);
+
+            // The old SK keys are retired — the old cipher must not decrypt traffic on the rekeyed SA.
+            Assert.Null(responder.Decrypt(dpdWire));
+        }
+
         // Runs IKE_SA_INIT + IKE_AUTH and returns a client with a live SK channel plus its responder.
         static IkeClient HandshakeReady(out SimulatedResponder responder)
         {
@@ -402,6 +429,58 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.Tests
                 EspCipherSuite send = _esp.BuildSuite(k.EncryptionResponder, k.IntegrityResponder);
                 EspCipherSuite receive = _esp.BuildSuite(k.EncryptionInitiator, k.IntegrityInitiator);
                 return new EspSession(ToSpi(_rekeyOutbound), send, ToSpi(_rekeyInbound), receive);
+            }
+
+            // ---- CREATE_CHILD_SA rekey of the IKE SA itself (new SPIs + fresh D-H) ----
+            byte[] _ikeRekeyInitiatorSpi = Array.Empty<byte>(); // the client's new IKE SPI
+            byte[] _ikeRekeyResponderSpi = Array.Empty<byte>(); // ours
+            IkeCipher? _rekeyedCipher;                          // the SK cipher of the replacement IKE SA
+
+            public byte[] NewInitiatorSpi => _ikeRekeyInitiatorSpi;
+            public byte[] NewResponderSpi => _ikeRekeyResponderSpi;
+
+            /// <summary>Decrypts a message that rode the rekeyed (new) IKE SA — only the new keys can read it.</summary>
+            public IkeMessage? DecryptRekeyed(byte[] wire) => _rekeyedCipher!.DecryptMessage(wire);
+
+            public byte[] HandleRekeyIkeSa(byte[] wire)
+            {
+                // The rekey exchange itself is protected by the OLD SA, so decrypt/encrypt with the current cipher.
+                IkeMessage request = _cipher!.DecryptMessage(wire)!;
+                byte[] initiatorNonce = request.Find<NoncePayload>()!.Nonce;
+                byte[] initiatorPublic = request.Find<KeyExchangePayload>()!.KeyData;
+                _ikeRekeyInitiatorSpi = request.Find<SecurityAssociationPayload>()!.Proposals.First().Spi;
+
+                _ikeRekeyResponderSpi = new byte[8];
+                for (int i = 0; i < 8; i++) _ikeRekeyResponderSpi[i] = (byte)(0xB0 + i);
+                byte[] responderNonce = new byte[32];
+                for (int i = 0; i < 32; i++) responderNonce[i] = (byte)(0xD0 + i);
+                byte[] privateKey = _dh.GeneratePrivateKey();
+                byte[] publicKey = _dh.DerivePublicValue(privateKey);
+                byte[] shared = _dh.DeriveSharedSecret(privateKey, initiatorPublic);
+
+                // New SKEYSEED chains to the old SA via SK_d, exactly as the client derives it (RFC 7296 §2.18).
+                IkeKeyMaterial newKeys = IkeKeyMaterial.DeriveRekeyDefault(
+                    _keys!.SkD, initiatorNonce, responderNonce, shared, _ikeRekeyInitiatorSpi, _ikeRekeyResponderSpi);
+                _rekeyedCipher = IkeCipher.ForResponder(newKeys);
+
+                var response = new IkeMessage
+                {
+                    InitiatorSpi = _initiatorSpi, // the rekey exchange's header SPIs still belong to the old SA
+                    ResponderSpi = _spi,
+                    ExchangeType = IkeExchangeType.CreateChildSa,
+                    Flags = IkeHeaderFlags.Response,
+                    MessageId = request.MessageId,
+                };
+                var sa = new SecurityAssociationPayload();
+                sa.Proposals.Add(IkeProposals.RekeyIke(_ikeRekeyResponderSpi));
+                response.Payloads.Add(sa);
+                response.Payloads.Add(new KeyExchangePayload
+                {
+                    DiffieHellmanGroup = IkeTransformId.DiffieHellman.Modp2048,
+                    KeyData = publicKey,
+                });
+                response.Payloads.Add(new NoncePayload { Nonce = responderNonce });
+                return _cipher.EncryptMessage(response);
             }
         }
     }

@@ -23,6 +23,17 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             return proposal;
         }
 
+        /// <summary>
+        /// The IKE SA proposal offered in a CREATE_CHILD_SA that rekeys the IKE SA — the same suite as
+        /// <see cref="DefaultIke"/> but carrying the new initiator IKE SPI in the proposal (RFC 7296 §1.3.2/§3.3.1).
+        /// </summary>
+        public static IkeProposal RekeyIke(byte[] spi)
+        {
+            IkeProposal proposal = DefaultIke();
+            proposal.Spi = spi;
+            return proposal;
+        }
+
         /// <summary>The ESP CHILD_SA proposal offered in IKE_AUTH (AES-CBC-256 + HMAC-SHA-256-128, no ESN).</summary>
         public static IkeProposal DefaultEsp(byte[] spi)
         {

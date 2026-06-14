@@ -25,6 +25,14 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
         IkeCipher? _cipher;
         uint _nextMessageId = 2; // IKE_SA_INIT=0, IKE_AUTH=1; post-auth exchanges start here.
 
+        // The "current" IKE SA identity used for post-auth message headers and CHILD_SA keying. These start as the
+        // SPIs/SK_d derived in IKE_SA_INIT and are swapped wholesale when the IKE SA is rekeyed (CREATE_CHILD_SA,
+        // RFC 7296 §2.18) — so DPD/DELETE/child-rekey after a rekey ride the new SA without touching the init state.
+        byte[] _currentInitiatorSpi;
+        byte[] _currentResponderSpi = new byte[8];
+        byte[]? _currentSkD;
+        IkeKeyMaterial? _currentKeys;
+
         /// <summary>
         /// Creates a client with the given PSK and IDi. <paramref name="requestTransportMode"/> asks for ESP
         /// transport mode (L2TP); <paramref name="requestConfiguration"/> attaches a CFG_REQUEST so the gateway
@@ -39,6 +47,7 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             _requestTransportMode = requestTransportMode;
             _requestConfiguration = requestConfiguration;
             _initiator = new IkeSaInitiator(initiatorSpi);
+            _currentInitiatorSpi = _initiator.InitiatorSpi;
             ChildInboundSpi = RandomSpi();
         }
 
@@ -61,8 +70,8 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
         /// </summary>
         public ConfigurationPayload? Configuration { get; private set; }
 
-        /// <summary>The IKE SA key material (after IKE_SA_INIT).</summary>
-        public IkeKeyMaterial? IkeKeys => _initiator.Keys;
+        /// <summary>The current IKE SA key material — the IKE_SA_INIT set, or the rekeyed set after an IKE SA rekey.</summary>
+        public IkeKeyMaterial? IkeKeys => _currentKeys ?? _initiator.Keys;
 
         /// <summary>Builds the IKE_SA_INIT request (caller encodes &amp; sends it).</summary>
         public IkeMessage BuildInitRequest(IPAddress localIp, ushort localPort, IPAddress remoteIp, ushort remotePort)
@@ -73,6 +82,9 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
         {
             IkeKeyMaterial keys = _initiator.ProcessInitResponse(response);
             _cipher = IkeCipher.ForInitiator(keys);
+            _currentResponderSpi = _initiator.ResponderSpi;
+            _currentSkD = keys.SkD;
+            _currentKeys = keys;
         }
 
         /// <summary>Builds the encrypted IKE_AUTH request (IDi, AUTH, SAi2, TSi, TSr [, USE_TRANSPORT_MODE]).</summary>
@@ -177,8 +189,8 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             if (_cipher is null) throw new InvalidOperationException("IKE SA not established.");
             var message = new IkeMessage
             {
-                InitiatorSpi = _initiator.InitiatorSpi,
-                ResponderSpi = _initiator.ResponderSpi,
+                InitiatorSpi = _currentInitiatorSpi,
+                ResponderSpi = _currentResponderSpi,
                 ExchangeType = IkeExchangeType.Informational,
                 Flags = IkeHeaderFlags.Initiator | IkeHeaderFlags.Response,
                 MessageId = messageId,
@@ -192,8 +204,8 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             if (_cipher is null) throw new InvalidOperationException("IKE SA not established.");
             var message = new IkeMessage
             {
-                InitiatorSpi = _initiator.InitiatorSpi,
-                ResponderSpi = _initiator.ResponderSpi,
+                InitiatorSpi = _currentInitiatorSpi,
+                ResponderSpi = _currentResponderSpi,
                 ExchangeType = exchange,
                 Flags = IkeHeaderFlags.Initiator,
                 MessageId = _nextMessageId++,
@@ -245,7 +257,7 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
         /// </summary>
         public ChildSaParameters? ProcessRekeyChildSaResponse(byte[] wire)
         {
-            if (_cipher is null || _initiator.Keys is null || _rekeyInboundSpi is null || _rekeyNonce is null) return null;
+            if (_cipher is null || _currentSkD is null || _rekeyInboundSpi is null || _rekeyNonce is null) return null;
 
             IkeMessage? response = _cipher.DecryptMessage(wire);
             if (response is null) return null;
@@ -260,7 +272,7 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             EspSuiteSelection? selection = ParseEspSelection(proposal);
             if (selection is null) return null;
 
-            ChildSaKeys keys = ChildSaKeys.Derive(_prf, _initiator.Keys.SkD, _rekeyNonce, nr.Nonce,
+            ChildSaKeys keys = ChildSaKeys.Derive(_prf, _currentSkD, _rekeyNonce, nr.Nonce,
                 selection.EncryptionKeyLengthBytes, selection.SecondSliceLengthBytes);
 
             // Adopt the replacement SA as current so the next DELETE/rekey references it.
@@ -272,6 +284,83 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             _rekeyNonce = null;
 
             return new ChildSaParameters(ChildInboundSpi, ChildOutboundSpi, keys, selection);
+        }
+
+        // ---- CREATE_CHILD_SA: rekey the IKE SA itself (new SPIs + fresh D-H), RFC 7296 §1.3.2/§2.18 ----
+        // Phase-1-equivalent rekey: like the IKEv1 in-place Phase 1 rekey, it stands up a brand-new IKE SA (new SPIs,
+        // new D-H, re-derived SK_*) over the existing SK channel, then swings every subsequent exchange onto it.
+
+        readonly ModpDhGroup _ikeRekeyDh = ModpDhGroup.Group14();
+        byte[]? _ikeRekeyPrivateKey;     // our D-H private value for the replacement IKE SA
+        byte[]? _ikeRekeyInitiatorSpi;   // the 8-byte SPI we proposed for the replacement IKE SA
+        byte[]? _ikeRekeyNonce;          // our Ni for the replacement IKE SA's SKEYSEED
+
+        /// <summary>
+        /// Builds a CREATE_CHILD_SA request that rekeys the IKE SA (RFC 7296 §1.3.2): an IKE proposal carrying a fresh
+        /// 8-byte initiator SPI, a new D-H public value (KEi), and a new nonce (Ni). Unlike a CHILD_SA rekey there is
+        /// no REKEY_SA notify and no traffic selectors — the SA being replaced is the one the header SPIs identify.
+        /// </summary>
+        public byte[] BuildRekeyIkeSaRequest()
+        {
+            if (_cipher is null) throw new InvalidOperationException("IKE SA not established.");
+
+            byte[] newSpi = RandomNonZeroSpi();
+            byte[] newNonce = RandomNonce();
+            _ikeRekeyPrivateKey = _ikeRekeyDh.GeneratePrivateKey();
+            byte[] publicValue = _ikeRekeyDh.DerivePublicValue(_ikeRekeyPrivateKey);
+            _ikeRekeyInitiatorSpi = newSpi;
+            _ikeRekeyNonce = newNonce;
+
+            var sa = new SecurityAssociationPayload();
+            sa.Proposals.Add(IkeProposals.RekeyIke(newSpi));
+
+            return BuildEncryptedRequest(IkeExchangeType.CreateChildSa, new IkePayload[]
+            {
+                sa,
+                new KeyExchangePayload { DiffieHellmanGroup = IkeTransformId.DiffieHellman.Modp2048, KeyData = publicValue },
+                new NoncePayload { Nonce = newNonce },
+            });
+        }
+
+        /// <summary>
+        /// Processes the IKE SA rekey response (decrypted with the <em>old</em> SK keys): computes the new shared secret
+        /// from KEr, derives the replacement SK_* via <c>prf(SK_d_old, g^ir|Ni|Nr)</c> (RFC 7296 §2.18), then swings the
+        /// SA over — new SPIs, new SK cipher, fresh SK_d, and the message-ID window reset to 0. Returns false if there
+        /// is no in-flight rekey or the response is malformed; the old SA is left untouched so the caller can retry.
+        /// </summary>
+        public bool ProcessRekeyIkeSaResponse(byte[] wire)
+        {
+            if (_cipher is null || _currentSkD is null
+                || _ikeRekeyPrivateKey is null || _ikeRekeyInitiatorSpi is null || _ikeRekeyNonce is null) return false;
+
+            IkeMessage? response = _cipher.DecryptMessage(wire);
+            if (response is null) return false;
+
+            SecurityAssociationPayload? sa = response.Find<SecurityAssociationPayload>();
+            KeyExchangePayload? ke = response.Find<KeyExchangePayload>();
+            NoncePayload? nr = response.Find<NoncePayload>();
+            if (sa is null || ke is null || nr is null) return false;
+
+            IkeProposal? proposal = sa.Proposals.FirstOrDefault();
+            if (proposal is null || proposal.Spi.Length != 8) return false; // the responder's new IKE SPI
+            byte[] newResponderSpi = proposal.Spi;
+
+            byte[] sharedSecret = _ikeRekeyDh.DeriveSharedSecret(_ikeRekeyPrivateKey, ke.KeyData);
+            IkeKeyMaterial newKeys = IkeKeyMaterial.DeriveRekeyDefault(
+                _currentSkD, _ikeRekeyNonce, nr.Nonce, sharedSecret, _ikeRekeyInitiatorSpi, newResponderSpi);
+
+            // Swing onto the replacement IKE SA: new SPIs in every header, new SK cipher, fresh SK_d for child rekeys,
+            // and a fresh message-ID window (each IKE SA counts its own message IDs from 0, RFC 7296 §2.2).
+            _currentInitiatorSpi = _ikeRekeyInitiatorSpi;
+            _currentResponderSpi = newResponderSpi;
+            _cipher = IkeCipher.ForInitiator(newKeys);
+            _currentSkD = newKeys.SkD;
+            _currentKeys = newKeys;
+            _nextMessageId = 0;
+            _ikeRekeyPrivateKey = null;
+            _ikeRekeyInitiatorSpi = null;
+            _ikeRekeyNonce = null;
+            return true;
         }
 
         /// <summary>
@@ -308,6 +397,17 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             byte[] spi = new byte[4];
             using var rng = RandomNumberGenerator.Create();
             rng.GetBytes(spi);
+            return spi;
+        }
+
+        static byte[] RandomNonZeroSpi()
+        {
+            byte[] spi = new byte[8]; // IKE SPIs are 8 bytes and MUST be non-zero (RFC 7296 §3.1)
+            using var rng = RandomNumberGenerator.Create();
+            rng.GetBytes(spi);
+            bool allZero = true;
+            foreach (byte b in spi) if (b != 0) { allZero = false; break; }
+            if (allZero) spi[0] = 1;
             return spi;
         }
 
