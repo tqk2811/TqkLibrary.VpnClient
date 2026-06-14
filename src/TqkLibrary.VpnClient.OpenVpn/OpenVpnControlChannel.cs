@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Net.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using TqkLibrary.VpnClient.OpenVpn.DataChannel;
 using TqkLibrary.VpnClient.OpenVpn.Enums;
 using TqkLibrary.VpnClient.OpenVpn.Models;
 
@@ -128,6 +129,19 @@ namespace TqkLibrary.VpnClient.OpenVpn
             }
             cancellationToken.ThrowIfCancellationRequested();
 #endif
+        }
+
+        /// <summary>
+        /// Runs key-method-2 over the established TLS channel to derive the AEAD data-channel keys (V2.d). Call after
+        /// <see cref="ConnectAsync"/>. <paramref name="optionsString"/> is the OCC options string the server compares;
+        /// <paramref name="username"/>/<paramref name="password"/> carry auth-user-pass; <paramref name="peerInfo"/> is
+        /// the optional IV_* peer-info block.
+        /// </summary>
+        public Task<OpenVpnDataChannelKeys> NegotiateDataChannelKeysAsync(string optionsString,
+            string? username = null, string? password = null, string? peerInfo = null, CancellationToken cancellationToken = default)
+        {
+            var negotiation = new OpenVpnKeyNegotiation(TlsStream, LocalSessionId, RemoteSessionId);
+            return negotiation.NegotiateAsync(optionsString, username, password, peerInfo, cancellationToken);
         }
 
         // Bridge write callback: fragment the TLS bytes, queue each fragment reliably (blocking on window space), pump.
