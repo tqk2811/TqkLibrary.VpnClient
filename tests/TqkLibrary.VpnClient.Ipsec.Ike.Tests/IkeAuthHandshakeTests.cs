@@ -171,6 +171,32 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.Tests
             Assert.Equal(4u, delIke.MessageId);
         }
 
+        [Fact]
+        public void CreateChildSa_RekeysTheEspSa_AndFreshKeysCarryTrafficBothWays()
+        {
+            IkeClient client = HandshakeReady(out SimulatedResponder responder);
+            byte[] originalInbound = client.ChildInboundSpi;
+
+            ChildSaParameters? rekeyed = client.ProcessRekeyChildSaResponse(
+                responder.HandleRekeyChildSa(client.BuildRekeyChildSaRequest()));
+
+            Assert.NotNull(rekeyed);
+            Assert.NotEqual(originalInbound, client.ChildInboundSpi); // adopted a fresh inbound SPI
+            Assert.Equal(3u, client.NextMessageId);                  // CREATE_CHILD_SA consumed message ID 2
+
+            // The replacement keys must protect traffic in both directions.
+            EspSession clientEsp = BuildInitiatorEsp(client);
+            EspSession responderEsp = responder.BuildRekeyedEsp();
+
+            byte[] toServer = clientEsp.Protect(System.Text.Encoding.ASCII.GetBytes("after rekey"));
+            Assert.True(responderEsp.TryUnprotect(toServer, out byte[] gotByServer, out _));
+            Assert.Equal("after rekey", System.Text.Encoding.ASCII.GetString(gotByServer));
+
+            byte[] toClient = responderEsp.Protect(System.Text.Encoding.ASCII.GetBytes("rekey pong"));
+            Assert.True(clientEsp.TryUnprotect(toClient, out byte[] gotByClient, out _));
+            Assert.Equal("rekey pong", System.Text.Encoding.ASCII.GetString(gotByClient));
+        }
+
         // Runs IKE_SA_INIT + IKE_AUTH and returns a client with a live SK channel plus its responder.
         static IkeClient HandshakeReady(out SimulatedResponder responder)
         {
@@ -333,6 +359,49 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.Tests
                 EspCipherSuite send = _esp.BuildSuite(k.EncryptionResponder, k.IntegrityResponder);
                 EspCipherSuite receive = _esp.BuildSuite(k.EncryptionInitiator, k.IntegrityInitiator);
                 return new EspSession(ToSpi(ChildOutboundSpi), send, ToSpi(ChildInboundSpi), receive);
+            }
+
+            // ---- CREATE_CHILD_SA rekey state + handlers ----
+            byte[] _rekeyInitiatorNonce = Array.Empty<byte>(); // client's Ni from the rekey request
+            byte[] _rekeyNonce = Array.Empty<byte>();          // our Nr
+            byte[] _rekeyInbound = Array.Empty<byte>();         // the new SPI we receive on
+            byte[] _rekeyOutbound = Array.Empty<byte>();        // the client's new inbound SPI = our outbound
+
+            public byte[] HandleRekeyChildSa(byte[] wire)
+            {
+                IkeMessage request = _cipher!.DecryptMessage(wire)!;
+                _rekeyInitiatorNonce = request.Find<NoncePayload>()!.Nonce;
+                _rekeyOutbound = request.Find<SecurityAssociationPayload>()!.Proposals.First().Spi;
+                _rekeyInbound = new byte[] { 0x12, 0x34, 0x56, 0x78 };
+                _rekeyNonce = new byte[32];
+                for (int i = 0; i < 32; i++) _rekeyNonce[i] = (byte)(0xA0 + i);
+
+                var response = new IkeMessage
+                {
+                    InitiatorSpi = _initiatorSpi,
+                    ResponderSpi = _spi,
+                    ExchangeType = IkeExchangeType.CreateChildSa,
+                    Flags = IkeHeaderFlags.Response,
+                    MessageId = request.MessageId,
+                };
+                var sa = new SecurityAssociationPayload();
+                sa.Proposals.Add(_esp.Algorithm == EspEncryptionAlgorithm.AesGcm16
+                    ? IkeProposals.GcmEsp(_rekeyInbound)
+                    : IkeProposals.DefaultEsp(_rekeyInbound));
+                response.Payloads.Add(sa);
+                response.Payloads.Add(new NoncePayload { Nonce = _rekeyNonce });
+                response.Payloads.Add(TrafficSelectorPayload.AnyIpv4(isInitiator: true));
+                response.Payloads.Add(TrafficSelectorPayload.AnyIpv4(isInitiator: false));
+                return _cipher.EncryptMessage(response);
+            }
+
+            public EspSession BuildRekeyedEsp()
+            {
+                ChildSaKeys k = ChildSaKeys.Derive(_prf, _keys!.SkD, _rekeyInitiatorNonce, _rekeyNonce,
+                    _esp.EncryptionKeyLengthBytes, _esp.SecondSliceLengthBytes);
+                EspCipherSuite send = _esp.BuildSuite(k.EncryptionResponder, k.IntegrityResponder);
+                EspCipherSuite receive = _esp.BuildSuite(k.EncryptionInitiator, k.IntegrityInitiator);
+                return new EspSession(ToSpi(_rekeyOutbound), send, ToSpi(_rekeyInbound), receive);
             }
         }
     }

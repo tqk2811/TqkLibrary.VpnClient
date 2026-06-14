@@ -42,8 +42,8 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             ChildInboundSpi = RandomSpi();
         }
 
-        /// <summary>The ESP SPI we chose (the peer uses it when sending to us).</summary>
-        public byte[] ChildInboundSpi { get; }
+        /// <summary>The ESP SPI we chose (the peer uses it when sending to us). Updated after a CHILD_SA rekey.</summary>
+        public byte[] ChildInboundSpi { get; private set; }
 
         /// <summary>The ESP SPI the responder chose (we use it when sending to the peer).</summary>
         public byte[] ChildOutboundSpi { get; private set; } = Array.Empty<byte>();
@@ -202,6 +202,78 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             return _cipher.EncryptMessage(message);
         }
 
+        // ---- CREATE_CHILD_SA: rekey the ESP CHILD_SA (make-before-break), RFC 7296 §1.3.3/§2.8 ----
+
+        byte[]? _rekeyInboundSpi;  // the inbound SPI we proposed for the replacement CHILD_SA
+        byte[]? _rekeyNonce;       // our Ni for the replacement CHILD_SA's KEYMAT
+
+        /// <summary>
+        /// Builds a CREATE_CHILD_SA request that rekeys the current ESP CHILD_SA (no PFS): a REKEY_SA notify naming
+        /// the old inbound SPI, a fresh SA proposal with a new inbound SPI, a new nonce, and the traffic selectors.
+        /// </summary>
+        public byte[] BuildRekeyChildSaRequest()
+        {
+            byte[] newInboundSpi = RandomSpi();
+            byte[] newNonce = RandomNonce();
+            _rekeyInboundSpi = newInboundSpi;
+            _rekeyNonce = newNonce;
+
+            var rekey = new NotifyPayload
+            {
+                ProtocolId = IkeProtocolId.Esp,
+                MessageType = (ushort)IkeNotifyMessageType.RekeySa,
+                Spi = ChildInboundSpi, // the SA being rekeyed, identified by the SPI we currently receive on
+            };
+            var sa = new SecurityAssociationPayload();
+            foreach (IkeProposal proposal in IkeProposals.EspProposals(newInboundSpi))
+                sa.Proposals.Add(proposal);
+
+            return BuildEncryptedRequest(IkeExchangeType.CreateChildSa, new IkePayload[]
+            {
+                rekey,
+                sa,
+                new NoncePayload { Nonce = newNonce },
+                TrafficSelectorPayload.AnyIpv4(isInitiator: true),
+                TrafficSelectorPayload.AnyIpv4(isInitiator: false),
+            });
+        }
+
+        /// <summary>
+        /// Processes the CREATE_CHILD_SA response: derives the replacement CHILD_SA keys (KEYMAT = prf+(SK_d, Ni|Nr)),
+        /// adopts the new SPIs as current, and returns the parameters for the driver to build the fresh
+        /// <see cref="EspSession"/>. Returns null if there is no in-flight rekey or the response is invalid.
+        /// </summary>
+        public ChildSaParameters? ProcessRekeyChildSaResponse(byte[] wire)
+        {
+            if (_cipher is null || _initiator.Keys is null || _rekeyInboundSpi is null || _rekeyNonce is null) return null;
+
+            IkeMessage? response = _cipher.DecryptMessage(wire);
+            if (response is null) return null;
+
+            SecurityAssociationPayload? sa = response.Find<SecurityAssociationPayload>();
+            NoncePayload? nr = response.Find<NoncePayload>();
+            if (sa is null || nr is null) return null;
+
+            IkeProposal? proposal = sa.Proposals.FirstOrDefault();
+            if (proposal is null || proposal.Spi.Length == 0) return null;
+
+            EspSuiteSelection? selection = ParseEspSelection(proposal);
+            if (selection is null) return null;
+
+            ChildSaKeys keys = ChildSaKeys.Derive(_prf, _initiator.Keys.SkD, _rekeyNonce, nr.Nonce,
+                selection.EncryptionKeyLengthBytes, selection.SecondSliceLengthBytes);
+
+            // Adopt the replacement SA as current so the next DELETE/rekey references it.
+            ChildInboundSpi = _rekeyInboundSpi;
+            ChildOutboundSpi = proposal.Spi;
+            ChildKeys = keys;
+            NegotiatedEsp = selection;
+            _rekeyInboundSpi = null;
+            _rekeyNonce = null;
+
+            return new ChildSaParameters(ChildInboundSpi, ChildOutboundSpi, keys, selection);
+        }
+
         /// <summary>
         /// Maps the responder's selected CHILD_SA proposal to the suite we will build. AES-GCM when the ENCR
         /// transform says so; otherwise AES-CBC with the key length / integrity read from the transforms
@@ -237,6 +309,14 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             using var rng = RandomNumberGenerator.Create();
             rng.GetBytes(spi);
             return spi;
+        }
+
+        static byte[] RandomNonce()
+        {
+            byte[] nonce = new byte[32];
+            using var rng = RandomNumberGenerator.Create();
+            rng.GetBytes(nonce);
+            return nonce;
         }
 
         static bool FixedTimeEquals(byte[] a, byte[] b)
