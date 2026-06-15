@@ -49,6 +49,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
         readonly AddressFamilyPreference _addressFamilyPreference;
         readonly IHostResolver _hostResolver;
         readonly int _tunMtu;
+        readonly OpenVpnPeerInfoOptions? _peerInfoOptions;
         readonly Func<long> _clock;
 
         readonly SwappablePacketChannel _facade = new();
@@ -88,8 +89,10 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
         /// <paramref name="clientCertificates"/> authenticate the client (OpenVPN cert auth) when supplied;
         /// <paramref name="serverCertificateValidation"/> validates the server certificate (null = accept any);
         /// <paramref name="controlWrap"/> applies <c>tls-auth</c>/<c>tls-crypt</c>; <paramref name="transportFactory"/>
-        /// opens the UDP/TCP socket (an in-process factory drives it offline). <paramref name="clock"/> supplies the
-        /// keepalive millisecond clock (default: the system tick clock) — tests inject a deterministic one.
+        /// opens the UDP/TCP socket (an in-process factory drives it offline). <paramref name="peerInfoOptions"/>
+        /// customises the advertised <c>IV_*</c> peer-info block (null = defaults; the tun MTU fills <c>IV_MTU</c> when
+        /// unset). <paramref name="clock"/> supplies the keepalive millisecond clock (default: the system tick clock) —
+        /// tests inject a deterministic one.
         /// </summary>
         public OpenVpnConnection(string host, int port, IOpenVpnTransportFactory transportFactory,
             string optionsString = "",
@@ -103,6 +106,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             IHostResolver? hostResolver = null,
             int tunMtu = 1500,
             OpenVpnReliabilityOptions? reliabilityOptions = null,
+            OpenVpnPeerInfoOptions? peerInfoOptions = null,
             Func<long>? clock = null)
         {
             _host = host ?? throw new ArgumentNullException(nameof(host));
@@ -121,6 +125,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             _hostResolver = hostResolver ?? DnsHostResolver.Default;
             if (tunMtu < 1) throw new ArgumentOutOfRangeException(nameof(tunMtu));
             _tunMtu = tunMtu;
+            _peerInfoOptions = peerInfoOptions;
             _clock = clock ?? DefaultClock;
             _tapMac = GenerateLocalMac(_random);
         }
@@ -193,8 +198,10 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             // --- reset → TLS handshake (inside the reliability layer) ---
             await control.ConnectAsync(_host, _clientCertificates, _serverCertificateValidation, cancellationToken).ConfigureAwait(false);
 
-            // --- key-method-2 over TLS (peer-info advertises IV_CIPHERS for NCP) ---
-            string peerInfo = OpenVpnPeerInfo.Build();
+            // --- key-method-2 over TLS (peer-info advertises IV_CIPHERS for NCP, plus IV_MTU and informational IV_*) ---
+            OpenVpnPeerInfoOptions peerInfoOptions = _peerInfoOptions ?? new OpenVpnPeerInfoOptions();
+            if (peerInfoOptions.Mtu is null) peerInfoOptions = peerInfoOptions with { Mtu = _tunMtu };
+            string peerInfo = OpenVpnPeerInfo.Build(peerInfoOptions);
             OpenVpnKeyMaterial keyMaterial = await control
                 .NegotiateKeyMaterialAsync(_optionsString, _username, _password, peerInfo, cancellationToken).ConfigureAwait(false);
 

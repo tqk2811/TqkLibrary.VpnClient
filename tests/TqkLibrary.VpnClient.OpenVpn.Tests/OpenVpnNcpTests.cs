@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text;
 using TqkLibrary.VpnClient.OpenVpn.DataChannel;
 using Xunit;
@@ -31,6 +32,35 @@ namespace TqkLibrary.VpnClient.OpenVpn.Tests
             Assert.Contains("IV_CIPHERS=AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305", peerInfo);
             Assert.Contains("IV_NCP=2", peerInfo);
             Assert.Contains($"IV_PROTO={OpenVpnPeerInfo.IvProtoDataV2 | OpenVpnPeerInfo.IvProtoRequestPush}", peerInfo);
+            // The minimal always-on lines are present; IV_MTU is opt-in (the connection fills it), so absent by default.
+            Assert.Contains("IV_VER=", peerInfo);
+            Assert.Contains("IV_PLAT=", peerInfo);
+            Assert.DoesNotContain("IV_MTU=", peerInfo);
+        }
+
+        [Fact]
+        public void PeerInfo_AdvancedOptions_EmitMtuPlatformAndUserVars()
+        {
+            string peerInfo = OpenVpnPeerInfo.Build(new OpenVpnPeerInfoOptions
+            {
+                Platform = "win",
+                Mtu = 1400,
+                GuiVersion = "tqkvpn 1.0",
+                PlatformVersion = null,                 // explicitly omit the auto OS line
+                Extra = new[] { new KeyValuePair<string, string>("UV_ID", "client-7") },
+            });
+
+            Assert.Contains("IV_PLAT=win\n", peerInfo);
+            Assert.Contains("IV_MTU=1400\n", peerInfo);
+            Assert.Contains("IV_GUI_VER=tqkvpn 1.0\n", peerInfo);
+            Assert.Contains("UV_ID=client-7\n", peerInfo);
+            Assert.DoesNotContain("IV_PLAT_VER=", peerInfo); // omitted via null
+            // Custom IV_PROTO bits flow through verbatim (e.g. future tls-ekm / exit-notify capabilities).
+            string withBits = OpenVpnPeerInfo.Build(new OpenVpnPeerInfoOptions
+            {
+                IvProto = OpenVpnPeerInfo.IvProtoDataV2 | OpenVpnPeerInfo.IvProtoRequestPush | OpenVpnPeerInfo.IvProtoCcExitNotify,
+            });
+            Assert.Contains($"IV_PROTO={OpenVpnPeerInfo.IvProtoDataV2 | OpenVpnPeerInfo.IvProtoRequestPush | OpenVpnPeerInfo.IvProtoCcExitNotify}\n", withBits);
         }
 
         [Theory]

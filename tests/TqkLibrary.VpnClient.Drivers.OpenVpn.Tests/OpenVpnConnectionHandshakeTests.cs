@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Net;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -83,6 +84,33 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn.Tests
             await connection.PacketChannel.WriteIpPacketAsync(packet, cts.Token);
             byte[] echoed = await inbound.Reader.ReadAsync(cts.Token);
             Assert.Equal(packet, echoed);
+
+            await connection.DisposeAsync();
+        }
+
+        [Fact]
+        public async Task Connect_AdvertisesAdvancedPeerInfo_MtuAndUserVars()
+        {
+            var link = new LoopbackLink();
+            using var serverCert = OpenVpnTestPki.CreateSelfSignedServerCert();
+            using var server = new SimulatedOpenVpnServer(link.Server, serverCert);
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var connection = new OpenVpnConnection("127.0.0.1", 1194, new InProcessTransportFactory(link.Client),
+                optionsString: "V4,cipher AES-256-GCM",
+                serverCertificateValidation: (_, _, _, _) => true,
+                tunMtu: 1380,
+                // No IV_MTU set here, so the connection fills it from the tun MTU; a user variable rides along.
+                peerInfoOptions: new OpenVpnPeerInfoOptions { Extra = new[] { new KeyValuePair<string, string>("UV_ID", "client-7") } },
+                reliabilityOptions: new OpenVpnReliabilityOptions { Interval = TimeSpan.FromSeconds(30) });
+
+            await connection.ConnectAsync(cts.Token);
+
+            Assert.NotNull(server.ReceivedPeerInfo);
+            Assert.Contains("IV_CIPHERS=AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305", server.ReceivedPeerInfo!);
+            Assert.Contains("IV_MTU=1380", server.ReceivedPeerInfo!); // the tun MTU filled IV_MTU
+            Assert.Contains("UV_ID=client-7", server.ReceivedPeerInfo!);
+            Assert.Contains("IV_PLAT=", server.ReceivedPeerInfo!);
 
             await connection.DisposeAsync();
         }

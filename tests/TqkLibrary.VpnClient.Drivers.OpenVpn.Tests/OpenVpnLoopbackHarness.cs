@@ -92,6 +92,9 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn.Tests
 
         public ulong SessionId { get; } = 0x1122334455667788UL;
 
+        /// <summary>The raw peer-info block the client sent in key-method-2 (captured for assertions).</summary>
+        public string? ReceivedPeerInfo { get; private set; }
+
         protected SimulatedOpenVpnServerBase(IOpenVpnTransport transport, X509Certificate2 certificate)
         {
             _transport = transport;
@@ -134,7 +137,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn.Tests
                 await ReadStringAsync(); // options
                 await ReadStringAsync(); // username
                 await ReadStringAsync(); // password
-                await ReadStringAsync(); // peer-info (the connection always sends IV_* peer-info)
+                ReceivedPeerInfo = await ReadStringAsync(); // peer-info (the connection always sends IV_* peer-info)
 
                 var serverKs = ServerKeySource();
                 byte[] reply = BuildServerKeyMethod2(serverKs, $"V4,cipher {DataCipher.Name}");
@@ -266,11 +269,14 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn.Tests
             return buf;
         }
 
-        async Task ReadStringAsync()
+        async Task<string> ReadStringAsync()
         {
             byte[] lenBytes = await ReadExactAsync(2);
             int len = (lenBytes[0] << 8) | lenBytes[1];
-            if (len > 0) await ReadExactAsync(len);
+            if (len <= 0) return string.Empty;
+            byte[] bytes = await ReadExactAsync(len);
+            int contentLen = len > 0 && bytes[len - 1] == 0 ? len - 1 : len; // drop the trailing NUL
+            return Encoding.ASCII.GetString(bytes, 0, contentLen);
         }
 
         public void Dispose()
