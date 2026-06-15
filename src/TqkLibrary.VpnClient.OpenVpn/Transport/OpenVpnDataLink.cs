@@ -41,8 +41,13 @@ namespace TqkLibrary.VpnClient.OpenVpn.Transport
         protected bool TryReceivePayload(ReadOnlySpan<byte> wire, out byte[] payload)
         {
             payload = Array.Empty<byte>();
-            return _dataPlane.TryUnprotect(wire, out byte[] framed)
-                && _compression.TryUnwrapIncoming(framed, out payload);
+            if (!_dataPlane.TryUnprotect(wire, out byte[] framed)) return false;
+            if (!_compression.TryUnwrapIncoming(framed, out payload)) return false;
+            // An OpenVPN keepalive ping rides the data channel like any payload but is liveness signalling, not user
+            // traffic — it must never reach the IP/Ethernet layer, so drop it here (the driver still counts the inbound
+            // data packet toward keepalive before delegating to Deliver).
+            if (OpenVpnPing.IsPing(payload)) { payload = Array.Empty<byte>(); return false; }
+            return true;
         }
 
         /// <summary>Routes one inbound data-channel wire packet to the channel's inbound event (raises nothing if dropped).</summary>

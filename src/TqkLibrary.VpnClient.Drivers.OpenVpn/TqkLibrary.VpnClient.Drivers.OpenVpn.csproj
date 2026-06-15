@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>OpenVPN protocol driver (community server compatible): picks a UDP or TCP transport, demultiplexes control/data opcodes on it, runs the control-channel handshake (reset → TLS → key-method-2 → PUSH) and binds the AEAD data channel to a tun IP channel; keepalive ping/ping-restart, teardown and auto-reconnect.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.OpenVpn\TqkLibrary.VpnClient.OpenVpn.csproj" />
+  </ItemGroup>
+
+</Project>

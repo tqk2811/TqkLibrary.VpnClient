@@ -1,8 +1,11 @@
 using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
 using TqkLibrary.VpnClient.Drivers.Ikev2;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec;
+using TqkLibrary.VpnClient.Drivers.OpenVpn;
 using TqkLibrary.VpnClient.Drivers.Sstp;
+using TqkLibrary.VpnClient.OpenVpn.Config;
 
 namespace TqkLibrary.VpnClient
 {
@@ -47,6 +50,14 @@ namespace TqkLibrary.VpnClient
 
         /// <summary>Registers the IKEv2-native driver with explicit auto-reconnect options (e.g. to disable it).</summary>
         public VpnClientBuilder UseIkev2(Ikev2ReconnectOptions reconnectOptions) => AddDriver(new Ikev2Driver(reconnectOptions));
+
+        /// <summary>Registers the OpenVPN driver (community-server compatible: UDP/TCP, tun-mode, NCP AEAD) from a parsed profile.</summary>
+        public VpnClientBuilder UseOpenVpn(OpenVpnProfile profile) => AddDriver(new OpenVpnDriver(profile));
+
+        /// <summary>Registers the OpenVPN driver with client certificates and an optional server-certificate validation callback.</summary>
+        public VpnClientBuilder UseOpenVpn(OpenVpnProfile profile, X509CertificateCollection? clientCertificates,
+            RemoteCertificateValidationCallback? serverCertificateValidation = null, OpenVpnReconnectOptions? reconnectOptions = null)
+            => AddDriver(new OpenVpnDriver(profile, clientCertificates, serverCertificateValidation, reconnectOptions: reconnectOptions));
 
         /// <summary>Builds the client.</summary>
         public VpnClient Build() => new VpnClient(_drivers);
