@@ -80,6 +80,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TqkLibrary.VpnClient.Driver
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TqkLibrary.VpnClient.Drivers.WireGuard.Tests", "..\tests\TqkLibrary.VpnClient.Drivers.WireGuard.Tests\TqkLibrary.VpnClient.Drivers.WireGuard.Tests.csproj", "{D5262A17-75DB-43F5-A912-E9A2AA5F2844}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TqkLibrary.VpnClient.SoftEther", "TqkLibrary.VpnClient.SoftEther\TqkLibrary.VpnClient.SoftEther.csproj", "{CB6E9517-9D12-4AC1-A3ED-EC7F7C352D41}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TqkLibrary.VpnClient.SoftEther.Tests", "..\tests\TqkLibrary.VpnClient.SoftEther.Tests\TqkLibrary.VpnClient.SoftEther.Tests.csproj", "{99DF1659-1E1F-4593-96A9-BB682A948D1C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -486,6 +490,30 @@ Global
 		{D5262A17-75DB-43F5-A912-E9A2AA5F2844}.Release|x64.Build.0 = Release|Any CPU
 		{D5262A17-75DB-43F5-A912-E9A2AA5F2844}.Release|x86.ActiveCfg = Release|Any CPU
 		{D5262A17-75DB-43F5-A912-E9A2AA5F2844}.Release|x86.Build.0 = Release|Any CPU
+		{CB6E9517-9D12-4AC1-A3ED-EC7F7C352D41}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CB6E9517-9D12-4AC1-A3ED-EC7F7C352D41}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CB6E9517-9D12-4AC1-A3ED-EC7F7C352D41}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{CB6E9517-9D12-4AC1-A3ED-EC7F7C352D41}.Debug|x64.Build.0 = Debug|Any CPU
+		{CB6E9517-9D12-4AC1-A3ED-EC7F7C352D41}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{CB6E9517-9D12-4AC1-A3ED-EC7F7C352D41}.Debug|x86.Build.0 = Debug|Any CPU
+		{CB6E9517-9D12-4AC1-A3ED-EC7F7C352D41}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CB6E9517-9D12-4AC1-A3ED-EC7F7C352D41}.Release|Any CPU.Build.0 = Release|Any CPU
+		{CB6E9517-9D12-4AC1-A3ED-EC7F7C352D41}.Release|x64.ActiveCfg = Release|Any CPU
+		{CB6E9517-9D12-4AC1-A3ED-EC7F7C352D41}.Release|x64.Build.0 = Release|Any CPU
+		{CB6E9517-9D12-4AC1-A3ED-EC7F7C352D41}.Release|x86.ActiveCfg = Release|Any CPU
+		{CB6E9517-9D12-4AC1-A3ED-EC7F7C352D41}.Release|x86.Build.0 = Release|Any CPU
+		{99DF1659-1E1F-4593-96A9-BB682A948D1C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{99DF1659-1E1F-4593-96A9-BB682A948D1C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{99DF1659-1E1F-4593-96A9-BB682A948D1C}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{99DF1659-1E1F-4593-96A9-BB682A948D1C}.Debug|x64.Build.0 = Debug|Any CPU
+		{99DF1659-1E1F-4593-96A9-BB682A948D1C}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{99DF1659-1E1F-4593-96A9-BB682A948D1C}.Debug|x86.Build.0 = Debug|Any CPU
+		{99DF1659-1E1F-4593-96A9-BB682A948D1C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{99DF1659-1E1F-4593-96A9-BB682A948D1C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{99DF1659-1E1F-4593-96A9-BB682A948D1C}.Release|x64.ActiveCfg = Release|Any CPU
+		{99DF1659-1E1F-4593-96A9-BB682A948D1C}.Release|x64.Build.0 = Release|Any CPU
+		{99DF1659-1E1F-4593-96A9-BB682A948D1C}.Release|x86.ActiveCfg = Release|Any CPU
+		{99DF1659-1E1F-4593-96A9-BB682A948D1C}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

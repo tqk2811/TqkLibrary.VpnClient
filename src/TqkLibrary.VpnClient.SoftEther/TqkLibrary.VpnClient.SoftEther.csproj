@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>SoftEther SSL-VPN protocol: PACK codec (binary typed key-value serialization — list of named typed-value-array elements, big-endian wire format) re-implemented from the protocol spec (no GPL source copied). Pure codec, no I/O.</Description>
+  </PropertyGroup>
+
+</Project>
