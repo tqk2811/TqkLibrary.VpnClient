@@ -34,6 +34,15 @@ namespace TqkLibrary.VpnClient.WireGuard.Handshake
         byte[]? _remoteStaticPublicLearned;        // responder: initiator's static public, recovered from the initiation
         bool _isInitiator;
 
+        // ---- mac1/mac2 + cookie state (V3.c) ----
+        readonly WireGuardMessageCodec _codec;
+        readonly WireGuardCookie _cookie;
+        readonly IHashAlgo _hash;
+        WireGuardMac? _peerMac;                    // keyed by the remote static public — stamps mac1 onto what we send
+        WireGuardMac? _selfMac;                    // keyed by our own static public — verifies mac1 on what we receive
+        byte[]? _lastSentMac1;                     // mac1 of the message we last sent (cookie-reply associated data)
+        byte[]? _currentCookie;                    // cookie learned from a cookie-reply, used to key mac2 next send
+
         /// <summary>
         /// Builds a handshake bound to this peer's <paramref name="localStatic"/> identity. Pass
         /// <paramref name="remoteStaticPublic"/> (the peer's static public key) for the <b>initiator</b> — it is the
@@ -60,11 +69,21 @@ namespace TqkLibrary.VpnClient.WireGuard.Handshake
             if (presharedKey is not null && presharedKey.Length != WireGuardConstants.KeyLength)
                 throw new ArgumentException("Preshared key must be 32 bytes.", nameof(presharedKey));
 
+            IHashAlgo hashAlgo = hash ?? new Blake2s();
+            _hash = hashAlgo;
             _dh = dhGroup ?? new Curve25519DhGroup();
-            _state = new NoiseSymmetricState(prf ?? new HmacBlake2sPrf(), hash ?? new Blake2s(), cipher ?? new ChaCha20Poly1305Cipher());
+            _state = new NoiseSymmetricState(prf ?? new HmacBlake2sPrf(), hashAlgo, cipher ?? new ChaCha20Poly1305Cipher());
             _timestamps = timestamps ?? new WireGuardTai64n();
             _remoteStaticPublic = remoteStaticPublic;
             _presharedKey = presharedKey ?? new byte[WireGuardConstants.KeyLength];
+
+            _codec = new WireGuardMessageCodec();
+            _cookie = new WireGuardCookie();
+            // We can always key the verify MAC with our own static public; the peer MAC needs the remote static key,
+            // known up front for the initiator and learned from the initiation for the responder.
+            _selfMac = WireGuardMac.ForRecipient(_localStatic.PublicKey, _hash);
+            if (_remoteStaticPublic is not null)
+                _peerMac = WireGuardMac.ForRecipient(_remoteStaticPublic, _hash);
         }
 
         /// <summary>The X25519 group this handshake uses, exposed so callers can generate/derive matching keys.</summary>
@@ -154,6 +173,8 @@ namespace TqkLibrary.VpnClient.WireGuard.Handshake
             if (openedTimestamp is null) return false;
 
             _remoteStaticPublicLearned = openedStatic;
+            // The responder now knows the initiator's static key, so it can stamp mac1 on the response it sends back.
+            _peerMac = WireGuardMac.ForRecipient(openedStatic, _hash);
             initiatorStaticPublic = openedStatic;
             timestamp = openedTimestamp;
             return true;
@@ -233,5 +254,61 @@ namespace TqkLibrary.VpnClient.WireGuard.Handshake
                 ? new WireGuardTransportKeys { SendKey = first, ReceiveKey = second }
                 : new WireGuardTransportKeys { SendKey = second, ReceiveKey = first };
         }
+
+        // ---- mac1/mac2 + cookie wire layer (V3.c, whitepaper §5.4.4/§5.4.7) ----
+
+        /// <summary>
+        /// Stamps <c>mac1</c> (and <c>mac2</c> if a cookie was learned from a recent cookie-reply) onto an encoded
+        /// type-1/type-2 <paramref name="datagram"/> just before it goes on the wire, keying mac1 with the peer's
+        /// static public key. Records the resulting mac1 so a cookie-reply for this message can be matched. Call this
+        /// on the bytes returned by <see cref="WireGuardMessageCodec.EncodeInitiation"/>/<c>EncodeResponse</c>.
+        /// </summary>
+        public void StampOutgoingMacs(Span<byte> datagram)
+        {
+            if (_peerMac is null)
+                throw new InvalidOperationException("The peer's static public key is unknown; cannot stamp mac1.");
+            _codec.ApplyMacs(datagram, _peerMac, _currentCookie);
+            _lastSentMac1 = _codec.ReadMac1(datagram);
+        }
+
+        /// <summary>
+        /// Verifies the <c>mac1</c> of a received type-1/type-2 <paramref name="datagram"/> against our own static
+        /// key. Returns <c>false</c> for a forged/foreign message so it can be dropped before any DH work. (mac2 /
+        /// cookie enforcement is the loaded-responder's choice and is layered on top by the driver in V3.e/f.)
+        /// </summary>
+        public bool VerifyIncomingMac1(ReadOnlySpan<byte> datagram)
+            => _selfMac is not null && _codec.VerifyMac1(datagram, _selfMac);
+
+        /// <summary>
+        /// <b>Loaded responder</b> — builds a cookie-reply for the message in <paramref name="triggeringDatagram"/>
+        /// (an encoded type-1/type-2 wire), sealing the cookie <c>MAC(changingSecret, sourceAddress)</c> under our
+        /// own cookie key with the triggering message's mac1 as associated data. <paramref name="receiverIndex"/> is
+        /// that message's sender index (echoed back so the peer can route the reply).
+        /// </summary>
+        public WireGuardCookieReplyMessage CreateCookieReply(uint receiverIndex, ReadOnlySpan<byte> triggeringDatagram, ReadOnlySpan<byte> changingSecret, ReadOnlySpan<byte> sourceAddress)
+        {
+            if (_selfMac is null) throw new InvalidOperationException("Self MAC unavailable.");
+            byte[] cookie = _cookie.ComputeCookie(changingSecret, sourceAddress);
+            byte[] mac1 = _codec.ReadMac1(triggeringDatagram);
+            return _cookie.CreateReply(receiverIndex, cookie, _selfMac.CookieKey, mac1);
+        }
+
+        /// <summary>
+        /// Consumes a cookie-reply: opens it with the peer's cookie key (the cookie-reply is keyed by the
+        /// <b>responder</b>'s static public — for the initiator that is the remote peer) and the mac1 we last sent,
+        /// caching the recovered cookie so the next <see cref="StampOutgoingMacs"/> includes a valid mac2. Returns
+        /// <c>false</c> (no state change) if the reply fails to authenticate or there is nothing to bind it to.
+        /// </summary>
+        public bool ConsumeCookieReply(WireGuardCookieReplyMessage reply)
+        {
+            if (reply is null) throw new ArgumentNullException(nameof(reply));
+            if (_peerMac is null || _lastSentMac1 is null) return false;
+            if (!_cookie.TryReadCookie(reply, _peerMac.CookieKey, _lastSentMac1, out byte[] cookie)) return false;
+            _currentCookie = cookie;
+            return true;
+        }
+
+        /// <summary>The cookie currently keying mac2 (16 bytes), or <c>null</c> if no cookie has been learned. Copy.</summary>
+        public byte[]? CurrentCookie => _currentCookie is null ? null : (byte[])_currentCookie.Clone();
     }
 }

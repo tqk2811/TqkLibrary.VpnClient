@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <Description>Managed crypto: primitive contracts (Interfaces/), MD4/DES/SHA-0/DH-MODP/AES-CBC/CTR/HMAC/RNG, AEAD (AES-GCM + ChaCha20-Poly1305: native on net8.0, BouncyCastle on netstandard2.0), and Noise primitives (X25519/BLAKE2s/HMAC-BLAKE2s/Noise-KDF via BouncyCastle on both TFMs).</Description>
+    <Description>Managed crypto: primitive contracts (Interfaces/), MD4/DES/SHA-0/DH-MODP/AES-CBC/CTR/HMAC/RNG, AEAD (AES-GCM + ChaCha20-Poly1305 native on net8.0 / BouncyCastle on netstandard2.0, plus XChaCha20-Poly1305 = HChaCha20 + ChaCha20-Poly1305 for the WireGuard cookie-reply), and Noise primitives (X25519/BLAKE2s/HMAC-BLAKE2s/Noise-KDF via BouncyCastle on both TFMs).</Description>
   </PropertyGroup>
 
   <!--

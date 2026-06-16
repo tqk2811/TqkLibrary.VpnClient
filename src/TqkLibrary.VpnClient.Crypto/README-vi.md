@@ -35,7 +35,8 @@ TqkLibrary.VpnClient.Crypto/
 │   └── IIntegrityAlgo.cs  # MAC toàn vẹn với ICV (thường bị cắt ngắn) cho ESP/IKE
 ├── Aead/
 │   ├── AesGcmCipher.cs           # AES-GCM: native net8.0 / BouncyCastle netstandard2.0
-│   └── ChaCha20Poly1305Cipher.cs # ChaCha20-Poly1305 (RFC 8439): native net5+ / BouncyCastle netstandard2.0
+│   ├── ChaCha20Poly1305Cipher.cs # ChaCha20-Poly1305 (RFC 8439): native net5+ / BouncyCastle netstandard2.0
+│   └── XChaCha20Poly1305Cipher.cs # XChaCha20-Poly1305 (draft-irtf-cfrg-xchacha): HChaCha20 + ChaCha20-Poly1305 (WG cookie-reply)
 ├── Noise/                 # Primitive cho Noise/WireGuard — BouncyCastle trên CẢ 2 TFM (BCL không có X25519/BLAKE2s)
 │   ├── Curve25519DhGroup.cs # X25519 (RFC 7748, IANA group 31) — IDhGroup
 │   ├── Blake2s.cs           # BLAKE2s-256 unkeyed (RFC 7693) — IHashAlgo
@@ -78,6 +79,7 @@ TqkLibrary.VpnClient.Crypto/
 | `AesCtr` | AES-CTR `static Transform(...)` dựng từ AES-ECB, counter big-endian | [AesCtr.cs:9](AesCtr.cs#L9) |
 | `AesGcmCipher` | AES-GCM (`IAeadCipher`), nonce 12B / tag 16B; native vs BouncyCastle | [Aead/AesGcmCipher.cs:18](Aead/AesGcmCipher.cs#L18) |
 | `ChaCha20Poly1305Cipher` | ChaCha20-Poly1305 (`IAeadCipher`, RFC 8439), key 32B / nonce 12B / tag 16B; native vs BouncyCastle | [Aead/ChaCha20Poly1305Cipher.cs:18](Aead/ChaCha20Poly1305Cipher.cs#L18) |
+| `XChaCha20Poly1305Cipher` | XChaCha20-Poly1305 (`IAeadCipher`, draft-irtf-cfrg-xchacha), key 32B / **nonce 24B** / tag 16B; `HChaCha20` (pure, public) suy subkey rồi ủy quyền `ChaCha20Poly1305Cipher` (WireGuard cookie-reply V3.c) | [Aead/XChaCha20Poly1305Cipher.cs:18](Aead/XChaCha20Poly1305Cipher.cs#L18) |
 | `ModpDhGroup` | DH MODP group 2 (1024-bit) / 14 (2048-bit), g=2 (`IDhGroup`) | [ModpDhGroup.cs:12](ModpDhGroup.cs#L12) |
 | `HmacPrf` | HMAC-PRF (`IPrf`); factory `Sha256()` | [HmacPrf.cs:7](HmacPrf.cs#L7) |
 | `HmacIntegrity` | HMAC integrity ICV cắt ngắn (`IIntegrityAlgo`); factory `HmacSha256_128()`, `HmacSha1_96()` | [HmacIntegrity.cs:7](HmacIntegrity.cs#L7) |
@@ -108,6 +110,7 @@ TqkLibrary.VpnClient.Crypto/
 | FIPS 197 (AES) | `AesCbcCipher`, `AesCtr`, `AesGcmCipher` | [AesCbcCipher.cs:10](AesCbcCipher.cs#L10), [AesCtr.cs:9](AesCtr.cs#L9), [Aead/AesGcmCipher.cs:18](Aead/AesGcmCipher.cs#L18) | (suy luận) AES không ghi tên FIPS trong comment |
 | NIST SP 800-38D (AES-GCM / GCM) | `AesGcmCipher` | [Aead/AesGcmCipher.cs:18](Aead/AesGcmCipher.cs#L18) | (suy luận) comment chỉ nói "AES-GCM AEAD" |
 | RFC 8439 (ChaCha20-Poly1305) | `ChaCha20Poly1305Cipher` | [Aead/ChaCha20Poly1305Cipher.cs:18](Aead/ChaCha20Poly1305Cipher.cs#L18) | Comment; test vector §2.8.2 |
+| draft-irtf-cfrg-xchacha (XChaCha20-Poly1305 / HChaCha20) | `XChaCha20Poly1305Cipher` | [Aead/XChaCha20Poly1305Cipher.cs:18](Aead/XChaCha20Poly1305Cipher.cs#L18) | KAT HChaCha20 §2.2.1 + AEAD §A.3.1 (test ở WireGuard.Tests) |
 | RFC 7748 (X25519) + RFC 8031 (Curve25519 IKE group 31) | `Curve25519DhGroup` | [Noise/Curve25519DhGroup.cs:11](Noise/Curve25519DhGroup.cs#L11) | Comment; test vector RFC 7748 §5.2/§6.1 (KAT) |
 | RFC 7693 (BLAKE2) | `Blake2s`, `Blake2sKeyedMac` | [Noise/Blake2s.cs:8](Noise/Blake2s.cs#L8), [Noise/Blake2sKeyedMac.cs:7](Noise/Blake2sKeyedMac.cs#L7) | Comment; KAT BLAKE2s-256 + keyed-KAT (blake2s-kat) |
 | RFC 5869 (HKDF) — Noise/WireGuard KDF | `NoiseKdf` | [Noise/NoiseKdf.cs:6](Noise/NoiseKdf.cs#L6) | Comment; extract t0=HMAC(key,input) rồi expand ti=HMAC(t0,t(i-1)\|i) |
@@ -173,7 +176,7 @@ integ.ComputeIcv(key, data, icv);
 
 ## Trạng thái & ghi chú
 
-- **Đã hiện thực & dùng thật:** MD4, DES, AES-CBC, AES-CTR, AES-GCM, ChaCha20-Poly1305, MODP DH (group 2/14), HMAC-PRF, HMAC-integrity, prf+ — tiêu thụ bởi `Ipsec` (IKE/ESP), `Ppp` (MS-CHAPv2) và `OpenVpn` (NCP data channel: AES-GCM + ChaCha20-Poly1305).
+- **Đã hiện thực & dùng thật:** MD4, DES, AES-CBC, AES-CTR, AES-GCM, ChaCha20-Poly1305, XChaCha20-Poly1305, MODP DH (group 2/14), HMAC-PRF, HMAC-integrity, prf+ — tiêu thụ bởi `Ipsec` (IKE/ESP), `Ppp` (MS-CHAPv2), `OpenVpn` (NCP data channel: AES-GCM + ChaCha20-Poly1305) và `WireGuard` (XChaCha20-Poly1305 cho cookie-reply V3.c).
 - **Noise primitives ([Noise/](Noise)) — đã hiện thực + KAT, chưa có consumer:** `Curve25519DhGroup` (X25519), `Blake2s`, `Blake2sKeyedMac`, `HmacBlake2sPrf`, `NoiseKdf`, **`NoiseSymmetricState` (V3.a)** là nền cho WireGuard (roadmap V.3) và Nebula (V.7). KAT byte-chính-xác: X25519 (RFC 7748 §5.2/§6.1), BLAKE2s-256 + keyed-KAT, HMAC-BLAKE2s đối chiếu HMAC-textbook trên `Blake2s` đã KAT, `NoiseKdf` kiểm cấu trúc extract/expand. `NoiseSymmetricState` là Noise SymmetricState (spec §5.2) đối xứng thuần cho `Noise_IKpsk2_25519_ChaCha20Poly1305_BLAKE2s` (InitializeWireGuard/MixHash/MixKey/MixKeyAndHash/EncryptAndHash/DecryptAndHash/Split) — tái dùng nguyên primitive Noise/ qua DI, test cấu trúc offline đối chiếu hằng trung gian WireGuard `ck0`/`h0` + round-trip + Split 2×32B. **Chưa** có handshake state machine Noise_IKpsk2 (initiation/response/transport keys — làm cùng driver V.3 để KAT trọn handshake).
 - **Khác biệt netstandard2.0 vs net8.0:** chỉ ở `AesGcmCipher` + `ChaCha20Poly1305Cipher` — net8.0 dùng `AesGcm`/`ChaCha20Poly1305` của BCL, netstandard2.0 fallback BouncyCastle. Các primitive `Noise/` (X25519/BLAKE2s/HMAC-BLAKE2s) dùng BouncyCastle **giống nhau trên cả 2 TFM** (BCL không có sẵn ⇒ không nhánh `#if`). `BouncyCastle.Cryptography` nay là PackageReference **không điều kiện** (cả 2 TFM). Các primitive còn lại dùng BCL chung cho cả hai TFM.
 - **MODP group 2 (1024-bit)** giữ lại cho tương thích IKEv1/VPN Gate dù đã yếu theo tiêu chuẩn hiện đại; **group 14 (2048-bit)** là lựa chọn mặc định khuyến nghị.

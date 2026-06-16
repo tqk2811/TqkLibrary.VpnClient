@@ -33,6 +33,18 @@ namespace TqkLibrary.VpnClient.WireGuard.Handshake
         const int RespMac1Offset = RespEmptyOffset + RespEmptyLength;                        // 60
         const int RespMac2Offset = RespMac1Offset + WireGuardConstants.MacLength;            // 76
 
+        // ---- Type-3 cookie-reply field offsets (64 bytes total) ----
+        // type(1) | reserved(3) | receiver(4) | nonce(24) | encrypted_cookie(16+16)
+        const int CookieTypeOffset = 0;                                            // 1 byte type + 3 reserved
+        const int CookieReceiverOffset = 4;                                        // 4
+        const int CookieNonceOffset = CookieReceiverOffset + WireGuardConstants.IndexLength; // 8
+        const int CookieNonceLength = 24;                                          // XChaCha20-Poly1305 nonce
+        const int CookieEncryptedOffset = CookieNonceOffset + CookieNonceLength;             // 32
+        const int CookieEncryptedLength = WireGuardConstants.MacLength + WireGuardConstants.TagLength; // 32
+
+        /// <summary>Total length of a type-3 cookie-reply message (64 bytes).</summary>
+        public const int CookieReplyMessageLength = CookieEncryptedOffset + CookieEncryptedLength;
+
         /// <summary>
         /// The portion of an initiation message covered by mac1 — everything before the mac1 field (offset 0..115).
         /// V3.c keys BLAKE2s over this span.
@@ -125,6 +137,98 @@ namespace TqkLibrary.VpnClient.WireGuard.Handshake
                 Mac2 = datagram.Slice(RespMac2Offset, WireGuardConstants.MacLength).ToArray(),
             };
             return true;
+        }
+
+        // ---- Cookie-reply (type 3) ----
+
+        /// <summary>Encodes <paramref name="message"/> as a fresh 64-byte type-3 cookie-reply datagram.</summary>
+        public byte[] EncodeCookieReply(WireGuardCookieReplyMessage message)
+        {
+            if (message is null) throw new ArgumentNullException(nameof(message));
+            ValidateField(message.Nonce, CookieNonceLength, nameof(message.Nonce));
+            ValidateField(message.EncryptedCookie, CookieEncryptedLength, nameof(message.EncryptedCookie));
+
+            byte[] buffer = new byte[CookieReplyMessageLength];
+            buffer[CookieTypeOffset] = WireGuardConstants.MessageTypeCookieReply; // next 3 bytes stay zero (reserved)
+            BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(CookieReceiverOffset, 4), message.ReceiverIndex);
+            message.Nonce.CopyTo(buffer.AsSpan(CookieNonceOffset));
+            message.EncryptedCookie.CopyTo(buffer.AsSpan(CookieEncryptedOffset));
+            return buffer;
+        }
+
+        /// <summary>
+        /// Parses a 64-byte type-3 cookie-reply datagram. Returns <c>false</c> (no exception) when the length or the
+        /// type/reserved bytes are wrong.
+        /// </summary>
+        public bool TryDecodeCookieReply(ReadOnlySpan<byte> datagram, out WireGuardCookieReplyMessage message)
+        {
+            message = null!;
+            if (datagram.Length != CookieReplyMessageLength) return false;
+            if (datagram[CookieTypeOffset] != WireGuardConstants.MessageTypeCookieReply) return false;
+            if (datagram[1] != 0 || datagram[2] != 0 || datagram[3] != 0) return false;
+
+            message = new WireGuardCookieReplyMessage
+            {
+                ReceiverIndex = BinaryPrimitives.ReadUInt32LittleEndian(datagram.Slice(CookieReceiverOffset, 4)),
+                Nonce = datagram.Slice(CookieNonceOffset, CookieNonceLength).ToArray(),
+                EncryptedCookie = datagram.Slice(CookieEncryptedOffset, CookieEncryptedLength).ToArray(),
+            };
+            return true;
+        }
+
+        // ---- In-place mac1/mac2 on an encoded datagram (whitepaper §5.4.4) ----
+        //
+        // The macs cover the *serialised* leading bytes, so the simplest correct flow is: encode the message with
+        // zero macs, then stamp mac1/mac2 over the buffer. mac1 keys over msg[0:mac1_offset]; mac2 keys over
+        // msg[0:mac2_offset] (which includes mac1). The two message types share the same trailing 32-byte mac block,
+        // and mac1 always sits 32 bytes before the end, mac2 16 bytes before — so the offsets are derivable from the
+        // datagram length, letting one helper serve both type-1 and type-2 wires.
+
+        /// <summary>
+        /// Stamps <c>mac1</c> (and, when a cookie is supplied, <c>mac2</c>) into an already-encoded type-1 or type-2
+        /// <paramref name="datagram"/> using <paramref name="mac"/> bound to the recipient's static key. mac1 is
+        /// computed over the bytes preceding the mac1 field; mac2 over the bytes preceding the mac2 field (i.e.
+        /// including mac1). Pass <paramref name="cookie"/> <c>null</c> to leave mac2 all-zero (no cookie yet).
+        /// </summary>
+        public void ApplyMacs(Span<byte> datagram, WireGuardMac mac, byte[]? cookie = null)
+        {
+            if (mac is null) throw new ArgumentNullException(nameof(mac));
+            int mac2Offset = datagram.Length - WireGuardConstants.MacLength;
+            int mac1Offset = mac2Offset - WireGuardConstants.MacLength;
+            if (mac1Offset < 0) throw new ArgumentException("datagram too small to carry mac1/mac2.", nameof(datagram));
+
+            mac.ComputeMac1(datagram.Slice(0, mac1Offset), datagram.Slice(mac1Offset, WireGuardConstants.MacLength));
+
+            Span<byte> mac2 = datagram.Slice(mac2Offset, WireGuardConstants.MacLength);
+            if (cookie is null)
+                mac2.Clear();
+            else
+                mac.ComputeMac2(cookie, datagram.Slice(0, mac2Offset), mac2);
+        }
+
+        /// <summary>
+        /// Verifies the <c>mac1</c> of a received type-1 or type-2 <paramref name="datagram"/> against
+        /// <paramref name="mac"/> bound to <b>our own</b> static key (the recipient). Returns <c>false</c> so a
+        /// forged/foreign datagram is dropped before any DH work. Does not check mac2 (that is the cookie path).
+        /// </summary>
+        public bool VerifyMac1(ReadOnlySpan<byte> datagram, WireGuardMac mac)
+        {
+            if (mac is null) throw new ArgumentNullException(nameof(mac));
+            int mac2Offset = datagram.Length - WireGuardConstants.MacLength;
+            int mac1Offset = mac2Offset - WireGuardConstants.MacLength;
+            if (mac1Offset < 0) return false;
+            return mac.VerifyMac1(datagram.Slice(0, mac1Offset), datagram.Slice(mac1Offset, WireGuardConstants.MacLength));
+        }
+
+        /// <summary>
+        /// Reads the <c>mac1</c> field out of an encoded type-1 or type-2 <paramref name="datagram"/> (the 16 bytes
+        /// 32 from the end) — the associated data the cookie-reply binds to.
+        /// </summary>
+        public byte[] ReadMac1(ReadOnlySpan<byte> datagram)
+        {
+            int mac1Offset = datagram.Length - 2 * WireGuardConstants.MacLength;
+            if (mac1Offset < 0) throw new ArgumentException("datagram too small to carry mac1.", nameof(datagram));
+            return datagram.Slice(mac1Offset, WireGuardConstants.MacLength).ToArray();
         }
 
         static void ValidateField(byte[] field, int expected, string name)
