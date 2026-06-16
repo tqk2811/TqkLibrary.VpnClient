@@ -5,7 +5,9 @@ using TqkLibrary.VpnClient.Drivers.Ikev2;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec;
 using TqkLibrary.VpnClient.Drivers.OpenVpn;
 using TqkLibrary.VpnClient.Drivers.Sstp;
+using TqkLibrary.VpnClient.Drivers.WireGuard;
 using TqkLibrary.VpnClient.OpenVpn.Config;
+using TqkLibrary.VpnClient.WireGuard.Config;
 
 namespace TqkLibrary.VpnClient
 {
@@ -58,6 +60,13 @@ namespace TqkLibrary.VpnClient
         public VpnClientBuilder UseOpenVpn(OpenVpnProfile profile, X509CertificateCollection? clientCertificates,
             RemoteCertificateValidationCallback? serverCertificateValidation = null, OpenVpnReconnectOptions? reconnectOptions = null)
             => AddDriver(new OpenVpnDriver(profile, clientCertificates, serverCertificateValidation, reconnectOptions: reconnectOptions));
+
+        /// <summary>Registers the WireGuard driver (UDP, Noise_IKpsk2, static point-to-point config) with auto-reconnect enabled by default.</summary>
+        public VpnClientBuilder UseWireGuard(WireGuardConfig config) => AddDriver(new WireGuardDriver(config));
+
+        /// <summary>Registers the WireGuard driver with explicit auto-reconnect options (e.g. to disable it).</summary>
+        public VpnClientBuilder UseWireGuard(WireGuardConfig config, WireGuardReconnectOptions reconnectOptions)
+            => AddDriver(new WireGuardDriver(config, reconnectOptions));
 
         /// <summary>Builds the client.</summary>
         public VpnClient Build() => new VpnClient(_drivers);

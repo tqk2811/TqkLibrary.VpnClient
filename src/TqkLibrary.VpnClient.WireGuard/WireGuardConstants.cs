@@ -49,6 +49,9 @@ namespace TqkLibrary.VpnClient.WireGuard
         /// <summary>Sender/receiver index length (32-bit little-endian).</summary>
         public const int IndexLength = 4;
 
+        /// <summary>The WireGuard default tunnel MTU (1420 = 1500 − 60 IPv6 − 8 UDP − 32 transport header).</summary>
+        public const int DefaultMtu = 1420;
+
         // ---- Message type discriminators (first byte) ----
 
         /// <summary>Handshake-initiation message type.</summary>

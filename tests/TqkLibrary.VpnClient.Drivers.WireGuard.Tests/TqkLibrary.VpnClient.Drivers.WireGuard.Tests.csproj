@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.WireGuard\TqkLibrary.VpnClient.Drivers.WireGuard.csproj" />
+  </ItemGroup>
+
+</Project>

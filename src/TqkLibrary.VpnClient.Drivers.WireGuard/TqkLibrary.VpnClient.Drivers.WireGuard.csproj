@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>WireGuard protocol driver: a UDP transport plus a Noise_IKpsk2 handshake driving a type-4 data plane behind a stable L3 packet channel. Static point-to-point config (private/peer keys, optional PSK, endpoint, allowed-ips, MTU) maps straight to a TunnelConfig (no IPCP/DHCP); timers run keepalive and make-before-break rekey, with teardown and auto-reconnect.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Crypto\TqkLibrary.VpnClient.Crypto.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.WireGuard\TqkLibrary.VpnClient.WireGuard.csproj" />
+  </ItemGroup>
+
+</Project>

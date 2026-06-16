@@ -10,6 +10,7 @@
     <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.Ikev2\TqkLibrary.VpnClient.Drivers.Ikev2.csproj" />
     <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.OpenVpn\TqkLibrary.VpnClient.Drivers.OpenVpn.csproj" />
     <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.Sstp\TqkLibrary.VpnClient.Drivers.Sstp.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.WireGuard\TqkLibrary.VpnClient.Drivers.WireGuard.csproj" />
   </ItemGroup>
 
 </Project>
