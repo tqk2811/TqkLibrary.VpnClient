@@ -52,7 +52,8 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
         {
             LinkLayer = VpnLinkLayer.L2Ethernet,                 // Ethernet frames over TLS
             UsesPpp = false,
-            MultiHostModel = MultiHostModel.L2BroadcastDomain,   // a shared L2 segment (bridged 1-host for now)
+            SupportsMultiHost = true,                            // a whole L2 broadcast domain (EthernetAdapter, L2.8)
+            MultiHostModel = MultiHostModel.L2BroadcastDomain,   // N MAC/IP stations sharing one in-memory switch
             TransportKinds = VpnTransportKind.Tcp,               // TLS over TCP (HTTPS)
             SecurityKinds = VpnSecurityKind.Tls,                 // TLS byte stream
             AuthMethods = VpnAuthMethod.UserPassword,            // SHA-0 secure_password

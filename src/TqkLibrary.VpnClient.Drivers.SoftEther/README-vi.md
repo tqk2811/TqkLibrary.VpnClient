@@ -43,7 +43,7 @@ TqkLibrary.VpnClient.Drivers.SoftEther/
 
 | Type | Vai trò | Vị trí |
 |------|---------|--------|
-| `SoftEtherDriver` | `IVpnProtocolDriver`: capabilities (`L2Ethernet`, **không PPP**, `Tls`, **UserPassword** SHA-0, `Tcp`, `Dhcp`, `L2BroadcastDomain`); `ConnectAsync` dựng `SoftEtherConnection` từ hub (config) + endpoint (host/port) + credentials (user/pass) | [SoftEtherDriver.cs:23](SoftEtherDriver.cs#L23) |
+| `SoftEtherDriver` | `IVpnProtocolDriver`: capabilities (`L2Ethernet`, **không PPP**, `Tls`, **UserPassword** SHA-0, `Tcp`, `Dhcp`, `L2BroadcastDomain`, **`SupportsMultiHost=true`** L2.8); `ConnectAsync` dựng `SoftEtherConnection` từ hub (config) + endpoint (host/port) + credentials (user/pass) | [SoftEtherDriver.cs:23](SoftEtherDriver.cs#L23) |
 | `SoftEtherConnection` | Bộ điều phối: `ISoftEtherTransportFactory.ConnectAsync` (TLS) → `SoftEtherHandshake.RunAsync` (watermark/hello/login/welcome) → `SoftEtherEthernetChannel` + receive loop decode block → `DhcpV4Configurator.ConfigureAsync` (lease IP từ SecureNAT) → `ArpResolver`+`VirtualHost` (bridge L2↔L3) → `SwappablePacketChannel.SetInner` → keep-alive timer; stream đóng / fault → supervisor reconnect | [SoftEtherConnection.cs:31](SoftEtherConnection.cs#L31) |
 | `SoftEtherVpnConnection` | `IVpnConnection`: 1 session; `OpenSessionAsync` ⇒ `NotSupportedException` (1-host bridge; multi-host broadcast domain = roadmap L2.7+) | [SoftEtherVpnConnection.cs:6](SoftEtherVpnConnection.cs#L6) |
 | `SoftEtherVpnSession` | `IVpnSession`: `PacketChannel` (facade ổn định) + `Config` (DHCP-leased) | [SoftEtherVpnSession.cs:10](SoftEtherVpnSession.cs#L10) |
@@ -85,7 +85,7 @@ TqkLibrary.VpnClient.Drivers.SoftEther/
 
 - **Đã có (V4.c)**: end-to-end **offline** — control handshake (watermark/hello/login SHA-0/welcome) → data plane Ethernet-over-TLS → DHCP lease từ SecureNAT giả lập → ARP next-hop → IP round-trip 2 chiều qua bridge L2↔L3; keep-alive; supervisor reconnect; `UseSoftEther(hubName)`. Test offline qua **server SecureNAT giả lập** (control + DHCP server + ARP responder + IP echo) trên byte-pipe in-memory: handshake → lease (OFFER/ACK) → ARP → IP echo → login bị từ chối ⇒ ném (error code) → driver facade → server đóng stream ⇒ Disconnected.
 - **Chưa**:
-  - **multi-host broadcast domain** — hiện bridge **1-host** xuống 1 IP (mirror OpenVPN tap 1-host); phơi cả broadcast domain (nhiều MAC/IP station) cần `EthernetAdapter` + `VpnLinkLayer.L2Ethernet` đa-host (roadmap **L2.7+**).
+  - **multi-host broadcast domain data-plane** — hiện bridge **1-host** xuống 1 IP (mirror OpenVPN tap 1-host). **Năng lực đã phơi (L2.8)**: capability bật `SupportsMultiHost=true` (+ sẵn `L2Ethernet`/`L2BroadcastDomain`), và `MultiHostSession` (`Ethernet`, L2.8) ráp sẵn N station = N `IVpnSession`; **còn lại** = gắn uplink TLS (`SoftEtherEthernetChannel`) vào `EthernetAdapter`/`MultiHostSession` như một port thay bắc-cầu-1-host.
   - **multi-connection** (1–32 parallel TCP / 1 session logic, `additional_connect`+`session_key`, `half_connection`) — hiện 1 TCP/1 session.
   - **deflate/RC4 payload** (`use_compress`/`use_encrypt` trên TLS) — hiện payload thô trên TLS (TLS đã mã hóa).
   - **IPv6** trong tunnel (SecureNAT cấp IPv6) — DHCP/ARP hiện IPv4-only; cần NDISC L2.4 + SLAAC/DHCPv6 L2.6.

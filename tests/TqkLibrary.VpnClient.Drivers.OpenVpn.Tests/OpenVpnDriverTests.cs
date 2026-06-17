@@ -14,20 +14,40 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn.Tests
     public class OpenVpnDriverTests
     {
         static OpenVpnProfile TunUdpProfile() => new() { Protocol = OpenVpnProtocol.Udp, Device = OpenVpnDeviceType.Tun };
+        static OpenVpnProfile TapUdpProfile() => new() { Protocol = OpenVpnProtocol.Udp, Device = OpenVpnDeviceType.Tap };
 
         [Fact]
-        public void Capabilities_DescribeAnL3TlsDriverOverUdpOrTcpWithoutPpp()
+        public void Capabilities_TunMode_DescribeAnL3SingleHostTlsDriverOverUdpOrTcpWithoutPpp()
         {
             VpnDriverCapabilities caps = new OpenVpnDriver(TunUdpProfile()).Capabilities;
 
             Assert.Equal("openvpn", new OpenVpnDriver(TunUdpProfile()).Name);
             Assert.Equal(VpnLinkLayer.L3Ip, caps.LinkLayer);          // tun-mode → IP channel directly
+            Assert.False(caps.SupportsMultiHost);                     // one assigned IP per connection
+            Assert.Equal(MultiHostModel.None, caps.MultiHostModel);
             Assert.False(caps.UsesPpp);                               // PUSH_REPLY config, not PPP
             Assert.Equal(VpnSecurityKind.Tls, caps.SecurityKinds);    // TLS control + AEAD data channel
             Assert.Equal(VpnTransportKind.Udp | VpnTransportKind.Tcp, caps.TransportKinds);
             Assert.Equal(VpnAuthMethod.Certificate | VpnAuthMethod.UserPassword, caps.AuthMethods);
             Assert.Equal(AddressAssignment.ConfigPush, caps.AddressAssignment);
-            Assert.Equal(MultiHostModel.None, caps.MultiHostModel);
+        }
+
+        [Fact]
+        public void Capabilities_TapMode_DescribeAnL2BroadcastDomain()
+        {
+            // L2.8 — tap-mode bridges Ethernet frames through the userspace L2 fabric (EthernetAdapter), so the driver
+            // advertises an L2Ethernet / L2BroadcastDomain multi-host capability instead of single-host L3.
+            VpnDriverCapabilities caps = new OpenVpnDriver(TapUdpProfile()).Capabilities;
+
+            Assert.Equal(VpnLinkLayer.L2Ethernet, caps.LinkLayer);
+            Assert.True(caps.SupportsMultiHost);
+            Assert.Equal(MultiHostModel.L2BroadcastDomain, caps.MultiHostModel);
+            // Everything else matches tun mode (same control/data security, transports, auth, address push).
+            Assert.False(caps.UsesPpp);
+            Assert.Equal(VpnSecurityKind.Tls, caps.SecurityKinds);
+            Assert.Equal(VpnTransportKind.Udp | VpnTransportKind.Tcp, caps.TransportKinds);
+            Assert.Equal(VpnAuthMethod.Certificate | VpnAuthMethod.UserPassword, caps.AuthMethods);
+            Assert.Equal(AddressAssignment.ConfigPush, caps.AddressAssignment);
         }
 
         [Fact]

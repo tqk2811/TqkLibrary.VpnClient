@@ -118,6 +118,7 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther.Tests
             Assert.Equal(VpnSecurityKind.Tls, driver.Capabilities.SecurityKinds);
             Assert.Equal(AddressAssignment.Dhcp, driver.Capabilities.AddressAssignment);
             Assert.Equal(MultiHostModel.L2BroadcastDomain, driver.Capabilities.MultiHostModel);
+            Assert.True(driver.Capabilities.SupportsMultiHost);   // a whole L2 broadcast domain (EthernetAdapter, L2.8)
 
             IVpnConnection vpn = await driver.ConnectAsync(
                 new VpnEndpoint("vpn.example.com", 443),

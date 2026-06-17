@@ -15,7 +15,9 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
     /// The OpenVPN protocol driver (community-server compatible). It is configured with an <see cref="OpenVpnProfile"/>
     /// (the parsed <c>.ovpn</c>) that supplies the device/transport/cipher and the <c>tls-auth</c>/<c>tls-crypt</c>
     /// static keys; the connect-time <see cref="VpnEndpoint"/> gives the server address and <see cref="VpnCredentials"/>
-    /// the optional <c>auth-user-pass</c>. tun-mode (L3) is wired; tap-mode (L2) needs the Ethernet fabric (roadmap L2.5).
+    /// the optional <c>auth-user-pass</c>. tun-mode (L3) outputs bare IP; tap-mode (L2) bridges Ethernet frames through
+    /// the userspace L2 fabric (<c>OpenVpnTapChannel</c> → <c>EthernetAdapter</c>) and advertises an
+    /// <see cref="VpnLinkLayer.L2Ethernet"/> / <see cref="MultiHostModel.L2BroadcastDomain"/> capability (L2.8).
     /// </summary>
     public sealed class OpenVpnDriver : IVpnProtocolDriver
     {
@@ -44,22 +46,36 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             _serverCertificateValidation = serverCertificateValidation;
             _controlWrap = controlWrap;
             _reconnectOptions = reconnectOptions;
+            Capabilities = BuildCapabilities(_profile);
         }
 
         /// <inheritdoc/>
         public string Name => "openvpn";
 
         /// <inheritdoc/>
-        public VpnDriverCapabilities Capabilities { get; } = new VpnDriverCapabilities
+        /// <remarks>
+        /// Profile-aware: <c>dev tun</c> outputs bare IP (<see cref="VpnLinkLayer.L3Ip"/>, single host); <c>dev tap</c>
+        /// bridges Ethernet frames through the userspace L2 fabric (<c>OpenVpnTapChannel</c> → <c>EthernetAdapter</c>),
+        /// so it advertises <see cref="VpnLinkLayer.L2Ethernet"/> + <see cref="MultiHostModel.L2BroadcastDomain"/> (L2.8).
+        /// </remarks>
+        public VpnDriverCapabilities Capabilities { get; }
+
+        static VpnDriverCapabilities BuildCapabilities(OpenVpnProfile profile)
         {
-            LinkLayer = VpnLinkLayer.L3Ip,                                  // tun-mode (tap/L2 needs L2.5)
-            UsesPpp = false,                                               // PUSH_REPLY config, not PPP
-            MultiHostModel = MultiHostModel.None,
-            TransportKinds = VpnTransportKind.Udp | VpnTransportKind.Tcp,
-            SecurityKinds = VpnSecurityKind.Tls,                            // TLS control channel + AEAD data channel
-            AuthMethods = VpnAuthMethod.Certificate | VpnAuthMethod.UserPassword,
-            AddressAssignment = AddressAssignment.ConfigPush,
-        };
+            bool tap = profile.Device == OpenVpnDeviceType.Tap;
+            return new VpnDriverCapabilities
+            {
+                // tun-mode → bare IP, single host; tap-mode → Ethernet frames over the L2 broadcast domain (EthernetAdapter).
+                LinkLayer = tap ? VpnLinkLayer.L2Ethernet : VpnLinkLayer.L3Ip,
+                SupportsMultiHost = tap,
+                MultiHostModel = tap ? MultiHostModel.L2BroadcastDomain : MultiHostModel.None,
+                UsesPpp = false,                                               // PUSH_REPLY config, not PPP
+                TransportKinds = VpnTransportKind.Udp | VpnTransportKind.Tcp,
+                SecurityKinds = VpnSecurityKind.Tls,                            // TLS control channel + AEAD data channel
+                AuthMethods = VpnAuthMethod.Certificate | VpnAuthMethod.UserPassword,
+                AddressAssignment = AddressAssignment.ConfigPush,
+            };
+        }
 
         /// <inheritdoc/>
         public async Task<IVpnConnection> ConnectAsync(VpnEndpoint endpoint, VpnCredentials credentials, CancellationToken cancellationToken = default)
