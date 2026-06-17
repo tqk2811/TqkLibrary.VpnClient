@@ -48,6 +48,26 @@ namespace TqkLibrary.VpnClient.OpenConnect.Models
         /// <summary>The session cookie echoed by the server (<c>Set-Cookie: webvpn=…</c>), if present on the CONNECT response.</summary>
         public string? SessionCookie { get; set; }
 
+        // ---- DTLS data path (X-DTLS-*) — the parallel UDP/DTLS tunnel the client may open alongside CSTP-over-TLS ----
+
+        /// <summary>The DTLS session id (<c>X-DTLS-Session-ID</c>), used as the cookie that ties the UDP/DTLS session to this CSTP session; null when the gateway offers no DTLS.</summary>
+        public string? DtlsSessionId { get; set; }
+
+        /// <summary>The DTLS cipher suite the gateway selected (<c>X-DTLS-CipherSuite</c>, e.g. <c>AES256-GCM-SHA384</c>); null when unset.</summary>
+        public string? DtlsCipherSuite { get; set; }
+
+        /// <summary>The UDP port the DTLS data path connects to (<c>X-DTLS-Port</c>); null = DTLS not offered.</summary>
+        public int? DtlsPort { get; set; }
+
+        /// <summary>The DTLS keep-alive interval in seconds (<c>X-DTLS-Keepalive</c>); falls back to <see cref="Keepalive"/> when unset.</summary>
+        public int? DtlsKeepalive { get; set; }
+
+        /// <summary>The DTLS dead-peer-detection interval in seconds (<c>X-DTLS-DPD</c>); falls back to <see cref="Dpd"/> when unset.</summary>
+        public int? DtlsDpd { get; set; }
+
+        /// <summary>True when the gateway advertised a usable DTLS data path (a session id and a port).</summary>
+        public bool HasDtls => !string.IsNullOrEmpty(DtlsSessionId) && DtlsPort.HasValue && DtlsPort.Value > 0;
+
         /// <summary>Maps the parsed headers onto a <see cref="TunnelConfig"/> for the userspace stack.</summary>
         public TunnelConfig ToTunnelConfig()
         {

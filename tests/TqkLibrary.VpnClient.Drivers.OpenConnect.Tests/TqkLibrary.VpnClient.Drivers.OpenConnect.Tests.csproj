@@ -4,4 +4,11 @@
     <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.OpenConnect\TqkLibrary.VpnClient.Drivers.OpenConnect.csproj" />
   </ItemGroup>
 
+  <!-- The offline DTLS data-path test builds a BouncyCastle DTLS server (DtlsServerProtocol + self-signed cert), so the
+       test project references BouncyCastle directly (the production projects pull it transitively, but the test's server
+       role uses server-only APIs the production projects never touch). -->
+  <ItemGroup>
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.4.0" />
+  </ItemGroup>
+
 </Project>

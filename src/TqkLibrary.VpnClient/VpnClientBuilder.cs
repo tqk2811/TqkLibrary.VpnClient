@@ -72,8 +72,9 @@ namespace TqkLibrary.VpnClient
             => AddDriver(new WireGuardDriver(config, reconnectOptions));
 
         /// <summary>
-        /// Registers the OpenConnect (Cisco AnyConnect / ocserv) driver: HTTPS config-auth then CSTP-over-TLS, in-band
-        /// X-CSTP-* address, bare IP (no PPP), X-CSTP-DPD dead-peer-detection. TLS-only (DTLS is roadmap V5.c).
+        /// Registers the OpenConnect (Cisco AnyConnect / ocserv) driver: HTTPS config-auth then CSTP, in-band
+        /// X-CSTP-* address, bare IP (no PPP), X-CSTP-DPD dead-peer-detection. The data plane runs over DTLS 1.2 when the
+        /// gateway advertises X-DTLS-*, falling back to CSTP-over-TLS otherwise.
         /// </summary>
         public VpnClientBuilder UseOpenConnect() => AddDriver(new OpenConnectDriver());
 

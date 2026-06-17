@@ -158,13 +158,19 @@ namespace TqkLibrary.VpnClient.Drivers.OpenConnect.Tests
             var (link, _, serverCts) = StartServer();
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
-            var driver = new OpenConnectDriver(transportFactory: new InProcessOpenConnectTransportFactory(link.Client));
+            // enableDtls:false ⇒ TLS-only over the in-process byte-stream loopback (no DTLS server in this test).
+            var driver = new OpenConnectDriver(transportFactory: new InProcessOpenConnectTransportFactory(link.Client), enableDtls: false);
             Assert.Equal("openconnect", driver.Name);
             Assert.Equal(VpnLinkLayer.L3Ip, driver.Capabilities.LinkLayer);
             Assert.Equal(VpnSecurityKind.Tls, driver.Capabilities.SecurityKinds);
             Assert.Equal(VpnTransportKind.Tls, driver.Capabilities.TransportKinds);
             Assert.Equal(AddressAssignment.ConfigPush, driver.Capabilities.AddressAssignment);
             Assert.False(driver.Capabilities.UsesPpp);
+
+            // With DTLS enabled (the production default) the capabilities advertise the parallel DTLS data path.
+            var dtlsDriver = new OpenConnectDriver();
+            Assert.Equal(VpnSecurityKind.Tls | VpnSecurityKind.Dtls, dtlsDriver.Capabilities.SecurityKinds);
+            Assert.Equal(VpnTransportKind.Tls | VpnTransportKind.Dtls, dtlsDriver.Capabilities.TransportKinds);
 
             IVpnConnection vpn = await driver.ConnectAsync(
                 new VpnEndpoint("127.0.0.1", 443),
@@ -181,6 +187,142 @@ namespace TqkLibrary.VpnClient.Drivers.OpenConnect.Tests
 
             await Assert.ThrowsAsync<NotSupportedException>(() => vpn.OpenSessionAsync(cts.Token));
             await vpn.DisposeAsync();
+            serverCts.Cancel();
+        }
+
+        // ---- DTLS data path (V5.c) ----
+
+        [Fact]
+        public async Task Dtls_DataPathEstablished_RoundTripsBothDirectionsOverDtls()
+        {
+            // HTTP loopback (auth+CONNECT advertises X-DTLS-*) + a UDP loopback the DTLS server runs on.
+            var link = new LoopbackByteStreamPair();
+            var server = new SimulatedOpenConnectServer(link.Server, User, Pass, dpdSeconds: 30, keepaliveSeconds: 20, dtlsPort: 4443);
+            var serverCts = new CancellationTokenSource();
+            _ = Task.Run(() => server.RunAsync(serverCts.Token));
+
+            var udpLink = new LoopbackDatagramLink();
+            using var dtlsServer = new SimulatedDtlsCstpServer(udpLink.Server);
+            dtlsServer.Start();
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            var connection = new OpenConnectConnection("127.0.0.1", 443,
+                new InProcessOpenConnectTransportFactory(link.Client), User, Pass,
+                datagramFactory: new InProcessOpenConnectDatagramTransportFactory(udpLink.Client));
+
+            var inbound = Channel.CreateUnbounded<byte[]>();
+            connection.PacketChannel.InboundIpPacket += m => inbound.Writer.TryWrite(m.ToArray());
+
+            await connection.ConnectAsync(cts.Token);
+
+            // The data plane swapped to DTLS (X-DTLS-* advertised + handshake succeeded).
+            Assert.True(connection.IsDtlsDataPlane);
+            Assert.Equal(OpenConnectConnectionState.Connected, connection.State);
+            Assert.Equal(IPAddress.Parse("10.10.0.5"), connection.AssignedAddress);
+            Assert.True((await dtlsServer.Handshaked.Task));
+
+            // Client → DTLS server (echoed) → client: an IP packet survives the CSTP-over-DTLS data channel both ways.
+            byte[] packet = Encoding.ASCII.GetBytes("a tunnelled IP packet over CSTP-over-DTLS");
+            await connection.PacketChannel.WriteIpPacketAsync(packet, cts.Token);
+            byte[] echoed = await inbound.Reader.ReadAsync(cts.Token);
+            Assert.Equal(packet, echoed);
+            await WaitUntilAsync(() => dtlsServer.DataPacketsReceived >= 1, cts.Token);
+
+            // Server → client (unsolicited) over DTLS: proves the inbound DTLS demux + deliver path.
+            byte[] sentinel = Encoding.ASCII.GetBytes("a packet the gateway originated over DTLS");
+            dtlsServer.SendData(sentinel);
+            byte[] fromPeer = await inbound.Reader.ReadAsync(cts.Token);
+            Assert.Equal(sentinel, fromPeer);
+
+            Assert.Null(dtlsServer.Failure);
+            await connection.DisposeAsync();
+            serverCts.Cancel();
+        }
+
+        [Fact]
+        public async Task Dtls_ServerDpdProbe_IsAnsweredOverDtls()
+        {
+            var link = new LoopbackByteStreamPair();
+            var server = new SimulatedOpenConnectServer(link.Server, User, Pass, dpdSeconds: 30, keepaliveSeconds: 20, dtlsPort: 4443);
+            var serverCts = new CancellationTokenSource();
+            _ = Task.Run(() => server.RunAsync(serverCts.Token));
+
+            var udpLink = new LoopbackDatagramLink();
+            using var dtlsServer = new SimulatedDtlsCstpServer(udpLink.Server);
+            dtlsServer.Start();
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            var connection = new OpenConnectConnection("127.0.0.1", 443,
+                new InProcessOpenConnectTransportFactory(link.Client), User, Pass,
+                datagramFactory: new InProcessOpenConnectDatagramTransportFactory(udpLink.Client));
+            await connection.ConnectAsync(cts.Token);
+            Assert.True(connection.IsDtlsDataPlane);
+
+            // The DTLS server sends a DPD-REQUEST; the client's CstpDatagramChannel must answer with a DPD-RESPONSE over DTLS.
+            dtlsServer.SendDpdRequest();
+            await WaitUntilAsync(() => dtlsServer.DpdResponsesReceived > 0, cts.Token);
+            Assert.True(dtlsServer.DpdResponsesReceived > 0);
+
+            await connection.DisposeAsync();
+            serverCts.Cancel();
+        }
+
+        [Fact]
+        public async Task Dtls_NotAdvertised_FallsBackToTls_AndStillRoundTrips()
+        {
+            // Server does NOT advertise X-DTLS-* (dtlsPort:0). Even with a datagram factory wired, the client stays on TLS.
+            var (link, server, serverCts) = StartServer();
+            var udpLink = new LoopbackDatagramLink();
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var connection = new OpenConnectConnection("127.0.0.1", 443,
+                new InProcessOpenConnectTransportFactory(link.Client), User, Pass,
+                datagramFactory: new InProcessOpenConnectDatagramTransportFactory(udpLink.Client));
+
+            var inbound = Channel.CreateUnbounded<byte[]>();
+            connection.PacketChannel.InboundIpPacket += m => inbound.Writer.TryWrite(m.ToArray());
+            await connection.ConnectAsync(cts.Token);
+
+            Assert.False(connection.IsDtlsDataPlane); // no X-DTLS-* ⇒ stays on CSTP-over-TLS
+            byte[] packet = Encoding.ASCII.GetBytes("falls back to TLS when DTLS is not offered");
+            await connection.PacketChannel.WriteIpPacketAsync(packet, cts.Token);
+            Assert.Equal(packet, await inbound.Reader.ReadAsync(cts.Token));
+            Assert.Equal(1, server.DataPacketsReceived);
+
+            await connection.DisposeAsync();
+            serverCts.Cancel();
+        }
+
+        [Fact]
+        public async Task Dtls_HandshakeFails_FallsBackToTls_AndStillRoundTrips()
+        {
+            // Server advertises X-DTLS-* but there is NO DTLS responder on the UDP loopback, so the DTLS handshake times
+            // out / fails. The connection must fall back to CSTP-over-TLS rather than failing the whole connect.
+            var link = new LoopbackByteStreamPair();
+            var server = new SimulatedOpenConnectServer(link.Server, User, Pass, dpdSeconds: 30, keepaliveSeconds: 20, dtlsPort: 4443);
+            var serverCts = new CancellationTokenSource();
+            _ = Task.Run(() => server.RunAsync(serverCts.Token));
+
+            var udpLink = new LoopbackDatagramLink(); // server end never answers ⇒ DTLS handshake never completes
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            // A short DTLS handshake deadline so the fallback is exercised quickly without the whole connect timing out.
+            var connection = new OpenConnectConnection("127.0.0.1", 443,
+                new InProcessOpenConnectTransportFactory(link.Client), User, Pass,
+                datagramFactory: new InProcessOpenConnectDatagramTransportFactory(udpLink.Client),
+                dtlsHandshakeTimeout: TimeSpan.FromSeconds(2));
+
+            var inbound = Channel.CreateUnbounded<byte[]>();
+            connection.PacketChannel.InboundIpPacket += m => inbound.Writer.TryWrite(m.ToArray());
+            await connection.ConnectAsync(cts.Token);
+
+            Assert.False(connection.IsDtlsDataPlane); // DTLS handshake failed ⇒ fell back to CSTP-over-TLS
+            Assert.Equal(OpenConnectConnectionState.Connected, connection.State);
+            byte[] packet = Encoding.ASCII.GetBytes("falls back to TLS when the DTLS handshake fails");
+            await connection.PacketChannel.WriteIpPacketAsync(packet, cts.Token);
+            Assert.Equal(packet, await inbound.Reader.ReadAsync(cts.Token));
+
+            await connection.DisposeAsync();
             serverCts.Cancel();
         }
 

@@ -28,6 +28,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenConnect.Tests
         readonly int _dpdSeconds;
         readonly int _keepaliveSeconds;
         readonly string _address;
+        readonly int _dtlsPort;
         readonly CstpFraming _framing = new();
         readonly object _writeLock = new();
 
@@ -45,7 +46,8 @@ namespace TqkLibrary.VpnClient.Drivers.OpenConnect.Tests
 
         public SimulatedOpenConnectServer(IByteStreamTransport stream,
             string? expectedUser = null, string? expectedPassword = null,
-            int dpdSeconds = 30, int keepaliveSeconds = 20, string address = "10.10.0.5")
+            int dpdSeconds = 30, int keepaliveSeconds = 20, string address = "10.10.0.5",
+            int dtlsPort = 0)
         {
             _stream = stream;
             _expectedUser = expectedUser;
@@ -53,6 +55,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenConnect.Tests
             _dpdSeconds = dpdSeconds;
             _keepaliveSeconds = keepaliveSeconds;
             _address = address;
+            _dtlsPort = dtlsPort; // 0 = do not advertise the DTLS data path (client stays on CSTP-over-TLS)
         }
 
         /// <summary>Runs the responder until the stream closes or cancellation.</summary>
@@ -132,6 +135,15 @@ namespace TqkLibrary.VpnClient.Drivers.OpenConnect.Tests
             sb.Append("X-CSTP-DPD: ").Append(_dpdSeconds.ToString(CultureInfo.InvariantCulture)).Append("\r\n");
             sb.Append("X-CSTP-Keepalive: ").Append(_keepaliveSeconds.ToString(CultureInfo.InvariantCulture)).Append("\r\n");
             sb.Append("X-CSTP-Rekey-Method: ssl\r\n");
+            if (_dtlsPort > 0)
+            {
+                // Advertise the parallel DTLS data path. The session id is the cookie tying the UDP/DTLS session to CSTP.
+                sb.Append("X-DTLS-Session-ID: 0123456789abcdef0123456789abcdef\r\n");
+                sb.Append("X-DTLS-CipherSuite: AES256-GCM-SHA384\r\n");
+                sb.Append("X-DTLS-Port: ").Append(_dtlsPort.ToString(CultureInfo.InvariantCulture)).Append("\r\n");
+                sb.Append("X-DTLS-DPD: ").Append(_dpdSeconds.ToString(CultureInfo.InvariantCulture)).Append("\r\n");
+                sb.Append("X-DTLS-Keepalive: ").Append(_keepaliveSeconds.ToString(CultureInfo.InvariantCulture)).Append("\r\n");
+            }
             sb.Append("\r\n");
             return sb.ToString();
         }

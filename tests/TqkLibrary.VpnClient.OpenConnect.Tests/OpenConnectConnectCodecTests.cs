@@ -123,5 +123,53 @@ namespace TqkLibrary.VpnClient.OpenConnect.Tests
             Assert.Throws<ArgumentException>(() => OpenConnectConnectCodec.BuildConnectRequest("", "c"));
             Assert.Throws<ArgumentException>(() => OpenConnectConnectCodec.BuildConnectRequest("h", ""));
         }
+
+        [Fact]
+        public void BuildConnectRequest_AdvertisesDtls_WhenRequested()
+        {
+            string req = OpenConnectConnectCodec.BuildConnectRequest("h", "c", 1400,
+                requestDtls: true, dtlsMasterSecretHex: "deadbeef");
+            Assert.Contains("X-DTLS-Master-Secret: deadbeef\r\n", req);
+            Assert.Contains("X-DTLS-CipherSuite: ", req);
+
+            // Without the flag the request advertises no DTLS headers (TLS-only).
+            string noDtls = OpenConnectConnectCodec.BuildConnectRequest("h", "c", 1400);
+            Assert.DoesNotContain("X-DTLS-", noDtls);
+        }
+
+        [Fact]
+        public void ParseConnectResponse_ParsesDtlsHeaders()
+        {
+            const string resp =
+                "HTTP/1.1 200 CONNECTED\r\n" +
+                "X-CSTP-Address: 10.10.10.5\r\n" +
+                "X-DTLS-Session-ID: 0123456789abcdef\r\n" +
+                "X-DTLS-CipherSuite: AES256-GCM-SHA384\r\n" +
+                "X-DTLS-Port: 4443\r\n" +
+                "X-DTLS-DPD: 40\r\n" +
+                "X-DTLS-Keepalive: 25\r\n" +
+                "\r\n";
+
+            OpenConnectTunnelInfo info = OpenConnectConnectCodec.ParseConnectResponse(resp);
+            Assert.Equal("0123456789abcdef", info.DtlsSessionId);
+            Assert.Equal("AES256-GCM-SHA384", info.DtlsCipherSuite);
+            Assert.Equal(4443, info.DtlsPort);
+            Assert.Equal(40, info.DtlsDpd);
+            Assert.Equal(25, info.DtlsKeepalive);
+            Assert.True(info.HasDtls);
+        }
+
+        [Fact]
+        public void HasDtls_FalseWithoutSessionIdOrPort()
+        {
+            OpenConnectTunnelInfo noDtls = OpenConnectConnectCodec.ParseConnectResponse(
+                "HTTP/1.1 200 OK\r\nX-CSTP-Address: 10.0.0.2\r\n\r\n");
+            Assert.False(noDtls.HasDtls);
+
+            // A session id but no usable port ⇒ still not a usable DTLS path.
+            OpenConnectTunnelInfo noPort = OpenConnectConnectCodec.ParseConnectResponse(
+                "HTTP/1.1 200 OK\r\nX-CSTP-Address: 10.0.0.2\r\nX-DTLS-Session-ID: abc\r\n\r\n");
+            Assert.False(noPort.HasDtls);
+        }
     }
 }

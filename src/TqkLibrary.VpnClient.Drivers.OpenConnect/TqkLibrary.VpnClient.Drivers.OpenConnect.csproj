@@ -1,12 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <Description>OpenConnect (Cisco AnyConnect / ocserv) protocol driver: HTTPS config-auth then HTTP CONNECT over a TLS byte stream, promoted to a CSTP-over-TLS data plane carrying bare IP packets (no PPP) behind a stable L3 packet channel. In-band address from the X-CSTP-* CONNECT headers maps to a TunnelConfig; timers run X-CSTP-DPD dead-peer-detection and X-CSTP-Keepalive, with teardown and auto-reconnect. TLS-only (DTLS is roadmap V5.c/F.3).</Description>
+    <Description>OpenConnect (Cisco AnyConnect / ocserv) protocol driver: HTTPS config-auth then HTTP CONNECT over a TLS byte stream, promoted to a CSTP data plane carrying bare IP packets (no PPP) behind a stable L3 packet channel. In-band address from the X-CSTP-* CONNECT headers maps to a TunnelConfig; timers run X-CSTP-DPD dead-peer-detection and X-CSTP-Keepalive, with teardown and auto-reconnect. When the gateway advertises X-DTLS-* the data plane runs over a parallel DTLS 1.2 datagram channel (Transport.Dtls / F.3), falling back to CSTP-over-TLS when DTLS is absent or fails.</Description>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
     <ProjectReference Include="..\TqkLibrary.VpnClient.OpenConnect\TqkLibrary.VpnClient.OpenConnect.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Transport.Dtls\TqkLibrary.VpnClient.Transport.Dtls.csproj" />
   </ItemGroup>
 
 </Project>
