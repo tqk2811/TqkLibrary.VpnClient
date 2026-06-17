@@ -87,7 +87,7 @@ TqkLibrary.VpnClient.Ppp/
 | **RFC 1661 §5–6** (control packet + TLV option) | `PppControlCodec`, `PppOption` | [PppControlCodec.cs:7](PppControlCodec.cs#L7), [Models/PppOption.cs:3](Models/PppOption.cs#L3) | Code/Id/Length + TLV |
 | **RFC 1661 §5** (mã gói control) | `PppCode` | [Enums/PppCode.cs:3](Enums/PppCode.cs#L3) | Configure/Terminate/Echo... |
 | **RFC 1661 §6** + **RFC 1570** (LCP option) | `LcpOptionType` | [Enums/LcpOptionType.cs:3](Enums/LcpOptionType.cs#L3) | MRU, Auth-Protocol, Magic-Number, PFC/ACFC |
-| **RFC 1661 / IANA** (trường Protocol) | `PppProtocol` | [Framing/Enums/PppProtocol.cs:3](Framing/Enums/PppProtocol.cs#L3) | IP=0x0021, IPv6=0x0057, LCP=0xC021, CHAP=0xC223, IPCP=0x8021, IPV6CP=0x8057 |
+| **RFC 1661 / IANA** (trường Protocol) | `PppProtocol` | [Framing/Enums/PppProtocol.cs:3](Framing/Enums/PppProtocol.cs#L3) | IP=0x0021, IPv6=0x0057, Compressed=0x00FD (MPPC/MPPE, PPTP V.6), LCP=0xC021, CHAP=0xC223, IPCP=0x8021, CCP=0x80FD (PPTP V.6), IPV6CP=0x8057 |
 | **RFC 1332** (IPCP) + **RFC 1877** (DNS/NBNS) | `IpcpNegotiator`, `IpcpOptionType` | [IpcpNegotiator.cs:8](IpcpNegotiator.cs#L8), [Enums/IpcpOptionType.cs:3](Enums/IpcpOptionType.cs#L3) | IP-Address, Primary/Secondary DNS/NBNS |
 | **RFC 5072** (IPV6CP) | `Ipv6cpNegotiator`, `Ipv6cpOptionType` | [Ipv6cpNegotiator.cs:14](Ipv6cpNegotiator.cs#L14), [Enums/Ipv6cpOptionType.cs:3](Enums/Ipv6cpOptionType.cs#L3) | Interface-Identifier §4.1 → link-local fe80::/64; Compression §4.2 reject |
 | **RFC 1662** (PPP trong HDLC-like framing) | `HdlcFramer`, `HdlcDecoder` | [Framing/HdlcFramer.cs:4](Framing/HdlcFramer.cs#L4), [Framing/HdlcDecoder.cs:4](Framing/HdlcDecoder.cs#L4) | Cờ 0x7E, escape 0x7D, ACCM C0 |

@@ -96,6 +96,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TqkLibrary.VpnClient.Driver
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TqkLibrary.VpnClient.Drivers.OpenConnect.Tests", "..\tests\TqkLibrary.VpnClient.Drivers.OpenConnect.Tests\TqkLibrary.VpnClient.Drivers.OpenConnect.Tests.csproj", "{069A5265-B5A0-45BA-8FA9-3E3909B06DA5}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TqkLibrary.VpnClient.Pptp", "TqkLibrary.VpnClient.Pptp\TqkLibrary.VpnClient.Pptp.csproj", "{FD814F76-5B20-479C-86D4-6E0A2FDAB8C3}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TqkLibrary.VpnClient.Pptp.Tests", "..\tests\TqkLibrary.VpnClient.Pptp.Tests\TqkLibrary.VpnClient.Pptp.Tests.csproj", "{F9BC75D5-6863-4957-8534-37899F8B6BB7}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -598,6 +602,30 @@ Global
 		{069A5265-B5A0-45BA-8FA9-3E3909B06DA5}.Release|x64.Build.0 = Release|Any CPU
 		{069A5265-B5A0-45BA-8FA9-3E3909B06DA5}.Release|x86.ActiveCfg = Release|Any CPU
 		{069A5265-B5A0-45BA-8FA9-3E3909B06DA5}.Release|x86.Build.0 = Release|Any CPU
+		{FD814F76-5B20-479C-86D4-6E0A2FDAB8C3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FD814F76-5B20-479C-86D4-6E0A2FDAB8C3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FD814F76-5B20-479C-86D4-6E0A2FDAB8C3}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{FD814F76-5B20-479C-86D4-6E0A2FDAB8C3}.Debug|x64.Build.0 = Debug|Any CPU
+		{FD814F76-5B20-479C-86D4-6E0A2FDAB8C3}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{FD814F76-5B20-479C-86D4-6E0A2FDAB8C3}.Debug|x86.Build.0 = Debug|Any CPU
+		{FD814F76-5B20-479C-86D4-6E0A2FDAB8C3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FD814F76-5B20-479C-86D4-6E0A2FDAB8C3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FD814F76-5B20-479C-86D4-6E0A2FDAB8C3}.Release|x64.ActiveCfg = Release|Any CPU
+		{FD814F76-5B20-479C-86D4-6E0A2FDAB8C3}.Release|x64.Build.0 = Release|Any CPU
+		{FD814F76-5B20-479C-86D4-6E0A2FDAB8C3}.Release|x86.ActiveCfg = Release|Any CPU
+		{FD814F76-5B20-479C-86D4-6E0A2FDAB8C3}.Release|x86.Build.0 = Release|Any CPU
+		{F9BC75D5-6863-4957-8534-37899F8B6BB7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F9BC75D5-6863-4957-8534-37899F8B6BB7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F9BC75D5-6863-4957-8534-37899F8B6BB7}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{F9BC75D5-6863-4957-8534-37899F8B6BB7}.Debug|x64.Build.0 = Debug|Any CPU
+		{F9BC75D5-6863-4957-8534-37899F8B6BB7}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{F9BC75D5-6863-4957-8534-37899F8B6BB7}.Debug|x86.Build.0 = Debug|Any CPU
+		{F9BC75D5-6863-4957-8534-37899F8B6BB7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F9BC75D5-6863-4957-8534-37899F8B6BB7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F9BC75D5-6863-4957-8534-37899F8B6BB7}.Release|x64.ActiveCfg = Release|Any CPU
+		{F9BC75D5-6863-4957-8534-37899F8B6BB7}.Release|x64.Build.0 = Release|Any CPU
+		{F9BC75D5-6863-4957-8534-37899F8B6BB7}.Release|x86.ActiveCfg = Release|Any CPU
+		{F9BC75D5-6863-4957-8534-37899F8B6BB7}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
