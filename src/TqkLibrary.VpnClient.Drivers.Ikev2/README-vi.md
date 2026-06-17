@@ -14,7 +14,7 @@ Driver **IKEv2-native** (RFC 7296) — kết nối trực tiếp tới gateway I
 
 | Hướng | Project | Lý do |
 |-------|---------|-------|
-| Dùng | [Abstractions](../TqkLibrary.VpnClient.Abstractions) | `IVpnProtocolDriver`/`IVpnConnection`/`IVpnSession`, `IPacketChannel`, `SwappablePacketChannel`, exceptions, `IHostResolver` |
+| Dùng | [Abstractions](../TqkLibrary.VpnClient.Abstractions) | `IVpnProtocolDriver`/`IVpnConnection`/`IVpnSession`, `IPacketChannel`, `SwappablePacketChannel`, exceptions, `IHostResolver`, **`Diagnostics`** (`VpnEventIds`/`VpnLogExtensions` — log handshake/DPD/rekey/reconnect, Q.2) |
 | Dùng | [Ipsec](../TqkLibrary.VpnClient.Ipsec) | `Ike/V2` (IkeClient + payloads), `Esp` (EspSession/EspTunnelChannel), `Nat` (NAT-T) |
 | Được dùng bởi | [TqkLibrary.VpnClient](../TqkLibrary.VpnClient) (façade) | `VpnClientBuilder.UseIkev2()` đăng ký driver |
 
@@ -59,9 +59,11 @@ TqkLibrary.VpnClient.Drivers.Ikev2/
 - **Rekey IKE SA** (Phase-1-equivalent, RFC 7296 §1.3.2/§2.18): timer ~90% lifetime (8h) → `RekeyIkeSaAsync` gửi `BuildRekeyIkeSaRequest` (CREATE_CHILD_SA: SPI/DH/Nonce mới) trên SK channel **cũ** → `ProcessRekeyIkeSaResponse` swing SK_* mới + reset message-id về 0. **Chỉ refresh khóa control-channel** — ESP CHILD_SA/data plane không đổi nên không cần make-before-break trên traffic. Sau swing, **DELETE IKE SA cũ**: wire đã được `IkeClient` mã hóa bằng SK_* **cũ** + SPI cũ ngay trước swing (`TakePendingOldIkeSaDelete`) → gửi best-effort trên SA cũ qua `SendDeleteAsync` (không chờ ACK trên SA sắp chết). Chung guard `_rekeyInProgress` với rekey CHILD_SA (không chạy chồng).
 - **Teardown** (`DisconnectAsync`): gửi `BuildDeleteIkeSa` (best-effort), hủy receive loop, đóng socket.
 - **Auto-reconnect**: gateway DELETE / DPD chết ⇒ supervisor dựng lại tunnel sau `SwappablePacketChannel`; backoff mũ + jitter.
+- **Logging/diagnostics (Q.2)**: ctor `Ikev2Connection`/`Ikev2Driver` nhận `ILoggerFactory?` (mặc định [`NullLogger`](../TqkLibrary.VpnClient.Abstractions/Diagnostics/Extensions/VpnLogExtensions.cs) ⇒ no-op, **ADDITIVE không đổi hành vi**). Log qua [`VpnLogExtensions`](../TqkLibrary.VpnClient.Abstractions/Diagnostics/Extensions/VpnLogExtensions.cs): IKE_SA_INIT + IKE_AUTH (PSK/EAP)→Handshake (auth fail→HandshakeFailed); bind ESP plane→HandshakeCompleted; DPD probe→Keepalive; rekey CHILD_SA/IKE SA→Rekey; `SetState`→StateChanged; `OnLinkLost`→LinkLost; reconnect attempt/success→ReconnectAttempt/Reconnected.
 
 ## Trạng thái & ghi chú
 
 - **Validate live cần lab Q.1** (strongSwan Docker) — môi trường Termux/PRoot không có Docker. Toán protocol (handshake, CP, DPD/DELETE, rekey) đã test offline ở [`Ipsec.Ike.Tests`](../../tests/TqkLibrary.VpnClient.Ipsec.Ike.Tests) + data plane ở [`Ipsec.Esp.Tests`](../../tests/TqkLibrary.VpnClient.Ipsec.Esp.Tests); test client của driver (capabilities + guard) ở [`Drivers.Ikev2.Tests`](../../tests/TqkLibrary.VpnClient.Drivers.Ikev2.Tests).
 - **PSK hoặc EAP-MSCHAPv2** + **forced NAT-T** + **1 CHILD_SA / 1 IP ảo** + rekey **CHILD_SA và IKE SA** đều gắn timer trong driver, **mỗi loại rekey phát DELETE cho SA cũ** (không để gateway tự timeout). **Chưa**: honest-first NAT-T, multi-traffic-selector, responder AUTH bằng cert (EAP hiện verify responder bằng PSK) — xem roadmap V.1/[`11`](../../.docs/11-todo-roadmap.md).
+- **Logging/diagnostics (Q.2) đã có**: luồng `ILoggerFactory?` qua driver/connection → trace handshake (IKE_SA_INIT/IKE_AUTH)/HandshakeCompleted/DPD/rekey/state/link-lost/reconnect (xem Vòng đời); mặc định no-op, không đổi hành vi runtime.
 - **Thuần client**: không có code server; "responder" trong test chỉ là harness in-process.

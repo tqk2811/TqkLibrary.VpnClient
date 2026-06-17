@@ -1,6 +1,9 @@
 using System.Net;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using TqkLibrary.VpnClient.Abstractions.Channels;
 using TqkLibrary.VpnClient.Abstractions.Channels.Interfaces;
+using TqkLibrary.VpnClient.Abstractions.Diagnostics.Extensions;
 using TqkLibrary.VpnClient.Abstractions.Drivers;
 using TqkLibrary.VpnClient.Abstractions.Net;
 using TqkLibrary.VpnClient.Drivers.Ikev2.Enums;
@@ -36,7 +39,9 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
         static readonly TimeSpan ExchangeTimeout = TimeSpan.FromSeconds(2.5);
         const int ExchangeMaxAttempts = 5;
         const int Mtu = 1400;
+        const string DriverName = "ikev2";
 
+        readonly ILogger _logger;
         readonly string _host;
         readonly byte[] _preSharedKey;
         readonly string? _eapUserName;
@@ -77,11 +82,12 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
         /// Creates a connection to the given IKEv2 gateway. <paramref name="preSharedKey"/> always authenticates the
         /// responder (RFC 7296 §2.15). When <paramref name="eapUserName"/>/<paramref name="eapPassword"/> are both
         /// supplied, the initiator authenticates with EAP-MSCHAPv2 instead of a PSK AUTH (RFC 7296 §2.16); otherwise it
-        /// authenticates with the PSK as well.
+        /// authenticates with the PSK as well. <paramref name="loggerFactory"/> receives diagnostic traces
+        /// (handshake/DPD/rekey/reconnect); null logs to <see cref="NullLogger"/> (a no-op).
         /// </summary>
         public Ikev2Connection(string host, byte[] preSharedKey, Ikev2ReconnectOptions? reconnectOptions = null,
             AddressFamilyPreference addressFamilyPreference = AddressFamilyPreference.Auto, IHostResolver? hostResolver = null,
-            string? eapUserName = null, string? eapPassword = null)
+            string? eapUserName = null, string? eapPassword = null, ILoggerFactory? loggerFactory = null)
         {
             _host = host;
             _preSharedKey = preSharedKey;
@@ -90,6 +96,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
             _opts = reconnectOptions ?? new Ikev2ReconnectOptions();
             _addressFamilyPreference = addressFamilyPreference;
             _hostResolver = hostResolver ?? DnsHostResolver.Default;
+            _logger = (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger("TqkLibrary.VpnClient.Drivers.Ikev2");
         }
 
         /// <summary>The stable L3 packet channel (valid after a successful connect; survives reconnect).</summary>
@@ -137,6 +144,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
             _ike = ike;
 
             // --- IKE_SA_INIT on UDP/500 ---
+            _logger.LogHandshake(DriverName, "IKE_SA_INIT on UDP/500");
             IkeMessage initRequest = ike.BuildInitRequest(natt.GetLocalAddress(), (ushort)natt.LocalPort, serverIp, (ushort)NatTraversal.IkePort);
             byte[] initReply = await ExchangeIkeAsync(natt, initRequest.Encode(), cancellationToken).ConfigureAwait(false);
             ike.ProcessInitResponse(IkeMessage.Decode(initReply));
@@ -145,13 +153,17 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
             natt.SwitchToNatTPort();
 
             // --- IKE_AUTH on UDP/4500 (encrypted; carries IDi, AUTH, CP request, SAi2, TS) ---
+            _logger.LogHandshake(DriverName, useEap ? "IKE_AUTH (EAP-MSCHAPv2) on UDP/4500" : "IKE_AUTH (PSK) on UDP/4500");
             if (useEap)
                 await RunEapAuthAsync(natt, ike, cancellationToken).ConfigureAwait(false);
             else
             {
                 byte[] authReply = await ExchangeIkeAsync(natt, ike.BuildAuthRequest(), cancellationToken).ConfigureAwait(false);
                 if (!ike.ProcessAuthResponse(authReply))
+                {
+                    _logger.LogHandshakeFailed(DriverName, "IKE_AUTH failed (PSK / AUTH mismatch or no CHILD_SA)");
                     throw new VpnAuthenticationException("IKEv2 IKE_AUTH failed (PSK / AUTH mismatch or no CHILD_SA).");
+                }
             }
 
             IPAddress? assigned = ike.Configuration?.AssignedIp4Address;
@@ -208,8 +220,11 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
                 eapRequest = next;
             }
             if (!ike.EapEstablished)
+            {
+                _logger.LogHandshakeFailed(DriverName, "EAP-MSCHAPv2 authentication failed");
                 throw new VpnAuthenticationException(
                     "IKEv2 EAP-MSCHAPv2 authentication failed (bad user name/password, EAP-Failure, or responder AUTH mismatch).");
+            }
         }
 
         // Builds the bidirectional ESP session from the negotiated CHILD_SA: initiator keys outbound, responder inbound.
@@ -279,6 +294,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
         void StartKeepalive()
         {
             _keepaliveRunning = true;
+            _logger.LogHandshakeCompleted(DriverName);
             SetState(Ikev2ConnectionState.Connected);
             _dpdTimer = new System.Threading.Timer(_ => _ = SendDpdTickAsync(), null, DpdInterval, DpdInterval);
             _rekeyTimer = new System.Threading.Timer(_ => _ = RekeyChildSaAsync(), null, RekeyInterval, RekeyInterval);
@@ -311,6 +327,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
             if (ike is null) return;
             try
             {
+                _logger.LogKeepalive(DriverName, "sent IKEv2 DPD INFORMATIONAL");
                 await SendRequestAwaitResponseAsync(ike.BuildDeadPeerDetection()).ConfigureAwait(false);
                 Interlocked.Exchange(ref _dpdMissed, 0); // a reply proves the peer is alive
             }
@@ -404,6 +421,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
                 var fresh = new EspSession(ToSpi(rekeyed.OutboundSpi), outbound, ToSpi(rekeyed.InboundSpi), inbound);
 
                 dataPlane.SwapSession(fresh);                       // send on the new SA now; keep the old for inbound
+                _logger.LogRekey(DriverName, "CHILD_SA rekeyed (make-before-break)");
                 ScheduleDropPreviousInbound(dataPlane);             // drop the old SA after the grace window
 
                 // Retire the old CHILD_SA on the gateway (RFC 7296 §2.8): DELETE its inbound SPI on the live IKE SA.
@@ -437,6 +455,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
 
                 byte[] reply = await SendRequestAwaitResponseAsync(ike.BuildRekeyIkeSaRequest()).ConfigureAwait(false);
                 if (!ike.ProcessRekeyIkeSaResponse(reply)) return; // false ⇒ keep the current IKE SA; the timer retries
+                _logger.LogRekey(DriverName, "IKE SA rekeyed in place (SK_* refreshed)");
 
                 // Retire the old IKE SA on the gateway (RFC 7296 §2.18): the DELETE was encrypted with the old SK keys
                 // the instant before the swing, so it must ride the old SA. Best-effort and fire-and-forget — the new
@@ -457,6 +476,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
             lock (_stateLock)
             {
                 if (!_keepaliveRunning) return;
+                _logger.LogLinkLost(DriverName, reason);
                 StopKeepalive();
                 _espActive = false;
 
@@ -484,6 +504,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
             while (!_userTeardown && !cancellationToken.IsCancellationRequested)
             {
                 bool established = false;
+                _logger.LogReconnectAttempt(DriverName, failures + 1);
                 try { await EstablishAsync(cancellationToken).ConfigureAwait(false); established = true; }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
                 catch { /* attempt failed — back off and retry */ }
@@ -496,7 +517,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
                         healthy = _keepaliveRunning;
                         if (healthy) _supervisorActive = false;
                     }
-                    if (healthy) { RaiseReconnected(); return; }
+                    if (healthy) { _logger.LogReconnected(DriverName); RaiseReconnected(); return; }
 
                     SetState(Ikev2ConnectionState.Reconnecting);
                     delay = _opts.InitialBackoff;
@@ -589,6 +610,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
         {
             if (_state == state) return;
             _state = state;
+            _logger.LogStateChanged(DriverName, state.ToString());
             StateChanged?.Invoke(state);
         }
 

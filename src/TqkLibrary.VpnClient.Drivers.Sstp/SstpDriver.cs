@@ -1,4 +1,5 @@
 using System.Net.Security;
+using Microsoft.Extensions.Logging;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Enums;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
@@ -11,19 +12,22 @@ namespace TqkLibrary.VpnClient.Drivers.Sstp
         readonly SstpReconnectOptions? _reconnectOptions;
         readonly RemoteCertificateValidationCallback? _certificateValidationCallback;
         readonly bool _enableIpv6;
+        readonly ILoggerFactory? _loggerFactory;
 
         /// <summary>
         /// Creates the driver; <paramref name="reconnectOptions"/> tunes (or disables) auto-reconnect and
         /// <paramref name="certificateValidationCallback"/> validates the server TLS certificate (<c>null</c> ⇒ accept
         /// any cert — the SSTP identity is bound by its crypto binding, not PKI). Set <paramref name="enableIpv6"/> to
         /// also run IPV6CP for a link-local IPv6 address (best-effort; the IPv4 path is unaffected).
+        /// <paramref name="loggerFactory"/> receives diagnostic traces (null = no logging).
         /// </summary>
         public SstpDriver(SstpReconnectOptions? reconnectOptions = null, RemoteCertificateValidationCallback? certificateValidationCallback = null,
-            bool enableIpv6 = false)
+            bool enableIpv6 = false, ILoggerFactory? loggerFactory = null)
         {
             _reconnectOptions = reconnectOptions;
             _certificateValidationCallback = certificateValidationCallback;
             _enableIpv6 = enableIpv6;
+            _loggerFactory = loggerFactory;
         }
 
         /// <inheritdoc/>
@@ -46,7 +50,7 @@ namespace TqkLibrary.VpnClient.Drivers.Sstp
         {
             var connection = new SstpConnection(endpoint.Host, endpoint.Port, reconnectOptions: _reconnectOptions,
                 certificateValidationCallback: _certificateValidationCallback, addressFamilyPreference: endpoint.AddressFamilyPreference,
-                enableIpv6: _enableIpv6);
+                enableIpv6: _enableIpv6, loggerFactory: _loggerFactory);
             try
             {
                 await connection.ConnectAsync(credentials.Username ?? string.Empty, credentials.Password ?? string.Empty, cancellationToken)

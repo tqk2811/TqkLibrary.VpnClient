@@ -4,8 +4,11 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Security.Cryptography;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using TqkLibrary.VpnClient.Abstractions.Channels;
 using TqkLibrary.VpnClient.Abstractions.Channels.Interfaces;
+using TqkLibrary.VpnClient.Abstractions.Diagnostics.Extensions;
 using TqkLibrary.VpnClient.Abstractions.Drivers;
 using TqkLibrary.VpnClient.Abstractions.Net;
 using TqkLibrary.VpnClient.Drivers.Sstp.Enums;
@@ -26,7 +29,9 @@ namespace TqkLibrary.VpnClient.Drivers.Sstp
     {
         static readonly TimeSpan EchoInterval = TimeSpan.FromSeconds(30);
         const int EchoMaxMissed = 3;
+        const string DriverName = "sstp";
 
+        readonly ILogger _logger;
         readonly string _host;
         readonly int _port;
         readonly uint _magic;
@@ -65,10 +70,13 @@ namespace TqkLibrary.VpnClient.Drivers.Sstp
         /// transport (null ⇒ accept any cert); it is ignored when an explicit <paramref name="transportFactory"/> is given.
         /// Set <paramref name="enableIpv6"/> to also run IPV6CP (RFC 5072) for a link-local IPv6 address alongside IPCP
         /// (best-effort: a server without IPv6 support simply never opens IPV6CP and the IPv4 link is unaffected).
+        /// <paramref name="loggerFactory"/> receives diagnostic traces (handshake/keepalive/reconnect); null logs to
+        /// <see cref="NullLogger"/> (a no-op).
         /// </summary>
         public SstpConnection(string host, int port = 443, uint magic = 0x1A2B3C4D, SstpReconnectOptions? reconnectOptions = null,
             Func<ITlsByteStream>? transportFactory = null, RemoteCertificateValidationCallback? certificateValidationCallback = null,
-            AddressFamilyPreference addressFamilyPreference = AddressFamilyPreference.Auto, bool enableIpv6 = false)
+            AddressFamilyPreference addressFamilyPreference = AddressFamilyPreference.Auto, bool enableIpv6 = false,
+            ILoggerFactory? loggerFactory = null)
         {
             _host = host;
             _port = port;
@@ -76,6 +84,7 @@ namespace TqkLibrary.VpnClient.Drivers.Sstp
             _enableIpv6 = enableIpv6;
             _opts = reconnectOptions ?? new SstpReconnectOptions();
             _transportFactory = transportFactory ?? (() => new TlsByteStream(_host, _port, certificateValidationCallback, addressFamilyPreference));
+            _logger = (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger("TqkLibrary.VpnClient.Drivers.Sstp");
         }
 
         /// <summary>The stable L3 packet channel (valid after a successful connect; survives reconnect).</summary>
@@ -124,6 +133,7 @@ namespace TqkLibrary.VpnClient.Drivers.Sstp
             _transport = transport;
 
             // TLS + SSTP_DUPLEX_POST handshake. Reclassify the transport's generic failures into typed VPN errors.
+            _logger.LogHandshake(DriverName, "TLS + SSTP_DUPLEX_POST handshake");
             try
             {
                 await transport.ConnectAsync(cancellationToken).ConfigureAwait(false);
@@ -158,6 +168,7 @@ namespace TqkLibrary.VpnClient.Drivers.Sstp
             }
 
             // Call Connect Request → Call Connect Ack (carries the 32-byte crypto-binding nonce).
+            _logger.LogHandshake(DriverName, "Call-Connect-Request -> Call-Connect-Ack (crypto-binding nonce)");
             var encapsulatedProtocol = new SstpAttribute((byte)SstpAttributeId.EncapsulatedProtocolId, new byte[] { 0x00, 0x01 });
             await transport.SendControlAsync(SstpMessageType.CallConnectRequest, new[] { encapsulatedProtocol }, cancellationToken).ConfigureAwait(false);
 
@@ -208,7 +219,12 @@ namespace TqkLibrary.VpnClient.Drivers.Sstp
                 }
                 catch { /* binding send failed; the link simply won't come up and the handshake fails */ }
             };
-            engine.AuthFailed += () => linkUp.TrySetException(new VpnAuthenticationException("SSTP PPP MS-CHAPv2 authentication failed."));
+            engine.AuthSucceeded += () => _logger.LogHandshake(DriverName, "PPP MS-CHAPv2 authentication succeeded; sending crypto binding");
+            engine.AuthFailed += () =>
+            {
+                _logger.LogHandshakeFailed(DriverName, "PPP MS-CHAPv2 authentication failed");
+                linkUp.TrySetException(new VpnAuthenticationException("SSTP PPP MS-CHAPv2 authentication failed."));
+            };
             engine.LinkUp += () => linkUp.TrySetResult(true);
 
             var loopCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token, cancellationToken);
@@ -311,6 +327,7 @@ namespace TqkLibrary.VpnClient.Drivers.Sstp
         void StartKeepalive()
         {
             _keepaliveRunning = true;
+            _logger.LogHandshakeCompleted(DriverName);
             SetState(SstpConnectionState.Connected);
             _echoTimer = new System.Threading.Timer(_ => _ = SendEchoTickAsync(), null, EchoInterval, EchoInterval);
         }
@@ -331,6 +348,7 @@ namespace TqkLibrary.VpnClient.Drivers.Sstp
                 return;
             }
             Interlocked.Increment(ref _echoMissed);
+            _logger.LogKeepalive(DriverName, "sent SSTP Echo-Request");
             try { await SendControlSafeAsync(SstpMessageType.EchoRequest).ConfigureAwait(false); }
             catch { }
         }
@@ -355,6 +373,7 @@ namespace TqkLibrary.VpnClient.Drivers.Sstp
             lock (_stateLock)
             {
                 if (!_keepaliveRunning) return; // first signal stops keepalive; the rest no-op
+                _logger.LogLinkLost(DriverName, reason);
                 StopKeepalive();
 
                 if (_userTeardown || !_opts.Enabled)
@@ -382,6 +401,7 @@ namespace TqkLibrary.VpnClient.Drivers.Sstp
             while (!_userTeardown && !cancellationToken.IsCancellationRequested)
             {
                 bool established = false;
+                _logger.LogReconnectAttempt(DriverName, failures + 1);
                 try { await EstablishAsync(cancellationToken).ConfigureAwait(false); established = true; }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
                 catch { /* attempt failed — back off and retry below */ }
@@ -397,7 +417,7 @@ namespace TqkLibrary.VpnClient.Drivers.Sstp
                         healthy = _keepaliveRunning;
                         if (healthy) _supervisorActive = false;
                     }
-                    if (healthy) { RaiseReconnected(); return; }
+                    if (healthy) { _logger.LogReconnected(DriverName); RaiseReconnected(); return; }
 
                     SetState(SstpConnectionState.Reconnecting);
                     delay = _opts.InitialBackoff;
@@ -434,6 +454,7 @@ namespace TqkLibrary.VpnClient.Drivers.Sstp
         {
             if (_state == state) return;
             _state = state;
+            _logger.LogStateChanged(DriverName, state.ToString());
             StateChanged?.Invoke(state);
         }
 

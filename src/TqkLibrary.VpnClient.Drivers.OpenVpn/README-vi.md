@@ -14,7 +14,7 @@ Driver **OpenVPN** (tương thích OpenVPN community server) — ráp các khố
 
 | Hướng | Project | Lý do |
 |-------|---------|-------|
-| Dùng | [Abstractions](../TqkLibrary.VpnClient.Abstractions) | `IVpnProtocolDriver`/`IVpnConnection`/`IVpnSession`, `IPacketChannel`, `SwappablePacketChannel`, `IDatagramTransport`/`IByteStreamTransport`, exceptions, `IHostResolver` |
+| Dùng | [Abstractions](../TqkLibrary.VpnClient.Abstractions) | `IVpnProtocolDriver`/`IVpnConnection`/`IVpnSession`, `IPacketChannel`, `SwappablePacketChannel`, `IDatagramTransport`/`IByteStreamTransport`, exceptions, `IHostResolver`, **`Diagnostics`** (`VpnEventIds`/`VpnLogExtensions` — log handshake/keepalive/rekey/reconnect, Q.2) |
 | Dùng | [OpenVpn](../TqkLibrary.VpnClient.OpenVpn) | `OpenVpnControlChannel`, transport TCP/UDP + tun/tap channel, key-method-2/NCP, data plane/keepalive/ping, config `OpenVpnProfile`, wrap tls-auth/tls-crypt |
 | Dùng | [Ethernet](../TqkLibrary.VpnClient.Ethernet) | `OpenVpnTapChannel` → `VirtualHost` + `ArpResolver` + `MacAddress` bắc cầu L2→L3 cho **tap-mode** |
 | Được dùng bởi | [TqkLibrary.VpnClient](../TqkLibrary.VpnClient) (façade) | `VpnClientBuilder.UseOpenVpn(profile)` đăng ký driver |
@@ -65,6 +65,7 @@ TqkLibrary.VpnClient.Drivers.OpenVpn/
 - **Rekey**: `OpenVpnDataPlane.RekeyNeeded` (packet-id tới ~2³²) ⇒ **re-establish** (reconnect) — fresh keys, packet-id về 0, không tái dùng nonce GCM. (Soft-reset make-before-break — TLS handshake thứ 2 trên key_id mới rồi `OpenVpnDataPlane.Swap` — là việc sau, cần control-channel hỗ trợ SOFT_RESET.)
 - **Teardown** (`DisconnectAsync`): hủy reconnect đang chờ, hủy receive loop, dispose control channel + socket. (Explicit-exit-notify để best-effort sau.)
 - **Reconnect** (supervisor): mirror IKEv2/L2TP — `EstablishAsync`/`ReconnectLoopAsync` backoff+jitter sau `SwappablePacketChannel` ổn định; `Reconnected` → `OpenVpnVpnSession.ApplyReconnect`.
+- **Logging/diagnostics (Q.2)**: ctor `OpenVpnConnection`/`OpenVpnDriver` nhận `ILoggerFactory?` (mặc định [`NullLogger`](../TqkLibrary.VpnClient.Abstractions/Diagnostics/Extensions/VpnLogExtensions.cs) ⇒ no-op, **ADDITIVE không đổi hành vi**). Log qua [`VpnLogExtensions`](../TqkLibrary.VpnClient.Abstractions/Diagnostics/Extensions/VpnLogExtensions.cs): reset/TLS + key-method-2 + PUSH_REPLY→Handshake (PUSH thiếu ifconfig→HandshakeFailed); bind data plane→HandshakeCompleted; ping→Keepalive; rekey re-establish→Rekey; `SetState`→StateChanged; `OnLinkLost`→LinkLost; reconnect attempt/success→ReconnectAttempt/Reconnected.
 
 ## Bảng chuẩn / RFC
 
@@ -78,6 +79,7 @@ TqkLibrary.VpnClient.Drivers.OpenVpn/
 ## Trạng thái & ghi chú
 
 - **Đã có (V2.h)**: tun **và** tap end-to-end UDP/TCP — handshake reset→TLS→key-method-2→PUSH, demux opcode, NCP AES-GCM/ChaCha20-Poly1305, **push-peer-info nâng cao** (`peerInfoOptions` ở ctor: IV_MTU từ tun MTU + IV_PLAT/IV_PLAT_VER/IV_SSL_VER/IV_GUI_VER + `UV_*`), keepalive ping/ping-restart, teardown, supervisor reconnect; tap bắc cầu Ethernet→L3 qua `OpenVpnTapChannel`+`ArpResolver`+`VirtualHost` (1 host, IPv4/ARP, IP từ server-bridge ifconfig); `UseOpenVpn(profile)`. Test offline: capabilities + `OpenSessionAsync` guard + **end-to-end tun** (handshake → bind địa chỉ → IP round-trip + demux → drop ping) + **NCP ChaCha** + **push-peer-info** (client advertise IV_MTU=tun MTU + IV_PLAT + `UV_*`) + **end-to-end tap** (handshake → ARP gateway → IP round-trip trong khung Ethernet lên facade L3 → drop ping; và không-ifconfig ⇒ `VpnServerRejectedException` trỏ L2.5).
+- **Đã có (Q.2)**: luồng `ILoggerFactory?` qua driver/connection → trace handshake (reset/TLS/key-method-2/PUSH)/HandshakeCompleted/keepalive/rekey/state/link-lost/reconnect (xem Vòng đời). Test offline `OpenVpnLoggingTests.cs`: logger giả lập bắt Handshake/HandshakeCompleted/StateChanged khi connect end-to-end (data path không đổi).
 - **Chưa**:
   - **tap pure-DHCP-bridge** (server `dev tap` không push ifconfig) — cần **L2.5** DHCPv4; driver từ chối kèm gợi ý. **tap IPv6** (ifconfig v6) — cần **L2.4** NDISC. **tap multi-host data-plane** — **năng lực đã phơi (L2.8)**: tap-mode capability nay khai báo `VpnLinkLayer.L2Ethernet` + `MultiHostModel.L2BroadcastDomain` + `SupportsMultiHost`, và `MultiHostSession` (`Ethernet`, L2.8) ráp sẵn N station; **còn lại** = gắn uplink VPN (`OpenVpnTapChannel`) vào `EthernetAdapter`/`MultiHostSession` như một port thay bắc-cầu-1-host.
   - **soft-reset make-before-break** (rekey không gián đoạn) — hiện rekey bằng re-establish; cần control-channel khởi tạo SOFT_RESET.

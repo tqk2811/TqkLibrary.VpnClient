@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Enums;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
@@ -12,20 +13,24 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
         readonly L2tpIpsecTimeoutOptions? _timeoutOptions;
         readonly L2tpIpsecNatTraversalMode _natTraversalMode;
         readonly bool _enableIpv6;
+        readonly ILoggerFactory? _loggerFactory;
 
         /// <summary>
         /// Creates the driver; <paramref name="reconnectOptions"/> tunes (or disables) auto-reconnect,
         /// <paramref name="timeoutOptions"/> tunes the IKE/L2TP handshake timeouts and retransmit caps,
-        /// <paramref name="natTraversalMode"/> selects how NAT-T is negotiated (default: always force NAT-T), and
-        /// <paramref name="enableIpv6"/> also runs IPV6CP for a link-local IPv6 address (best-effort; IPv4 unaffected).
+        /// <paramref name="natTraversalMode"/> selects how NAT-T is negotiated (default: always force NAT-T),
+        /// <paramref name="enableIpv6"/> also runs IPV6CP for a link-local IPv6 address (best-effort; IPv4 unaffected),
+        /// and <paramref name="loggerFactory"/> receives diagnostic traces (null = no logging).
         /// </summary>
         public L2tpIpsecDriver(L2tpIpsecReconnectOptions? reconnectOptions = null, L2tpIpsecTimeoutOptions? timeoutOptions = null,
-            L2tpIpsecNatTraversalMode natTraversalMode = L2tpIpsecNatTraversalMode.ForcedNatT, bool enableIpv6 = false)
+            L2tpIpsecNatTraversalMode natTraversalMode = L2tpIpsecNatTraversalMode.ForcedNatT, bool enableIpv6 = false,
+            ILoggerFactory? loggerFactory = null)
         {
             _reconnectOptions = reconnectOptions;
             _timeoutOptions = timeoutOptions;
             _natTraversalMode = natTraversalMode;
             _enableIpv6 = enableIpv6;
+            _loggerFactory = loggerFactory;
         }
 
         /// <inheritdoc/>
@@ -54,7 +59,8 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
 
             var connection = new L2tpIpsecConnection(endpoint.Host, psk, reconnectOptions: _reconnectOptions,
                 timeoutOptions: _timeoutOptions, natTraversalMode: _natTraversalMode,
-                addressFamilyPreference: endpoint.AddressFamilyPreference, enableIpv6: _enableIpv6);
+                addressFamilyPreference: endpoint.AddressFamilyPreference, enableIpv6: _enableIpv6,
+                loggerFactory: _loggerFactory);
             try
             {
                 await connection.ConnectAsync(credentials.Username ?? string.Empty, credentials.Password ?? string.Empty, cancellationToken)

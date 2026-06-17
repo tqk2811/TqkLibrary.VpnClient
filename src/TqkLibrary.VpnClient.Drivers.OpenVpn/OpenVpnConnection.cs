@@ -2,8 +2,12 @@ using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using TqkLibrary.VpnClient.Abstractions.Channels;
 using TqkLibrary.VpnClient.Abstractions.Channels.Interfaces;
+using TqkLibrary.VpnClient.Abstractions.Diagnostics.Enums;
+using TqkLibrary.VpnClient.Abstractions.Diagnostics.Extensions;
 using TqkLibrary.VpnClient.Abstractions.Drivers;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
 using TqkLibrary.VpnClient.Abstractions.Net;
@@ -33,7 +37,9 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
     public sealed class OpenVpnConnection : IDisposable, IAsyncDisposable
     {
         static readonly TimeSpan KeepaliveTick = TimeSpan.FromSeconds(1);
+        const string DriverName = "openvpn";
 
+        readonly ILogger _logger;
         readonly string _host;
         readonly int _port;
         readonly OpenVpnDeviceType _device;
@@ -92,7 +98,8 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
         /// opens the UDP/TCP socket (an in-process factory drives it offline). <paramref name="peerInfoOptions"/>
         /// customises the advertised <c>IV_*</c> peer-info block (null = defaults; the tun MTU fills <c>IV_MTU</c> when
         /// unset). <paramref name="clock"/> supplies the keepalive millisecond clock (default: the system tick clock) —
-        /// tests inject a deterministic one.
+        /// tests inject a deterministic one. <paramref name="loggerFactory"/> receives diagnostic traces
+        /// (handshake/NCP/keepalive/reconnect/drop); null logs to <see cref="NullLogger"/> (a no-op).
         /// </summary>
         public OpenVpnConnection(string host, int port, IOpenVpnTransportFactory transportFactory,
             string optionsString = "",
@@ -107,7 +114,8 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             int tunMtu = 1500,
             OpenVpnReliabilityOptions? reliabilityOptions = null,
             OpenVpnPeerInfoOptions? peerInfoOptions = null,
-            Func<long>? clock = null)
+            Func<long>? clock = null,
+            ILoggerFactory? loggerFactory = null)
         {
             _host = host ?? throw new ArgumentNullException(nameof(host));
             _port = port;
@@ -128,6 +136,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             _peerInfoOptions = peerInfoOptions;
             _clock = clock ?? DefaultClock;
             _tapMac = GenerateLocalMac(_random);
+            _logger = (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger("TqkLibrary.VpnClient.Drivers.OpenVpn");
         }
 
         // A locally-administered unicast MAC for the virtual tap endpoint: clear the I/G (multicast) bit and set the
@@ -196,9 +205,11 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
                 _receiveTask = Task.Run(() => handle.ReceivePump(loopToken));
 
             // --- reset → TLS handshake (inside the reliability layer) ---
+            _logger.LogHandshake(DriverName, "HARD_RESET -> TLS handshake on the control channel");
             await control.ConnectAsync(_host, _clientCertificates, _serverCertificateValidation, cancellationToken).ConfigureAwait(false);
 
             // --- key-method-2 over TLS (peer-info advertises IV_CIPHERS for NCP, plus IV_MTU and informational IV_*) ---
+            _logger.LogHandshake(DriverName, "key-method-2 key exchange over TLS (peer-info IV_CIPHERS for NCP)");
             OpenVpnPeerInfoOptions peerInfoOptions = _peerInfoOptions ?? new OpenVpnPeerInfoOptions();
             if (peerInfoOptions.Mtu is null) peerInfoOptions = peerInfoOptions with { Mtu = _tunMtu };
             string peerInfo = OpenVpnPeerInfo.Build(peerInfoOptions);
@@ -208,9 +219,13 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             // --- PUSH_REQUEST → PUSH_REPLY (address, routes, DNS, peer-id, keepalive, cipher) ---
             OpenVpnPushReply push = await control.RequestConfigAsync(cancellationToken).ConfigureAwait(false);
             if (push.IfconfigLocal is null)
+            {
+                _logger.LogHandshakeFailed(DriverName, "PUSH_REPLY carried no ifconfig (no tunnel address)");
                 throw new VpnServerRejectedException(_device == OpenVpnDeviceType.Tap
                     ? "OpenVPN tap-mode PUSH_REPLY carried no ifconfig: a pure DHCP bridge needs the userspace DHCPv4 client (roadmap L2.5). This driver bridges tap only with a server-bridge managed pool that pushes ifconfig."
                     : "OpenVPN server PUSH_REPLY carried no tunnel address (no ifconfig).");
+            }
+            _logger.LogHandshake(DriverName, $"PUSH_REPLY: ifconfig {push.IfconfigLocal}, cipher {push.Cipher ?? "(default)"}");
 
             // --- NCP: honour the server's cipher pick, then slice the data-channel keys for it ---
             OpenVpnDataCipher cipher = ResolveCipher(push.Cipher);
@@ -298,6 +313,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
         {
             _keepalive = new OpenVpnKeepalive(pingSeconds, pingRestartSeconds, _clock());
             _keepaliveRunning = true;
+            _logger.LogHandshakeCompleted(DriverName);
             SetState(OpenVpnConnectionState.Connected);
             if (pingSeconds > 0 || pingRestartSeconds > 0)
                 _keepaliveTimer = new System.Threading.Timer(_ => _ = KeepaliveTickAsync(), null, KeepaliveTick, KeepaliveTick);
@@ -339,12 +355,17 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             byte[] wire = dp.Protect(comp.WrapOutgoing(OpenVpnPing.Magic)); // synchronous: no span crosses the await
             await transport.SendAsync(wire).ConfigureAwait(false);
             _keepalive?.OnDataSent(now);
+            _logger.LogKeepalive(DriverName, "sent OpenVPN keepalive ping");
         }
 
         // ---- rekey: the data-channel packet-id is nearing 2^32; re-establish before the GCM nonce could repeat ----
         // (Make-before-break soft-reset — a 2nd TLS handshake on a new key_id then OpenVpnDataPlane.Swap — is future work;
         // a full re-establish is the honest, correct fallback: fresh keys, packet-id restarts at 0, no nonce reuse.)
-        void OnRekeyNeeded() => OnLinkLost("data-channel rekey: packet-id approaching exhaustion; re-establishing the session.");
+        void OnRekeyNeeded()
+        {
+            _logger.LogRekey(DriverName, "data-channel packet-id nearing exhaustion; re-establishing the session");
+            OnLinkLost("data-channel rekey: packet-id approaching exhaustion; re-establishing the session.");
+        }
 
         // ---- link-loss handling + auto-reconnect supervisor (mirrors the IKEv2 / L2TP driver) ----
 
@@ -355,6 +376,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             lock (_stateLock)
             {
                 if (!_keepaliveRunning) return;
+                _logger.LogLinkLost(DriverName, reason);
                 StopKeepalive();
                 _dataActive = false;
 
@@ -382,6 +404,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             while (!_userTeardown && !cancellationToken.IsCancellationRequested)
             {
                 bool established = false;
+                _logger.LogReconnectAttempt(DriverName, failures + 1);
                 try { await EstablishAsync(cancellationToken).ConfigureAwait(false); established = true; }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
                 catch { /* attempt failed — back off and retry */ }
@@ -394,7 +417,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
                         healthy = _keepaliveRunning;
                         if (healthy) _supervisorActive = false;
                     }
-                    if (healthy) { RaiseReconnected(); return; }
+                    if (healthy) { _logger.LogReconnected(DriverName); RaiseReconnected(); return; }
 
                     SetState(OpenVpnConnectionState.Reconnecting);
                     delay = _opts.InitialBackoff;
@@ -496,6 +519,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
         {
             if (_state == state) return;
             _state = state;
+            _logger.LogStateChanged(DriverName, state.ToString());
             StateChanged?.Invoke(state);
         }
 

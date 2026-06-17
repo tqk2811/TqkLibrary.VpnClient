@@ -1,6 +1,7 @@
 using System.Net.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using Microsoft.Extensions.Logging;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Enums;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
@@ -26,6 +27,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
         readonly RemoteCertificateValidationCallback? _serverCertificateValidation;
         readonly IOpenVpnControlWrap? _controlWrap;
         readonly OpenVpnReconnectOptions? _reconnectOptions;
+        readonly ILoggerFactory? _loggerFactory;
 
         /// <summary>
         /// Creates the driver. <paramref name="profile"/> is the parsed configuration; <paramref name="clientCertificates"/>
@@ -33,19 +35,21 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
         /// validates the server certificate (null = accept any — supply a real CA check for production);
         /// <paramref name="controlWrap"/> overrides the <c>tls-auth</c>/<c>tls-crypt</c> wrap built from the profile's
         /// inline static keys (supply one when the key is referenced by file path); <paramref name="reconnectOptions"/>
-        /// tunes (or disables) auto-reconnect.
+        /// tunes (or disables) auto-reconnect. <paramref name="loggerFactory"/> receives diagnostic traces (null = no logging).
         /// </summary>
         public OpenVpnDriver(OpenVpnProfile profile,
             X509CertificateCollection? clientCertificates = null,
             RemoteCertificateValidationCallback? serverCertificateValidation = null,
             IOpenVpnControlWrap? controlWrap = null,
-            OpenVpnReconnectOptions? reconnectOptions = null)
+            OpenVpnReconnectOptions? reconnectOptions = null,
+            ILoggerFactory? loggerFactory = null)
         {
             _profile = profile ?? throw new ArgumentNullException(nameof(profile));
             _clientCertificates = clientCertificates;
             _serverCertificateValidation = serverCertificateValidation;
             _controlWrap = controlWrap;
             _reconnectOptions = reconnectOptions;
+            _loggerFactory = loggerFactory;
             Capabilities = BuildCapabilities(_profile);
         }
 
@@ -94,7 +98,8 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
                 controlWrap: _controlWrap ?? BuildControlWrap(_profile),
                 reconnectOptions: _reconnectOptions,
                 addressFamilyPreference: endpoint.AddressFamilyPreference,
-                tunMtu: _profile.TunMtu ?? 1500);
+                tunMtu: _profile.TunMtu ?? 1500,
+                loggerFactory: _loggerFactory);
             try
             {
                 await connection.ConnectAsync(cancellationToken).ConfigureAwait(false);

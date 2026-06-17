@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Enums;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
@@ -8,11 +9,16 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
     public sealed class Ikev2Driver : IVpnProtocolDriver
     {
         readonly Ikev2ReconnectOptions? _reconnectOptions;
+        readonly ILoggerFactory? _loggerFactory;
 
-        /// <summary>Creates the driver; <paramref name="reconnectOptions"/> tunes (or disables) auto-reconnect.</summary>
-        public Ikev2Driver(Ikev2ReconnectOptions? reconnectOptions = null)
+        /// <summary>
+        /// Creates the driver; <paramref name="reconnectOptions"/> tunes (or disables) auto-reconnect and
+        /// <paramref name="loggerFactory"/> receives diagnostic traces (null = no logging).
+        /// </summary>
+        public Ikev2Driver(Ikev2ReconnectOptions? reconnectOptions = null, ILoggerFactory? loggerFactory = null)
         {
             _reconnectOptions = reconnectOptions;
+            _loggerFactory = loggerFactory;
         }
 
         /// <inheritdoc/>
@@ -50,7 +56,8 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
             var connection = new Ikev2Connection(endpoint.Host, psk, reconnectOptions: _reconnectOptions,
                 addressFamilyPreference: endpoint.AddressFamilyPreference,
                 eapUserName: string.IsNullOrEmpty(eapUserName) ? null : eapUserName,
-                eapPassword: string.IsNullOrEmpty(eapPassword) ? null : eapPassword);
+                eapPassword: string.IsNullOrEmpty(eapPassword) ? null : eapPassword,
+                loggerFactory: _loggerFactory);
             try
             {
                 await connection.ConnectAsync(cancellationToken).ConfigureAwait(false);
