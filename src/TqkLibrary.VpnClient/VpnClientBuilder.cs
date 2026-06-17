@@ -3,6 +3,7 @@ using System.Security.Cryptography.X509Certificates;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
 using TqkLibrary.VpnClient.Drivers.Ikev2;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec;
+using TqkLibrary.VpnClient.Drivers.OpenConnect;
 using TqkLibrary.VpnClient.Drivers.OpenVpn;
 using TqkLibrary.VpnClient.Drivers.SoftEther;
 using TqkLibrary.VpnClient.Drivers.Sstp;
@@ -69,6 +70,24 @@ namespace TqkLibrary.VpnClient
         /// <summary>Registers the WireGuard driver with explicit auto-reconnect options (e.g. to disable it).</summary>
         public VpnClientBuilder UseWireGuard(WireGuardConfig config, WireGuardReconnectOptions reconnectOptions)
             => AddDriver(new WireGuardDriver(config, reconnectOptions));
+
+        /// <summary>
+        /// Registers the OpenConnect (Cisco AnyConnect / ocserv) driver: HTTPS config-auth then CSTP-over-TLS, in-band
+        /// X-CSTP-* address, bare IP (no PPP), X-CSTP-DPD dead-peer-detection. TLS-only (DTLS is roadmap V5.c).
+        /// </summary>
+        public VpnClientBuilder UseOpenConnect() => AddDriver(new OpenConnectDriver());
+
+        /// <summary>Registers the OpenConnect driver with explicit auto-reconnect options (e.g. to disable it).</summary>
+        public VpnClientBuilder UseOpenConnect(OpenConnectReconnectOptions reconnectOptions)
+            => AddDriver(new OpenConnectDriver(reconnectOptions));
+
+        /// <summary>
+        /// Registers the OpenConnect driver with explicit auto-reconnect options, a TLS gateway-certificate validation
+        /// callback (null = accept any cert), and an optional ocserv auth group selector.
+        /// </summary>
+        public VpnClientBuilder UseOpenConnect(OpenConnectReconnectOptions reconnectOptions,
+            System.Net.Security.RemoteCertificateValidationCallback? certificateValidationCallback, string groupSelect = "")
+            => AddDriver(new OpenConnectDriver(reconnectOptions, serverCertificateValidation: certificateValidationCallback, groupSelect: groupSelect));
 
         /// <summary>
         /// Registers the SoftEther SSL-VPN driver targeting <paramref name="hubName"/> (Ethernet-over-TLS, DHCP-leased
