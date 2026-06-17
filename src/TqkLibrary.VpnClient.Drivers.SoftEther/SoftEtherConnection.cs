@@ -1,7 +1,9 @@
+using System;
 using System.Collections.Generic;
 using System.Net;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 using TqkLibrary.VpnClient.Abstractions.Channels;
 using TqkLibrary.VpnClient.Abstractions.Channels.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Diagnostics.Extensions;
@@ -10,6 +12,7 @@ using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
 using TqkLibrary.VpnClient.Abstractions.Net;
 using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Crypto;
+using TqkLibrary.VpnClient.Drivers.Core;
 using TqkLibrary.VpnClient.Drivers.SoftEther.Enums;
 using TqkLibrary.VpnClient.Drivers.SoftEther.Models;
 using TqkLibrary.VpnClient.Drivers.SoftEther.Transport;
@@ -29,31 +32,26 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
     /// <see cref="DhcpV4Configurator"/> (L2.5) leases an IP from the server's SecureNAT, then an <see cref="ArpResolver"/>
     /// (L2.3) + <see cref="VirtualHost"/> (L2.2) carry IP traffic — the IP stack binds the stable facade, never the
     /// Ethernet channel. A receive loop decodes inbound data blocks and dispatches frames; a periodic keep-alive runs
-    /// for the session's lifetime, and (when enabled) a dropped session is re-established behind the same facade,
-    /// mirroring the OpenVPN / WireGuard drivers. Not a server — the responder role lives only in tests.
+    /// for the session's lifetime, and (when enabled) a dropped session is re-established behind the same facade by the
+    /// shared supervisor (<see cref="ReconnectingVpnConnection{TState}"/>, roadmap F.6), mirroring the OpenConnect /
+    /// OpenVPN / WireGuard drivers. Not a server — the responder role lives only in tests.
     /// </summary>
-    public sealed class SoftEtherConnection : IDisposable, IAsyncDisposable
+    public sealed class SoftEtherConnection : ReconnectingVpnConnection<SoftEtherConnectionState>, IDisposable, IAsyncDisposable
     {
         static readonly TimeSpan KeepAliveTick = TimeSpan.FromSeconds(5);
-        const string DriverName = "softether";
+        const string DriverNameConst = "softether";
 
-        readonly ILogger _logger;
         readonly string _host;
         readonly int _port;
         readonly SoftEtherLoginRequest _login;
         readonly ISoftEtherTransportFactory _transportFactory;
-        readonly SoftEtherReconnectOptions _opts;
         readonly AddressFamilyPreference _addressFamilyPreference;
         readonly SoftEtherWatermark? _watermark;
         readonly DhcpV4ConfiguratorOptions? _dhcpOptions;
         readonly int _mtu;
         readonly bool _multiHost;
 
-        readonly SwappablePacketChannel _facade = new();
-        readonly CancellationTokenSource _lifetimeCts = new();
-        readonly Random _random = new();
         readonly MacAddress _mac;              // a stable locally-administered MAC kept across reconnects
-        readonly object _stateLock = new();
 
         IPAddress? _assignedAddress;
         IPAddress? _lastAssignedAddress;
@@ -69,12 +67,6 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
         Task? _receiveTask;
         System.Threading.Timer? _keepAliveTimer;
 
-        volatile bool _running;
-        volatile bool _userTeardown;
-        bool _supervisorActive;                // guarded by _stateLock
-        Task? _supervisor;
-        SoftEtherConnectionState _state = SoftEtherConnectionState.Disconnected;
-
         /// <summary>
         /// Creates a connection. <paramref name="login"/> carries the hub/user/credential + session params;
         /// <paramref name="transportFactory"/> opens the TLS byte stream (an in-process factory drives it offline);
@@ -84,7 +76,7 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
         /// <see cref="EthernetAdapter"/> as an uplink port and each station leases its own IP over the shared switch, the
         /// server's SecureNAT serving them), reachable through <see cref="MultiHostSession"/>; the default (<c>false</c>)
         /// keeps the single-host bridge. <paramref name="loggerFactory"/> receives diagnostic traces
-        /// (handshake/DHCP/keepalive/reconnect/drop); null logs to <see cref="NullLogger"/> (a no-op).
+        /// (handshake/DHCP/keepalive/reconnect/drop); null logs to a no-op logger.
         /// </summary>
         public SoftEtherConnection(string host, int port, SoftEtherLoginRequest login,
             ISoftEtherTransportFactory transportFactory,
@@ -95,34 +87,30 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
             int mtu = 1500,
             bool multiHost = false,
             ILoggerFactory? loggerFactory = null)
+            : base(DriverNameConst, reconnectOptions ?? new SoftEtherReconnectOptions(), clock: null, loggerFactory: loggerFactory)
         {
             _host = host ?? throw new ArgumentNullException(nameof(host));
             _port = port;
             _login = login ?? throw new ArgumentNullException(nameof(login));
             _transportFactory = transportFactory ?? throw new ArgumentNullException(nameof(transportFactory));
-            _opts = reconnectOptions ?? new SoftEtherReconnectOptions();
             _addressFamilyPreference = addressFamilyPreference;
             _watermark = watermark;
             _dhcpOptions = dhcpOptions;
             if (mtu < 1) throw new ArgumentOutOfRangeException(nameof(mtu));
             _mtu = mtu;
             _multiHost = multiHost;
-            _mac = GenerateLocalMac(_random);
-            _logger = (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger("TqkLibrary.VpnClient.Drivers.SoftEther");
+            _mac = GenerateLocalMac();
         }
 
         // A locally-administered unicast MAC for the virtual L2 endpoint: clear the I/G (multicast) bit and set the
         // U/L (locally-administered) bit of octet 0, the rest random — what a software NIC does.
-        static MacAddress GenerateLocalMac(Random random)
+        MacAddress GenerateLocalMac()
         {
             byte[] bytes = new byte[MacAddress.Size];
-            random.NextBytes(bytes);
+            NextRandomBytes(bytes);
             bytes[0] = (byte)((bytes[0] & 0xFE) | 0x02);
             return MacAddress.FromBytes(bytes);
         }
-
-        /// <summary>The stable L3 packet channel (valid after a successful connect; survives reconnect).</summary>
-        public IPacketChannel PacketChannel => _facade;
 
         /// <summary>The tunnel configuration leased over DHCP (address, prefix, DNS, routes, MTU).</summary>
         public TunnelConfig Config => _config;
@@ -143,30 +131,33 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
         /// </summary>
         public MultiHostSession? MultiHostSession => _multiHostSession;
 
-        /// <summary>Raised whenever the connection state changes (handshake progress, drop, reconnect).</summary>
-        public event Action<SoftEtherConnectionState>? StateChanged;
-
         /// <summary>Raised after a successful auto-reconnect, carrying the new address and whether it changed.</summary>
         public event Action<SoftEtherReconnectInfo>? Reconnected;
 
-        /// <summary>The current lifecycle state.</summary>
-        public SoftEtherConnectionState State => _state;
+        /// <inheritdoc/>
+        protected override SoftEtherConnectionState DisconnectedState => SoftEtherConnectionState.Disconnected;
+        /// <inheritdoc/>
+        protected override SoftEtherConnectionState ConnectingState => SoftEtherConnectionState.Connecting;
+        /// <inheritdoc/>
+        protected override SoftEtherConnectionState ConnectedState => SoftEtherConnectionState.Connected;
+        /// <inheritdoc/>
+        protected override SoftEtherConnectionState ReconnectingState => SoftEtherConnectionState.Reconnecting;
 
         /// <summary>Runs the full handshake + DHCP lease and returns once the tunnel is carrying traffic.</summary>
         public async Task ConnectAsync(CancellationToken cancellationToken = default)
         {
-            SetState(SoftEtherConnectionState.Connecting);
-            await EstablishAsync(cancellationToken).ConfigureAwait(false);
+            await ConnectCoreAsync(cancellationToken).ConfigureAwait(false);
             _lastAssignedAddress = _assignedAddress;
         }
 
         // ---- one full tunnel attempt (reused by the first connect and every reconnect) ----
 
-        async Task EstablishAsync(CancellationToken cancellationToken)
+        /// <inheritdoc/>
+        protected override async Task EstablishAsync(CancellationToken cancellationToken)
         {
             await CleanupAttemptResourcesAsync().ConfigureAwait(false);
 
-            _loopCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token, cancellationToken);
+            _loopCts = CancellationTokenSource.CreateLinkedTokenSource(LifetimeToken, cancellationToken);
             CancellationToken loopToken = _loopCts.Token;
 
             // --- TLS + control handshake (watermark → hello → login → welcome) over one byte stream ---
@@ -175,15 +166,15 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
             _transport = transport;
             await transport.ConnectAsync(cancellationToken).ConfigureAwait(false);
 
-            _logger.LogHandshake(DriverName, "control handshake (watermark -> hello -> login -> welcome)");
-            var handshake = new SoftEtherHandshake(new SoftEtherAuth(new Sha0()), _random);
+            Logger.LogHandshake(DriverName, "control handshake (watermark -> hello -> login -> welcome)");
+            var handshake = new SoftEtherHandshake(new SoftEtherAuth(new Sha0()), new Random());
             await handshake.RunAsync(transport, _host, _login, _watermark, cancellationToken).ConfigureAwait(false);
-            _logger.LogHandshake(DriverName, "login accepted; switching stream into the Ethernet-over-HTTPS data session");
+            Logger.LogHandshake(DriverName, "login accepted; switching stream into the Ethernet-over-HTTPS data session");
 
             // --- the stream is now the data session: expose it as an L2 channel and start decoding inbound blocks ---
             var channel = new SoftEtherEthernetChannel(_mac.ToArray(), SendBlockAsync, _mtu);
             _channel = channel;
-            _running = true;
+            MarkRunning(); // a peer-close/fault from the receive loop below must now arm reconnect (before MarkConnected)
             _receiveTask = Task.Run(() => ReceiveLoopAsync(transport, channel, loopToken));
 
             if (_multiHost)
@@ -192,8 +183,8 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
                 await EstablishSingleHostAsync(channel, cancellationToken).ConfigureAwait(false);
 
             StartKeepAlive();
-            _logger.LogHandshakeCompleted(DriverName);
-            SetState(SoftEtherConnectionState.Connected);
+            Logger.LogHandshakeCompleted(DriverName);
+            MarkConnected();
         }
 
         // ---- single-host bridge (default): one DHCP lease, one VirtualHost bridged down to the L3 facade ----
@@ -201,7 +192,7 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
         async Task EstablishSingleHostAsync(SoftEtherEthernetChannel channel, CancellationToken cancellationToken)
         {
             // --- DHCP lease (SecureNAT) over the L2 segment: DHCP shares the channel and drains inbound DHCP replies ---
-            _logger.LogHandshake(DriverName, "requesting DHCPv4 lease from SecureNAT (DISCOVER/OFFER/REQUEST/ACK)");
+            Logger.LogHandshake(DriverName, "requesting DHCPv4 lease from SecureNAT (DISCOVER/OFFER/REQUEST/ACK)");
             var dhcp = new DhcpV4Configurator(_mac, channel, _dhcpOptions);
             _dhcp = dhcp;
             channel.InboundFrame += dhcp.HandleInboundFrame;   // feed inbound frames to DHCP for the OFFER/ACK
@@ -229,8 +220,8 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
             config.Mtu = virtualHost.Mtu;                               // link − 14: the bound stack clamps MSS for the Ethernet header
             _config = config;
             _assignedAddress = config.AssignedAddress;
-            _facade.SetInner(virtualHost);
-            _logger.LogHandshake(DriverName, $"DHCP lease {config.AssignedAddress}; L2<->L3 bridge bound");
+            Facade.SetInner(virtualHost);
+            Logger.LogHandshake(DriverName, $"DHCP lease {config.AssignedAddress}; L2<->L3 bridge bound");
         }
 
         // ---- multi-host broadcast domain: attach the data channel as an uplink port, then DHCP the first station ----
@@ -243,15 +234,15 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
             adapter.ConnectUplink(channel);                              // detached when the adapter (switch) is disposed
             var session = new MultiHostSession(adapter, ownsAdapter: true);
             _multiHostSession = session;
-            _logger.LogHandshake(DriverName, "attached SoftEther data channel as an uplink port on the L2 broadcast domain");
+            Logger.LogHandshake(DriverName, "attached SoftEther data channel as an uplink port on the L2 broadcast domain");
 
             // The first/primary station leases its IP and feeds the connection's stable L3 facade (keeping the single-host
             // API: PacketChannel/Config/AssignedAddress). Additional stations are added via OpenSessionAsync.
             EthernetHostSession primary = await AddStationAsync(_mac, cancellationToken).ConfigureAwait(false);
             _config = primary.Config;
             _assignedAddress = primary.Config.AssignedAddress;
-            _facade.SetInner(primary.PacketChannel);
-            _logger.LogHandshake(DriverName, $"primary station DHCP lease {primary.Config.AssignedAddress}; broadcast domain bound");
+            Facade.SetInner(primary.PacketChannel);
+            Logger.LogHandshake(DriverName, $"primary station DHCP lease {primary.Config.AssignedAddress}; broadcast domain bound");
         }
 
         /// <summary>
@@ -331,87 +322,23 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
 
         async Task KeepAliveTickAsync()
         {
-            if (!_running) return;
+            if (!IsRunning) return;
             IByteStreamTransport? transport = _transport;
             if (transport is null) return;
             try
             {
                 byte[] block = SoftEtherDataFrameCodec.EncodeSingle(SoftEtherDataConstants.KeepAliveBytes);
                 await transport.WriteAsync(block).ConfigureAwait(false);
-                _logger.LogKeepalive(DriverName, "sent SoftEther idle keep-alive frame");
+                Logger.LogKeepalive(DriverName, "sent SoftEther idle keep-alive frame");
             }
             catch { /* a missed keep-alive is harmless; the receive loop trips link-loss if the peer goes away */ }
         }
 
-        // ---- link-loss handling + auto-reconnect supervisor (mirrors the OpenVPN / WireGuard driver) ----
+        // ---- link-loss handling + auto-reconnect supervisor live in ReconnectingVpnConnection (roadmap F.6). ----
+        // The receive loop (peer-close / fault) calls the inherited OnLinkLost, which arms the shared ReconnectLoopAsync.
 
-        void OnLinkLost(string reason)
-        {
-            bool goDisconnected = false;
-            bool startSupervisor = false;
-            lock (_stateLock)
-            {
-                if (!_running) return;
-                _logger.LogLinkLost(DriverName, reason);
-                _running = false;
-                StopKeepAlive();
-
-                if (_userTeardown || !_opts.Enabled)
-                    goDisconnected = true;
-                else if (!_supervisorActive)
-                {
-                    _supervisorActive = true;
-                    startSupervisor = true;
-                }
-            }
-
-            if (goDisconnected) { SetState(SoftEtherConnectionState.Disconnected); return; }
-            if (startSupervisor)
-            {
-                SetState(SoftEtherConnectionState.Reconnecting);
-                _supervisor = Task.Run(() => ReconnectLoopAsync(_lifetimeCts.Token));
-            }
-        }
-
-        async Task ReconnectLoopAsync(CancellationToken cancellationToken)
-        {
-            TimeSpan delay = _opts.InitialBackoff;
-            int failures = 0;
-            while (!_userTeardown && !cancellationToken.IsCancellationRequested)
-            {
-                bool established = false;
-                _logger.LogReconnectAttempt(DriverName, failures + 1);
-                try { await EstablishAsync(cancellationToken).ConfigureAwait(false); established = true; }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
-                catch { /* attempt failed — back off and retry */ }
-
-                if (established)
-                {
-                    bool healthy;
-                    lock (_stateLock)
-                    {
-                        healthy = _running;
-                        if (healthy) _supervisorActive = false;
-                    }
-                    if (healthy) { _logger.LogReconnected(DriverName); RaiseReconnected(); return; }
-
-                    SetState(SoftEtherConnectionState.Reconnecting);
-                    delay = _opts.InitialBackoff;
-                    failures = 0;
-                    continue;
-                }
-
-                if (_opts.MaxAttempts != 0 && ++failures >= _opts.MaxAttempts) break;
-                try { await Task.Delay(WithJitter(delay), cancellationToken).ConfigureAwait(false); }
-                catch (OperationCanceledException) { break; }
-                delay = _opts.NextBackoff(delay);
-            }
-
-            lock (_stateLock) { _supervisorActive = false; }
-            if (!_userTeardown) SetState(SoftEtherConnectionState.Disconnected);
-        }
-
-        void RaiseReconnected()
+        /// <inheritdoc/>
+        protected override void OnReconnected()
         {
             IPAddress newAddress = _assignedAddress ?? IPAddress.Any;
             bool changed = _lastAssignedAddress != null && !newAddress.Equals(_lastAssignedAddress);
@@ -421,27 +348,10 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
 
         // ---- teardown ----
 
-        /// <summary>
-        /// Tears the tunnel down permanently (no reconnect): cancels any reconnect in flight, then cancels the receive
-        /// loop and disposes the transport. Best-effort and time-boxed; safe to call more than once.
-        /// </summary>
-        public async Task DisconnectAsync(CancellationToken cancellationToken = default)
+        /// <inheritdoc/>
+        protected override async Task CleanupAttemptResourcesAsync()
         {
-            _userTeardown = true;
-            lock (_stateLock) { _running = false; StopKeepAlive(); }
-
-            _lifetimeCts.Cancel();
-            Task? supervisor = _supervisor;
-            if (supervisor != null) { try { await supervisor.ConfigureAwait(false); } catch { } }
-
-            await CleanupAttemptResourcesAsync().ConfigureAwait(false);
-            SetState(SoftEtherConnectionState.Disconnected);
-        }
-
-        async Task CleanupAttemptResourcesAsync()
-        {
-            _running = false;
-            StopKeepAlive();
+            StopAttemptLoop();
 
             CancellationTokenSource? loop = _loopCts;
             _loopCts = null;
@@ -480,38 +390,20 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
             if (transport != null) { try { await transport.DisposeAsync().ConfigureAwait(false); } catch { } }
         }
 
-        void StopKeepAlive()
+        /// <inheritdoc/>
+        protected override void StopAttemptLoop()
         {
             _keepAliveTimer?.Dispose();
             _keepAliveTimer = null;
         }
 
-        // ---- helpers ----
-
-        TimeSpan WithJitter(TimeSpan delay)
-        {
-            double fraction = _opts.JitterFraction;
-            if (fraction <= 0) return delay;
-            double r;
-            lock (_random) r = _random.NextDouble();
-            double jitter = delay.TotalMilliseconds * fraction * (r * 2 - 1);
-            return TimeSpan.FromMilliseconds(Math.Max(0, delay.TotalMilliseconds + jitter));
-        }
-
-        void SetState(SoftEtherConnectionState state)
-        {
-            if (_state == state) return;
-            _state = state;
-            _logger.LogStateChanged(DriverName, state.ToString());
-            StateChanged?.Invoke(state);
-        }
+        // ---- dispose ----
 
         /// <inheritdoc/>
         public async ValueTask DisposeAsync()
         {
             try { await DisconnectAsync().ConfigureAwait(false); } catch { }
-            _lifetimeCts.Dispose();
-            await _facade.DisposeAsync().ConfigureAwait(false);
+            await DisposeCoreAsync().ConfigureAwait(false);
         }
 
         /// <inheritdoc/>

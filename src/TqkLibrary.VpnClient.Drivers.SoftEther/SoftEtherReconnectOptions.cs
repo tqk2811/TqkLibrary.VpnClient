@@ -1,33 +1,14 @@
+using TqkLibrary.VpnClient.Drivers.Core.Models;
+
 namespace TqkLibrary.VpnClient.Drivers.SoftEther
 {
     /// <summary>
     /// Auto-reconnect policy for a <see cref="SoftEtherConnection"/>. Reconnect kicks in only after an initial successful
     /// connect, when the data session is declared dead (the TLS stream closed or a transport fault). Enabled by default;
-    /// set <see cref="Enabled"/> to false to keep single-shot behaviour. Mirrors the OpenVPN/WireGuard/IKEv2/L2TP driver
-    /// policies so the shared supervisor (roadmap F.6) can later subsume all of them.
+    /// set <see cref="VpnReconnectOptions.Enabled"/> to false to keep single-shot behaviour. The knobs live on the shared
+    /// <see cref="VpnReconnectOptions"/> base (roadmap F.6); this named type is kept for the driver's public API.
     /// </summary>
-    public sealed class SoftEtherReconnectOptions
+    public sealed class SoftEtherReconnectOptions : VpnReconnectOptions
     {
-        /// <summary>Whether a dead session is re-established automatically.</summary>
-        public bool Enabled { get; set; } = true;
-
-        /// <summary>Maximum reconnect attempts before giving up; 0 = retry indefinitely until DisconnectAsync.</summary>
-        public int MaxAttempts { get; set; } = 0;
-
-        /// <summary>Delay before the second attempt (the first retry runs immediately after the drop).</summary>
-        public TimeSpan InitialBackoff { get; set; } = TimeSpan.FromSeconds(1);
-
-        /// <summary>Upper bound the exponential backoff is capped at.</summary>
-        public TimeSpan MaxBackoff { get; set; } = TimeSpan.FromSeconds(30);
-
-        /// <summary>Factor the backoff grows by after each failed attempt.</summary>
-        public double BackoffMultiplier { get; set; } = 2.0;
-
-        /// <summary>Random jitter applied to each delay as ±(fraction × delay); 0 disables jitter.</summary>
-        public double JitterFraction { get; set; } = 0.2;
-
-        /// <summary>The next backoff in the geometric sequence, capped at <see cref="MaxBackoff"/> (jitter applied separately).</summary>
-        public TimeSpan NextBackoff(TimeSpan current)
-            => TimeSpan.FromMilliseconds(Math.Min(MaxBackoff.TotalMilliseconds, current.TotalMilliseconds * BackoffMultiplier));
     }
 }
