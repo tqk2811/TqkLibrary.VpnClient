@@ -37,6 +37,10 @@ TqkLibrary.VpnClient.Crypto/
 │   ├── AesGcmCipher.cs           # AES-GCM: native net8.0 / BouncyCastle netstandard2.0
 │   ├── ChaCha20Poly1305Cipher.cs # ChaCha20-Poly1305 (RFC 8439): native net5+ / BouncyCastle netstandard2.0
 │   └── XChaCha20Poly1305Cipher.cs # XChaCha20-Poly1305 (draft-irtf-cfrg-xchacha): HChaCha20 + ChaCha20-Poly1305 (WG cookie-reply)
+├── Mppe/                  # MPPE legacy (PPTP/CCP) — RFC 3078/3079, RC4 + MS-CHAPv2 keys (BROKEN, chỉ legacy)
+│   ├── Enums/MppeKeyStrength.cs # cường độ session key (40/56/128-bit)
+│   ├── MppeKeyDerivation.cs    # GetNewKeyFromSHA + initial/re-key + strength reduction (static codec)
+│   └── MppeSession.cs          # 1 chiều MPPE: RC4 state + coherency count + stateless/stateful re-key
 ├── Noise/                 # Primitive cho Noise/WireGuard — BouncyCastle trên CẢ 2 TFM (BCL không có X25519/BLAKE2s)
 │   ├── Curve25519DhGroup.cs # X25519 (RFC 7748, IANA group 31) — IDhGroup
 │   ├── Blake2s.cs           # BLAKE2s-256 unkeyed (RFC 7693) — IHashAlgo
@@ -46,6 +50,7 @@ TqkLibrary.VpnClient.Crypto/
 │   └── NoiseSymmetricState.cs # Noise SymmetricState (spec §5.2) cho WireGuard Noise_IKpsk2 — class state machine
 ├── AesCbcCipher.cs        # AES-CBC no-padding (IBlockCipher)
 ├── AesCtr.cs              # AES-CTR (static, dựng từ AES-ECB)
+├── Rc4.cs                 # RC4 stream cipher (KSA/PRGA) — MPPE/PPTP + SoftEther use_encrypt (BROKEN, RFC 7465)
 ├── Md4.cs                 # MD4 (IHashAlgo) — NT hash cho MS-CHAPv2
 ├── Sha0.cs                # SHA-0 (IHashAlgo, FIPS 180 1993) — SoftEther auth password (V.4)
 ├── Des.cs                 # DES 1 block ECB-encrypt, không check weak key — MS-CHAPv2
@@ -79,6 +84,7 @@ TqkLibrary.VpnClient.Crypto/
 | `Des` | DES 1 block, ECB-encrypt, **không** check weak-key; `static EncryptBlock(key8, block8)` | [Des.cs:8](Des.cs#L8) |
 | `AesCbcCipher` | AES-CBC no-padding (`IBlockCipher`, block 16 byte) | [AesCbcCipher.cs:10](AesCbcCipher.cs#L10) |
 | `AesCtr` | AES-CTR `static Transform(...)` dựng từ AES-ECB, counter big-endian | [AesCtr.cs:9](AesCtr.cs#L9) |
+| `Rc4` | RC4 stream cipher (KSA/PRGA), `Process`/`GenerateKeystream` + `static Apply(key, data)`; key 1..256B; **broken** (RFC 7465) — chỉ MPPE/PPTP + SoftEther `use_encrypt` | [Rc4.cs:13](Rc4.cs#L13) |
 | `AesGcmCipher` | AES-GCM (`IAeadCipher`), nonce 12B / tag 16B; native vs BouncyCastle | [Aead/AesGcmCipher.cs:18](Aead/AesGcmCipher.cs#L18) |
 | `ChaCha20Poly1305Cipher` | ChaCha20-Poly1305 (`IAeadCipher`, RFC 8439), key 32B / nonce 12B / tag 16B; native vs BouncyCastle | [Aead/ChaCha20Poly1305Cipher.cs:18](Aead/ChaCha20Poly1305Cipher.cs#L18) |
 | `XChaCha20Poly1305Cipher` | XChaCha20-Poly1305 (`IAeadCipher`, draft-irtf-cfrg-xchacha), key 32B / **nonce 24B** / tag 16B; `HChaCha20` (pure, public) suy subkey rồi ủy quyền `ChaCha20Poly1305Cipher` (WireGuard cookie-reply V3.c) | [Aead/XChaCha20Poly1305Cipher.cs:18](Aead/XChaCha20Poly1305Cipher.cs#L18) |
@@ -86,7 +92,10 @@ TqkLibrary.VpnClient.Crypto/
 | `HmacPrf` | HMAC-PRF (`IPrf`); factory `Sha256()` | [HmacPrf.cs:7](HmacPrf.cs#L7) |
 | `HmacIntegrity` | HMAC integrity ICV cắt ngắn (`IIntegrityAlgo`); factory `HmacSha256_128()`, `HmacSha1_96()` | [HmacIntegrity.cs:7](HmacIntegrity.cs#L7) |
 | `PrfPlus` | IKEv2 `prf+` key expansion, `static Expand(IPrf, key, seed, length)` | [PrfPlus.cs:9](PrfPlus.cs#L9) |
-| `MsChapV2` | Codec MS-CHAPv2 client-side (RFC 2759): NT hash (MD4), challenge hash (SHA-1), NT-Response (3×DES), Authenticator-Response §8.7 (`GenerateAuthenticatorResponse`) + dẫn xuất HLAK/MPPE (RFC 3079) & EAP-MSK 64B (`DeriveMsk`); dùng chung cho PPP auth & IKEv2 EAP | [MsChapV2.cs:11](MsChapV2.cs#L11) |
+| `MsChapV2` | Codec MS-CHAPv2 client-side (RFC 2759): NT hash (MD4), challenge hash (SHA-1), NT-Response (3×DES), Authenticator-Response §8.7 (`GenerateAuthenticatorResponse`) + dẫn xuất HLAK/MPPE (RFC 3079) & EAP-MSK 64B (`DeriveMsk`) + **MPPE start keys** (`DeriveMppeMasterKey`/`DeriveMppeSendStartKey`/`DeriveMppeReceiveStartKey`, có cờ `isServer` chọn Magic2/Magic3); dùng chung cho PPP auth, IKEv2 EAP & MPPE/PPTP | [MsChapV2.cs:11](MsChapV2.cs#L11) |
+| `MppeKeyDerivation` | MPPE key schedule (RFC 3078 §7 + RFC 3079): `GetNewKeyFromSha` + `DeriveInitialSessionKey` (SHA-only) + `DeriveNextSessionKey` (SHA→RC4(self) re-key) + `ReduceStrength` (40→0xD126 9E / 56→0xD1 / 128 nguyên); dùng SHA-1 BCL (không phải SHA-0) | [Mppe/MppeKeyDerivation.cs:18](Mppe/MppeKeyDerivation.cs#L18) |
+| `MppeSession` | 1 chiều MPPE-encrypted PPP (RFC 3078): RC4 state + 12-bit coherency count + framing header A/B/C/D; `Encrypt`/`Decrypt`; stateless (re-key + FLUSHED mỗi gói) vs stateful (re-key mỗi 256 gói khi low-octet=0xFF) | [Mppe/MppeSession.cs:18](Mppe/MppeSession.cs#L18) |
+| `MppeKeyStrength` | enum cường độ session key MPPE (40/56/128-bit) | [Mppe/Enums/MppeKeyStrength.cs:8](Mppe/Enums/MppeKeyStrength.cs#L8) |
 | `HmacUtil` | Internal: chọn `HMACMD5/SHA1/SHA256/SHA384/SHA512` theo `HashAlgorithmName` | [HmacUtil.cs:6](HmacUtil.cs#L6) |
 | `Curve25519DhGroup` | X25519 (RFC 7748, IANA group 31), key 32B (`IDhGroup`); BouncyCastle `Rfc7748.X25519` cả 2 TFM | [Noise/Curve25519DhGroup.cs:15](Noise/Curve25519DhGroup.cs#L15) |
 | `Blake2s` | BLAKE2s-256 unkeyed (RFC 7693), digest 32B (`IHashAlgo`); BouncyCastle `Blake2sDigest` | [Noise/Blake2s.cs:12](Noise/Blake2s.cs#L12) |
@@ -120,7 +129,9 @@ TqkLibrary.VpnClient.Crypto/
 | Noise Protocol Framework §5.2 (SymmetricState) + WireGuard whitepaper §5.4 (handshake) | `NoiseSymmetricState` | [Noise/NoiseSymmetricState.cs:7](Noise/NoiseSymmetricState.cs#L7) | Comment; CONSTRUCTION/IDENTIFIER WireGuard, nonce AEAD `0^4‖counter` LE + AAD = `h`; test đối chiếu hằng trung gian `ck0`/`h0` |
 | RFC 2104 / FIPS 198-1 (HMAC) | `HmacUtil`, `HmacPrf`, `HmacIntegrity` | [HmacUtil.cs:6](HmacUtil.cs#L6) | (suy luận) dùng `HMAC*` của BCL |
 | RFC 2759 (MS-CHAPv2) | `MsChapV2` (codec) trên `Md4`+`Des`+SHA-1 | [MsChapV2.cs:11](MsChapV2.cs#L11) | NtPasswordHash §8.3 [L14](MsChapV2.cs#L14), ChallengeHash §8.2 [L18](MsChapV2.cs#L18), ChallengeResponse §8.5 [L34](MsChapV2.cs#L34), GenerateNTResponse §8.1 [L50](MsChapV2.cs#L50), GenerateAuthenticatorResponse §8.7 [L130](MsChapV2.cs#L130) |
-| RFC 3079 (dẫn xuất khoá MPPE / EAP-MSK) | `MsChapV2.DeriveHlak` / `MsChapV2.DeriveMsk` | [MsChapV2.cs:86](MsChapV2.cs#L86), [DeriveMsk L106](MsChapV2.cs#L106) | HLAK 32B (SSTP crypto binding) + EAP-MSK 64B = recv\|\|send\|\|zeros (khớp strongSwan/wpa_supplicant) cho IKEv2 EAP AUTH |
+| RFC 3079 (dẫn xuất khoá MPPE / EAP-MSK) | `MsChapV2.DeriveHlak` / `MsChapV2.DeriveMsk` / `MsChapV2.DeriveMppe*StartKey` | [MsChapV2.cs:86](MsChapV2.cs#L86), [DeriveMsk L106](MsChapV2.cs#L106), [GetAsymmetricStartKey L186](MsChapV2.cs#L186) | HLAK 32B (SSTP crypto binding) + EAP-MSK 64B = recv\|\|send\|\|zeros (khớp strongSwan/wpa_supplicant) cho IKEv2 EAP AUTH + MPPE start keys (Magic2/Magic3 theo IsSend/IsServer); KAT §3.5 (MasterKey/StartKey/SessionKey 40/56/128) |
+| RFC 3078 (MPPE protocol: GetNewKeyFromSHA + framing) | `MppeKeyDerivation`, `MppeSession` | [Mppe/MppeKeyDerivation.cs:18](Mppe/MppeKeyDerivation.cs#L18), [Mppe/MppeSession.cs:18](Mppe/MppeSession.cs#L18) | §7.3 GetNewKeyFromSHA (SHA-1, SHApad1=40×0x00, SHApad2=40×0xF2) + re-key RC4(InterimKey, InterimKey) + §3.1 header coherency 12-bit; KAT §3.5 "Sample Encrypted Message" |
+| RFC 6229 (RC4 test vectors) / RFC 7465 (cấm RC4 trong TLS) | `Rc4` | [Rc4.cs:13](Rc4.cs#L13) | KAT keystream 40-bit/128-bit (RFC 6229) + classic vector Rivest; cảnh báo broken |
 
 ## API / cách dùng
 
@@ -182,6 +193,7 @@ integ.ComputeIcv(key, data, icv);
 
 - **Đã hiện thực & dùng thật:** MD4, DES, AES-CBC, AES-CTR, AES-GCM, ChaCha20-Poly1305, XChaCha20-Poly1305, MODP DH (group 2/14), HMAC-PRF, HMAC-integrity, prf+, `Tls1Prf` (PRF TLS 1.0 cho OpenVPN key-method-2) — tiêu thụ bởi `Ipsec` (IKE/ESP), `Ppp` (MS-CHAPv2), `OpenVpn` (NCP data channel: AES-GCM + ChaCha20-Poly1305) và `WireGuard` (XChaCha20-Poly1305 cho cookie-reply V3.c).
 - **SHA-0 ([Sha0.cs](Sha0.cs)) — đã hiện thực + KAT, consumer SoftEther (V.4) còn ở roadmap:** `Sha0` (`IHashAlgo`, 20 byte, FIPS 180 1993) = SHA-1 **bỏ ROTL1** ở message schedule, mirror cách viết `Md4`/`Des`. Dùng cho auth password SoftEther SSL-VPN (hash password+username **cục bộ**, hash không lên wire). KAT FIPS-180: "abc" `0164b8a9…`, chuỗi rỗng `f96cea19…`, ví dụ 2-block `d2516ee1…` + đối chiếu **khác** SHA-1 cho mọi padding ([Sha0Tests](../../tests/TqkLibrary.VpnClient.Crypto.Tests/Sha0Tests.cs)).
+- **MPPE + RC4 ([Mppe/](Mppe) + [Rc4.cs](Rc4.cs)) — đã hiện thực + KAT offline (F.5b), consumer PPTP (V.6) còn ở roadmap:** `Rc4` (stream cipher KSA/PRGA) + `MppeKeyDerivation` (suy khóa RFC 3078/3079: `GetNewKeyFromSHA` SHA-1, initial key SHA-only, re-key SHA→RC4-self, strength reduction 40/56/128-bit) + `MppeSession` (1 chiều: RC4 state + coherency count 12-bit + framing A/B/C/D, stateless re-key-mỗi-gói vs stateful re-key-mỗi-256-gói). MPPE start key suy từ MS-CHAPv2 qua `MsChapV2.DeriveMppe*StartKey` (tái dùng `GetMasterKey`/`GetAsymmetricStartKey` sẵn có, thêm cờ `isServer` chọn Magic2/Magic3 — client-send=server-receive). **CẢNH BÁO BẢO MẬT: MPPE + MS-CHAPv2 đã bị phá hoàn toàn** (MS-CHAPv2 brute-force DES 2¹⁶, RC4 keystream lệch RFC 7465) — chỉ dùng cho tương thích PPTP legacy, **tuyệt đối không** cho thiết kế mới. KAT byte-chính-xác: RC4 (RFC 6229 40/128-bit + classic Rivest), MPPE key derivation (RFC 3079 §3.5 MasterKey/StartKey/SessionKey 40/56/128 + "Sample Encrypted Message" rc4(SessionKey,"test message") — lưu ý byte cuối 56-bit §3.5.2 là erratum RFC, giá trị thật kết thúc `B8`), session round-trip stateless/stateful qua 600 gói ([`Rc4Tests`](../../tests/TqkLibrary.VpnClient.Crypto.Tests/Rc4Tests.cs)/[`MppeKeyDerivationTests`](../../tests/TqkLibrary.VpnClient.Crypto.Tests/MppeKeyDerivationTests.cs)/[`MppeSessionTests`](../../tests/TqkLibrary.VpnClient.Crypto.Tests/MppeSessionTests.cs)). **Chưa** wire vào driver — CCP negotiator + GRE data plane làm ở V.6.
 - **Noise primitives ([Noise/](Noise)) — đã hiện thực + KAT, chưa có consumer:** `Curve25519DhGroup` (X25519), `Blake2s`, `Blake2sKeyedMac`, `HmacBlake2sPrf`, `NoiseKdf`, **`NoiseSymmetricState` (V3.a)** là nền cho WireGuard (roadmap V.3) và Nebula (V.7). KAT byte-chính-xác: X25519 (RFC 7748 §5.2/§6.1), BLAKE2s-256 + keyed-KAT, HMAC-BLAKE2s đối chiếu HMAC-textbook trên `Blake2s` đã KAT, `NoiseKdf` kiểm cấu trúc extract/expand. `NoiseSymmetricState` là Noise SymmetricState (spec §5.2) đối xứng thuần cho `Noise_IKpsk2_25519_ChaCha20Poly1305_BLAKE2s` (InitializeWireGuard/MixHash/MixKey/MixKeyAndHash/EncryptAndHash/DecryptAndHash/Split) — tái dùng nguyên primitive Noise/ qua DI, test cấu trúc offline đối chiếu hằng trung gian WireGuard `ck0`/`h0` + round-trip + Split 2×32B. **Chưa** có handshake state machine Noise_IKpsk2 (initiation/response/transport keys — làm cùng driver V.3 để KAT trọn handshake).
 - **Khác biệt netstandard2.0 vs net8.0:** chỉ ở `AesGcmCipher` + `ChaCha20Poly1305Cipher` — net8.0 dùng `AesGcm`/`ChaCha20Poly1305` của BCL, netstandard2.0 fallback BouncyCastle. Các primitive `Noise/` (X25519/BLAKE2s/HMAC-BLAKE2s) dùng BouncyCastle **giống nhau trên cả 2 TFM** (BCL không có sẵn ⇒ không nhánh `#if`). `BouncyCastle.Cryptography` nay là PackageReference **không điều kiện** (cả 2 TFM). Các primitive còn lại dùng BCL chung cho cả hai TFM.
 - **MODP group 2 (1024-bit)** giữ lại cho tương thích IKEv1/VPN Gate dù đã yếu theo tiêu chuẩn hiện đại; **group 14 (2048-bit)** là lựa chọn mặc định khuyến nghị.

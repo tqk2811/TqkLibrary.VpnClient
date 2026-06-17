@@ -147,6 +147,33 @@ namespace TqkLibrary.VpnClient.Crypto
             return (byte[])sha1b.Hash!.Clone();
         }
 
+        // ----- MPPE start keys (RFC 3079) exposed for the MPPE/PPTP CCP data plane (re-uses GetMasterKey/GetAsymmetricStartKey) -----
+
+        /// <summary>
+        /// Derives the 16-byte MPPE Master Key from peer credentials (RFC 3079 §3.3 GetMasterKey) —
+        /// <c>SHA1(MD4(MD4(unicode(password))) || NTResponse || Magic1)[..16]</c>. Both MPPE start keys hang off this.
+        /// </summary>
+        public static byte[] DeriveMppeMasterKey(string password, byte[] ntResponse)
+        {
+            byte[] passwordHash = NtPasswordHash(password);   // MD4(unicode(password))
+            byte[] passwordHashHash = Md4.Hash(passwordHash); // MD4 of the NT hash
+            return GetMasterKey(passwordHashHash, ntResponse);
+        }
+
+        /// <summary>
+        /// MPPE Master <b>Send</b> Start Key (16 bytes, RFC 3079 §3.3 GetAsymmetricStartKey). <paramref name="isServer"/>
+        /// selects the perspective: a PPTP client passes <c>false</c> (Magic2); the same key is the server's receive key.
+        /// </summary>
+        public static byte[] DeriveMppeSendStartKey(byte[] masterKey, bool isServer = false)
+            => GetAsymmetricStartKey(masterKey, isSend: true, isServer: isServer);
+
+        /// <summary>
+        /// MPPE Master <b>Receive</b> Start Key (16 bytes, RFC 3079 §3.3 GetAsymmetricStartKey). <paramref name="isServer"/>
+        /// selects the perspective: a PPTP client passes <c>false</c> (Magic3); the same key is the server's send key.
+        /// </summary>
+        public static byte[] DeriveMppeReceiveStartKey(byte[] masterKey, bool isServer = false)
+            => GetAsymmetricStartKey(masterKey, isSend: false, isServer: isServer);
+
         static byte[] GetMasterKey(byte[] passwordHashHash, byte[] ntResponse)
         {
             using var sha1 = SHA1.Create();
@@ -158,9 +185,10 @@ namespace TqkLibrary.VpnClient.Crypto
             return master;
         }
 
-        static byte[] GetAsymmetricStartKey(byte[] masterKey, bool isSend)
+        static byte[] GetAsymmetricStartKey(byte[] masterKey, bool isSend, bool isServer = false)
         {
-            byte[] magic = isSend ? Magic2 : Magic3; // client side: IsServer = false
+            // RFC 3079 §3.3: Magic3 when IsSend == IsServer, otherwise Magic2 (so client-send == server-receive).
+            byte[] magic = (isSend == isServer) ? Magic3 : Magic2;
             byte[] pad1 = new byte[40];               // SHSpad1 = 40 x 0x00
             byte[] pad2 = new byte[40];               // SHSpad2 = 40 x 0xF2
             for (int i = 0; i < 40; i++) pad2[i] = 0xF2;
