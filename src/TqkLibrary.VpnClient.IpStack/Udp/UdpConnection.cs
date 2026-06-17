@@ -46,7 +46,7 @@ namespace TqkLibrary.VpnClient.IpStack.Udp
         {
             while (true)
             {
-                Task wait;
+                TaskCompletionSource<bool> waiter;
                 lock (_sync)
                 {
                     if (_inbound.Count > 0)
@@ -54,11 +54,14 @@ namespace TqkLibrary.VpnClient.IpStack.Udp
                         Datagram d = _inbound.Dequeue();
                         return new UdpReceiveResult(d.Data, d.RemoteAddress, d.RemotePort);
                     }
-                    _waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-                    wait = _waiter.Task;
+                    waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    _waiter = waiter;
                 }
-                using (cancellationToken.Register(static w => ((TaskCompletionSource<bool>)w!).TrySetResult(true), _waiter))
-                    await wait.ConfigureAwait(false);
+                // Register against the local waiter, not the _waiter field: a datagram arriving on another thread
+                // nulls the field (and completes this same TCS) before this line runs, which would otherwise hand the
+                // callback a null and NRE on the cancelling thread (synchronously, if the token is already cancelled).
+                using (cancellationToken.Register(static w => ((TaskCompletionSource<bool>)w!).TrySetResult(true), waiter))
+                    await waiter.Task.ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
             }
         }

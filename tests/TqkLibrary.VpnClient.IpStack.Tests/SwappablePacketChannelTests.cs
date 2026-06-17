@@ -52,6 +52,49 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
         }
 
         [Fact]
+        public async Task Facade_ConcurrentSwapsAndWrites_NeverLeakAcrossDetach_NorThrow()
+        {
+            // Q.3 invariant: SetInner serialises swap under _swapLock and WriteIpPacketAsync reads the volatile _inner
+            // lock-free, so concurrent swaps + writes + inbound never crash, and an inbound on a detached inner is never
+            // forwarded. After all swaps quiesce on a final inner, every later inbound reaches exactly that inner's
+            // subscriber and no other.
+            var facade = new SwappablePacketChannel();
+            int received = 0;
+            facade.InboundIpPacket += _ => Interlocked.Increment(ref received);
+
+            var channels = new FakeChannel[8];
+            for (int i = 0; i < channels.Length; i++) channels[i] = new FakeChannel();
+            facade.SetInner(channels[0]);
+
+            using var cts = new CancellationTokenSource();
+            // Writers hammer the lock-free write path while swappers churn the inner; neither must throw.
+            Task swapper = Task.Run(() =>
+            {
+                var rng = new Random(1);
+                while (!cts.IsCancellationRequested)
+                    facade.SetInner(channels[rng.Next(channels.Length)]);
+            });
+            Task[] writers = Enumerable.Range(0, 4).Select(_ => Task.Run(async () =>
+            {
+                while (!cts.IsCancellationRequested)
+                    await facade.WriteIpPacketAsync(new byte[] { 0x42 });
+            })).ToArray();
+
+            await Task.Delay(150);
+            cts.Cancel();
+            await Task.WhenAll(writers.Append(swapper));
+
+            // Quiesce on a single final inner, then prove forwarding routes to exactly that inner (no stale subscription).
+            var final = new FakeChannel();
+            facade.SetInner(final);
+            int before = Volatile.Read(ref received);
+            foreach (FakeChannel c in channels) c.RaiseInbound(new byte[] { 0x01 }); // all detached now → no forward
+            Assert.Equal(before, Volatile.Read(ref received));
+            final.RaiseInbound(new byte[] { 0x02 });
+            Assert.Equal(before + 1, Volatile.Read(ref received));
+        }
+
+        [Fact]
         public async Task TcpIpStack_SurvivesAChannelSwap_SameUdpConnectionKeepsWorking()
         {
             var hub = new Hub();
