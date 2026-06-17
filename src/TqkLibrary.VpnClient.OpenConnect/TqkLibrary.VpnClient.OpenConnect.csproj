@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>OpenConnect (Cisco AnyConnect / ocserv) protocol: CSTP 8-byte packet framing, HTTPS config-auth codec and HTTP CONNECT request/response with X-CSTP-* tunnel headers.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>
