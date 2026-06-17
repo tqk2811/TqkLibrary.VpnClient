@@ -24,5 +24,8 @@ namespace TqkLibrary.VpnClient.Abstractions.Diagnostics.Enums
 
         /// <summary>A well-formed message of a type that is not expected in the current state (e.g. an unmatched handshake response).</summary>
         Unexpected,
+
+        /// <summary>No route covered the packet's destination — e.g. a WireGuard outbound packet matched no peer's allowed-ips.</summary>
+        NoRoute,
     }
 }
