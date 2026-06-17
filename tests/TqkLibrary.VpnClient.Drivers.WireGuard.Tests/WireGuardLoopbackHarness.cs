@@ -72,6 +72,33 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard.Tests
     }
 
     /// <summary>
+    /// An <see cref="IWireGuardTransportFactory"/> that returns a <b>different</b> in-process pipe per requested
+    /// endpoint (the connection asks for one transport per distinct peer endpoint). It is the offline stand-in for N
+    /// real UDP sockets: each endpoint gets its own loopback, so a test can prove a peer's outbound went to its own
+    /// endpoint. Records every endpoint it was asked to connect, and reuses one pipe per endpoint (value equality on
+    /// IP + port), mirroring the connection's own de-dup.
+    /// </summary>
+    sealed class EndpointRoutingWireGuardTransportFactory : IWireGuardTransportFactory
+    {
+        readonly IReadOnlyDictionary<IPEndPoint, LoopbackUdpLink.Endpoint> _byEndpoint;
+        readonly List<IPEndPoint> _connected = new();
+
+        public EndpointRoutingWireGuardTransportFactory(IReadOnlyDictionary<IPEndPoint, LoopbackUdpLink.Endpoint> byEndpoint)
+            => _byEndpoint = byEndpoint;
+
+        /// <summary>The endpoints the connection asked for a transport to, in order (one entry per distinct endpoint).</summary>
+        public IReadOnlyList<IPEndPoint> ConnectedEndpoints => _connected;
+
+        public Task<WireGuardTransportHandle> ConnectAsync(IPEndPoint remote, CancellationToken cancellationToken)
+        {
+            _connected.Add(remote);
+            if (!_byEndpoint.TryGetValue(remote, out LoopbackUdpLink.Endpoint? endpoint))
+                throw new InvalidOperationException($"No loopback wired for endpoint {remote} (the test must register every peer's endpoint).");
+            return Task.FromResult(new WireGuardTransportHandle(endpoint, endpoint.SetReceiver, receivePump: null));
+        }
+    }
+
+    /// <summary>
     /// A throwaway WireGuard responder: it answers a type-1 initiation with a type-2 response (running the responder
     /// half of <see cref="WireGuardHandshake"/>), derives the transport keys, then opens inbound type-4 datagrams and
     /// echoes each non-empty inner packet straight back. Optionally it can answer the <i>first</i> initiation with a

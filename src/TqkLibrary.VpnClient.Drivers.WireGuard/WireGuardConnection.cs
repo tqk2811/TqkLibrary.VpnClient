@@ -25,10 +25,13 @@ using TqkLibrary.VpnClient.WireGuard.Transport;
 namespace TqkLibrary.VpnClient.Drivers.WireGuard
 {
     /// <summary>
-    /// A complete WireGuard client over a single UDP transport. It runs the <c>Noise_IKpsk2</c> handshake as the
+    /// A complete WireGuard client. It runs the <c>Noise_IKpsk2</c> handshake as the
     /// <b>initiator</b> against <b>each configured peer</b> (type-1 initiation + mac1 → type-2 response → transport
     /// keys), binding every peer's <see cref="WireGuardTransport"/> to a per-peer <see cref="WireGuardChannel"/> behind
-    /// one stable <see cref="WireGuardMultiPeerChannel"/> (exposed through a <see cref="SwappablePacketChannel"/>). The
+    /// one stable <see cref="WireGuardMultiPeerChannel"/> (exposed through a <see cref="SwappablePacketChannel"/>). Each
+    /// peer rides the UDP transport for <b>its own</b> endpoint (<see cref="WireGuardPeer.Endpoint"/>, or the
+    /// connection's host:port when the peer leaves it unset), so a peer's traffic goes to its own address; peers that
+    /// share an endpoint share one socket (the single-listen-socket case is just every peer falling back to one). The
     /// data plane then crypto-routes each outbound packet to the peer whose allowed-ips cover the destination by
     /// longest-prefix match, and runs a per-peer <see cref="WireGuardPeerState"/> timer loop for keepalives and a
     /// make-before-break rekey (a fresh handshake on a new session index, that peer's channel swapped once it
@@ -55,9 +58,14 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
         readonly TunnelConfig _tunnelConfig;
         readonly WireGuardCryptoRouter _router;
 
-        IDatagramTransport? _transport;
+        // One UDP transport per distinct endpoint: peers that share an endpoint (e.g. all the peers without an explicit
+        // [Peer] Endpoint, which fall back to the connection's host:port) share one socket — the single-listen-socket
+        // model, unchanged; peers with distinct endpoints each get their own socket so a peer's outbound goes to its own
+        // address. Every transport's inbound feeds the same receiver-index demux (OnInboundDatagram is stateless across
+        // sockets). Keyed by endpoint so the de-dup is O(1) and IPEndPoint's value equality (IP + port) collapses dupes.
+        readonly Dictionary<IPEndPoint, IDatagramTransport> _transports = new();
         CancellationTokenSource? _loopCts;
-        Task? _receiveTask;
+        readonly List<Task> _receiveTasks = new();
         System.Threading.Timer? _timer;
 
         Peer[]? _peers;                          // one per configured peer; each owns its handshake/timer/transport state
@@ -126,17 +134,9 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
             await CleanupAttemptResourcesAsync().ConfigureAwait(false);
 
             IPAddress serverIp = await _hostResolver.ResolveAsync(_host, _addressFamilyPreference, cancellationToken).ConfigureAwait(false);
+            var connectionEndpoint = new IPEndPoint(serverIp, _port);
             _loopCts = CancellationTokenSource.CreateLinkedTokenSource(LifetimeToken, cancellationToken);
             CancellationToken loopToken = _loopCts.Token;
-
-            WireGuardTransportHandle handle = await _transportFactory
-                .ConnectAsync(new IPEndPoint(serverIp, _port), cancellationToken).ConfigureAwait(false);
-            _transport = handle.Datagram;
-            handle.SetReceiver(OnInboundDatagram);
-
-            // Start the receive pump (real UDP socket) once the handler is wired; loopback transports self-pump.
-            if (handle.ReceivePump != null)
-                _receiveTask = Task.Run(() => handle.ReceivePump(loopToken));
 
             // Build the per-peer state + the routing channel that fronts every peer's data channel.
             var channel = new WireGuardMultiPeerChannel(_router, _peerConfigs.Count, _config.Mtu,
@@ -144,7 +144,13 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
             _channel = channel;
             var peers = new Peer[_peerConfigs.Count];
             for (int i = 0; i < peers.Length; i++)
-                peers[i] = new Peer(i, _peerConfigs[i], new WireGuardPeerState(TimersForPeer(_peerConfigs[i])));
+            {
+                WireGuardPeer config = _peerConfigs[i];
+                // The peer's own endpoint, or the connection's host:port when it leaves [Peer] Endpoint unset.
+                IPEndPoint endpoint = config.Endpoint ?? connectionEndpoint;
+                IDatagramTransport transport = await GetOrConnectTransportAsync(endpoint, loopToken, cancellationToken).ConfigureAwait(false);
+                peers[i] = new Peer(i, config, new WireGuardPeerState(TimersForPeer(config)), transport);
+            }
             _peers = peers;
 
             // --- run an initiator handshake against every peer and start the timer loop before awaiting them ---
@@ -180,6 +186,23 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
             MarkConnected();
         }
 
+        // Hand back the transport for an endpoint, opening one the first time it is seen and reusing it for every peer
+        // that shares it (so the single-listen-socket case stays one socket, and distinct per-peer endpoints each get
+        // their own). The transport's inbound is wired to the shared receiver-index demux; a real socket's receive pump
+        // is started here, a self-pumping loopback has none.
+        async Task<IDatagramTransport> GetOrConnectTransportAsync(IPEndPoint endpoint, CancellationToken loopToken, CancellationToken cancellationToken)
+        {
+            if (_transports.TryGetValue(endpoint, out IDatagramTransport? existing)) return existing;
+
+            WireGuardTransportHandle handle = await _transportFactory
+                .ConnectAsync(endpoint, cancellationToken).ConfigureAwait(false);
+            handle.SetReceiver(OnInboundDatagram);
+            if (handle.ReceivePump != null)
+                _receiveTasks.Add(Task.Run(() => handle.ReceivePump(loopToken)));
+            _transports[endpoint] = handle.Datagram;
+            return handle.Datagram;
+        }
+
         // The per-peer timers reuse the shared thresholds but carry that peer's own persistent-keepalive interval.
         WireGuardTimers TimersForPeer(WireGuardPeer peer) => new WireGuardTimers(
             persistentKeepaliveSeconds: peer.PersistentKeepaliveSeconds,
@@ -203,7 +226,7 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
             WireGuardInitiationMessage init = handshake.CreateInitiation(localIndex);
             byte[] wire = new WireGuardMessageCodec().EncodeInitiation(init);
             handshake.StampOutgoingMacs(wire);
-            _ = SendAsync(wire); // fire-and-forget; a missed initiation is resent by the timer loop
+            _ = SendToPeerAsync(peer, wire); // fire-and-forget; a missed initiation is resent by the timer loop
             return session;
         }
 
@@ -220,7 +243,10 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
             WireGuardTransportKeys keys = session.Handshake.DeriveTransportKeys();
             var transport = new WireGuardTransport(keys, session.PeerIndex, session.LocalIndex);
             long now = Now();
-            var channel = new WireGuardChannel(transport, SendChannelAsync, _config.Mtu,
+            // Seal/send this peer's data through this peer's own UDP transport (its endpoint).
+            IDatagramTransport peerTransport = peer.Transport;
+            var channel = new WireGuardChannel(transport,
+                (wire, ct) => peerTransport.SendAsync(wire, ct), _config.Mtu,
                 onPacketSealed: () => peer.State.OnDataSent(Now()),
                 onPacketReceived: () => peer.State.OnDataReceived(Now()));
             session.Channel = channel;
@@ -228,17 +254,9 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
             _channel?.SetPeerChannel(peer.Index, channel);
         }
 
-        ValueTask SendChannelAsync(ReadOnlyMemory<byte> wire, CancellationToken cancellationToken)
-        {
-            IDatagramTransport? transport = _transport;
-            return transport?.SendAsync(wire, cancellationToken) ?? default;
-        }
-
-        Task SendAsync(ReadOnlyMemory<byte> wire)
-        {
-            IDatagramTransport? transport = _transport;
-            return transport is null ? Task.CompletedTask : transport.SendAsync(wire).AsTask();
-        }
+        // Put a handshake datagram (initiation / resend) on this peer's own transport — its own endpoint.
+        Task SendToPeerAsync(Peer peer, ReadOnlyMemory<byte> wire)
+            => peer.Transport.SendAsync(wire).AsTask();
 
         // ---- inbound demux: route by message type (response / cookie-reply / transport-data) ----
 
@@ -399,7 +417,7 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
             WireGuardInitiationMessage init = handshaking.Handshake.CreateInitiation(handshaking.LocalIndex);
             byte[] wire = new WireGuardMessageCodec().EncodeInitiation(init);
             handshaking.Handshake.StampOutgoingMacs(wire); // includes mac2 if a cookie-reply was consumed
-            _ = SendAsync(wire);
+            _ = SendToPeerAsync(peer, wire);
             peer.State.OnHandshakeInitiated(now);
         }
 
@@ -417,14 +435,15 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
             _loopCts = null;
             try { loop?.Cancel(); } catch { }
 
-            Task? receive = _receiveTask;
-            _receiveTask = null;
-            if (receive != null) { try { await receive.ConfigureAwait(false); } catch { } }
+            Task[] receives = _receiveTasks.ToArray();
+            _receiveTasks.Clear();
+            foreach (Task receive in receives) { try { await receive.ConfigureAwait(false); } catch { } }
             loop?.Dispose();
 
-            IDatagramTransport? transport = _transport;
-            _transport = null;
-            if (transport != null) { try { await transport.DisposeAsync().ConfigureAwait(false); } catch { } }
+            IDatagramTransport[] transports = _transports.Values.ToArray();
+            _transports.Clear();
+            foreach (IDatagramTransport transport in transports)
+            { try { await transport.DisposeAsync().ConfigureAwait(false); } catch { } }
 
             _peers = null;
             _channel = null;
@@ -461,21 +480,23 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
         /// <inheritdoc/>
         public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
 
-        /// <summary>One configured peer: its static config, its timer state machine, and its current (and any pending
-        /// rekey) session. A rekey produces a second <see cref="Session"/> in <see cref="Pending"/> that replaces
-        /// <see cref="Active"/> once its handshake completes.</summary>
+        /// <summary>One configured peer: its static config, its timer state machine, the UDP transport for its endpoint,
+        /// and its current (and any pending rekey) session. A rekey produces a second <see cref="Session"/> in
+        /// <see cref="Pending"/> that replaces <see cref="Active"/> once its handshake completes.</summary>
         sealed class Peer
         {
-            public Peer(int index, WireGuardPeer config, WireGuardPeerState state)
+            public Peer(int index, WireGuardPeer config, WireGuardPeerState state, IDatagramTransport transport)
             {
                 Index = index;
                 Config = config;
                 State = state;
+                Transport = transport;
             }
 
             public int Index { get; }
             public WireGuardPeer Config { get; }
             public WireGuardPeerState State { get; }
+            public IDatagramTransport Transport { get; } // the UDP socket for this peer's endpoint (shared with peers on the same endpoint)
             public Session? Active { get; set; }    // the live session feeding this peer's channel
             public Session? Pending { get; set; }   // a make-before-break rekey handshake in flight (no transport yet)
         }

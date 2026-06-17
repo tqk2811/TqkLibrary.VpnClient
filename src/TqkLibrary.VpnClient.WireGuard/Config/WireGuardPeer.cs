@@ -32,8 +32,10 @@ namespace TqkLibrary.VpnClient.WireGuard.Config
 
         /// <summary>
         /// An explicit UDP endpoint for this peer (<c>[Peer] Endpoint</c>), or <c>null</c> to use the connection's
-        /// endpoint (the common single-listen-socket case). Per-peer endpoints to distinct addresses are validated
-        /// live (lab Q.1).
+        /// endpoint. The driver opens one UDP transport per distinct endpoint, so each peer's handshake and data go to
+        /// its own address; peers that leave this <c>null</c> (or that share an endpoint) share one socket — the
+        /// single-listen-socket case is just every peer falling back to the connection's host:port. (Interop with a
+        /// real WireGuard peer at a distinct endpoint is validated live, lab Q.1.)
         /// </summary>
         public IPEndPoint? Endpoint { get; init; }
     }
