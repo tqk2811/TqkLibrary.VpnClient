@@ -56,5 +56,38 @@ namespace TqkLibrary.VpnClient.OpenVpn.DataChannel
             cipher = Aes256Gcm;
             return false;
         }
+
+        /// <summary>
+        /// Picks the data cipher from a colon-separated <c>IV_CIPHERS</c> list the <em>server</em> pushed back (some
+        /// servers echo their own NCP offer in the key-method-2 reply options). Returns the first entry the client
+        /// supports, scanned in the server's order (the server's preference wins, matching OpenVPN's NCP selection).
+        /// Returns false when the list is empty or carries no cipher this client supports.
+        /// </summary>
+        public static bool TryResolveServerList(string? colonSeparatedList, out OpenVpnDataCipher cipher)
+        {
+            cipher = Aes256Gcm;
+            if (string.IsNullOrEmpty(colonSeparatedList)) return false;
+            foreach (string name in colonSeparatedList!.Split(':'))
+                if (name.Length > 0 && TryResolve(name, out cipher))
+                    return true;
+            return false;
+        }
+
+        /// <summary>
+        /// Extracts the <c>IV_CIPHERS=…</c> value from a peer-info / OCC options block (newline- or comma-separated
+        /// <c>key=value</c> lines), or null when the block carries no such line. Used to read an NCP cipher list the
+        /// server pushed back.
+        /// </summary>
+        public static string? ExtractIvCiphers(string? optionsBlock)
+        {
+            if (string.IsNullOrEmpty(optionsBlock)) return null;
+            foreach (string line in optionsBlock!.Split('\n', ','))
+            {
+                string trimmed = line.Trim();
+                if (trimmed.StartsWith("IV_CIPHERS=", StringComparison.OrdinalIgnoreCase))
+                    return trimmed.Substring("IV_CIPHERS=".Length).Trim();
+            }
+            return null;
+        }
     }
 }

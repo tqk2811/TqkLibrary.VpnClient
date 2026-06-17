@@ -25,6 +25,13 @@ namespace TqkLibrary.VpnClient.OpenVpn.DataChannel
         }
 
         /// <summary>
+        /// The OCC options string the server returned in its key-method-2 reply (empty until <see cref="NegotiateAsync"/>
+        /// completes). Some servers echo their NCP cipher list here (<c>IV_CIPHERS=…</c>); the caller can mine it for the
+        /// negotiated cipher when no <c>cipher</c> is later pushed in PUSH_REPLY (NCP-less servers).
+        /// </summary>
+        public string ServerOptions { get; private set; } = string.Empty;
+
+        /// <summary>
         /// Sends the client key-method-2 message (with <paramref name="optionsString"/> and optional
         /// auth-user-pass / peer-info), reads the server's reply and returns the derived <see cref="OpenVpnKeyMaterial"/>
         /// (the caller slices it for the negotiated cipher after PUSH_REPLY). Throws
@@ -49,8 +56,9 @@ namespace TqkLibrary.VpnClient.OpenVpn.DataChannel
                 Array.Copy(rest, 0, message, ServerFixedPrefix, optionsLength);
             }
 
-            if (!OpenVpnKeyMethod2.TryParseServerMessage(message, out OpenVpnKeySource2 serverKeySource, out _))
+            if (!OpenVpnKeyMethod2.TryParseServerMessage(message, out OpenVpnKeySource2 serverKeySource, out string serverOptions))
                 throw new InvalidOperationException("Malformed OpenVPN key-method-2 server reply.");
+            ServerOptions = serverOptions;
 
             byte[] key2 = OpenVpnKeyMethod2.DeriveKey2(clientKeySource, serverKeySource, _clientSessionId, _serverSessionId);
             return new OpenVpnKeyMaterial(key2);

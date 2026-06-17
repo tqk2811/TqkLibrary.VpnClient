@@ -26,6 +26,30 @@ namespace TqkLibrary.VpnClient.OpenVpn.Tests
         }
 
         [Fact]
+        public void ServerCipherList_PicksFirstSupportedInServerOrder()
+        {
+            // Server's order wins: the first mutually-supported entry is chosen even when later entries are also supported.
+            Assert.True(OpenVpnDataCipher.TryResolveServerList("UNKNOWN-CIPHER:CHACHA20-POLY1305:AES-256-GCM", out OpenVpnDataCipher c));
+            Assert.Equal("CHACHA20-POLY1305", c.Name);
+
+            Assert.False(OpenVpnDataCipher.TryResolveServerList("BF-CBC:DES-CBC", out _)); // nothing supported
+            Assert.False(OpenVpnDataCipher.TryResolveServerList("", out _));
+            Assert.False(OpenVpnDataCipher.TryResolveServerList(null, out _));
+        }
+
+        [Fact]
+        public void ExtractIvCiphers_ReadsServerPushedList()
+        {
+            // The server may echo its NCP offer in the key-method-2 reply options (newline- or comma-separated key=value).
+            Assert.Equal("AES-128-GCM:AES-256-GCM",
+                OpenVpnDataCipher.ExtractIvCiphers("V4,dev-type tun\nIV_CIPHERS=AES-128-GCM:AES-256-GCM\nIV_PROTO=6"));
+            Assert.Equal("AES-256-GCM",
+                OpenVpnDataCipher.ExtractIvCiphers("V4,iv_ciphers=AES-256-GCM,cipher AES-256-GCM")); // case-insensitive key
+            Assert.Null(OpenVpnDataCipher.ExtractIvCiphers("V4,cipher AES-256-GCM")); // no IV_CIPHERS line
+            Assert.Null(OpenVpnDataCipher.ExtractIvCiphers(null));
+        }
+
+        [Fact]
         public void PeerInfo_CarriesCiphersAndProto()
         {
             string peerInfo = OpenVpnPeerInfo.Build();

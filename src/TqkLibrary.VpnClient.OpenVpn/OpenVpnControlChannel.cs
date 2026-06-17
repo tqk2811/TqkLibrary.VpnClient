@@ -86,6 +86,13 @@ namespace TqkLibrary.VpnClient.OpenVpn
         public X509Certificate2? RemoteCertificate { get; private set; }
 
         /// <summary>
+        /// The OCC options string the server returned in its key-method-2 reply (empty until
+        /// <see cref="NegotiateKeyMaterialAsync"/> completes). Some servers echo their NCP cipher list here
+        /// (<c>IV_CIPHERS=…</c>) — see <see cref="OpenVpnDataCipher.ExtractIvCiphers"/>.
+        /// </summary>
+        public string ServerKeyMethodOptions { get; private set; } = string.Empty;
+
+        /// <summary>
         /// Runs the reset exchange then the TLS client handshake. <paramref name="targetHost"/> is the TLS SNI/target;
         /// <paramref name="clientCertificates"/> authenticate the client (OpenVPN's cert auth) when supplied;
         /// <paramref name="serverCertificateValidation"/> validates the server certificate (null ⇒ accept any — the
@@ -139,11 +146,14 @@ namespace TqkLibrary.VpnClient.OpenVpn
         /// the optional IV_* peer-info block (carrying <c>IV_CIPHERS</c> for NCP — see
         /// <see cref="OpenVpnPeerInfo"/>).
         /// </summary>
-        public Task<OpenVpnKeyMaterial> NegotiateKeyMaterialAsync(string optionsString,
+        public async Task<OpenVpnKeyMaterial> NegotiateKeyMaterialAsync(string optionsString,
             string? username = null, string? password = null, string? peerInfo = null, CancellationToken cancellationToken = default)
         {
             var negotiation = new OpenVpnKeyNegotiation(TlsStream, LocalSessionId, RemoteSessionId);
-            return negotiation.NegotiateAsync(optionsString, username, password, peerInfo, cancellationToken);
+            OpenVpnKeyMaterial material = await negotiation
+                .NegotiateAsync(optionsString, username, password, peerInfo, cancellationToken).ConfigureAwait(false);
+            ServerKeyMethodOptions = negotiation.ServerOptions;
+            return material;
         }
 
         /// <summary>
@@ -165,6 +175,25 @@ namespace TqkLibrary.VpnClient.OpenVpn
                     throw new InvalidOperationException("OpenVPN server rejected the session: " + message);
                 // otherwise an informational line (e.g. a deferred reply) — keep reading.
             }
+        }
+
+        /// <summary>
+        /// Sends OpenVPN's <c>explicit-exit-notify</c> (the <c>EXIT_NOTIFY</c> OCC control message) over the TLS channel so
+        /// the server tears the session down immediately instead of waiting for its keepalive timeout. Best-effort: a
+        /// throw (the channel is already closing) is swallowed, and this never blocks teardown. Call before disposing the
+        /// channel; no-op if TLS was never established.
+        /// </summary>
+        public async Task SendExitNotifyAsync(CancellationToken cancellationToken = default)
+        {
+            SslStream? ssl = _ssl;
+            if (ssl is null) return;
+            try
+            {
+                byte[] message = OpenVpnControlMessage.Build("EXIT_NOTIFY");
+                await ssl.WriteAsync(message, 0, message.Length, cancellationToken).ConfigureAwait(false);
+                await ssl.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch { /* best-effort: the link may already be gone — teardown proceeds regardless */ }
         }
 
         // Bridge write callback: fragment the TLS bytes, queue each fragment reliably (blocking on window space), pump.

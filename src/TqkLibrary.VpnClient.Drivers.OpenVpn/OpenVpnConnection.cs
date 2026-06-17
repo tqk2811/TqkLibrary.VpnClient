@@ -58,6 +58,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
         readonly IHostResolver _hostResolver;
         readonly int _tunMtu;
         readonly OpenVpnPeerInfoOptions? _peerInfoOptions;
+        readonly string? _fallbackCipher;
         readonly bool _multiHost;
         readonly MacAddress _tapMac;      // a stable locally-administered MAC for the tap endpoint (kept across reconnects)
 
@@ -92,7 +93,10 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
         /// <paramref name="controlWrap"/> applies <c>tls-auth</c>/<c>tls-crypt</c>; <paramref name="transportFactory"/>
         /// opens the UDP/TCP socket (an in-process factory drives it offline). <paramref name="peerInfoOptions"/>
         /// customises the advertised <c>IV_*</c> peer-info block (null = defaults; the tun MTU fills <c>IV_MTU</c> when
-        /// unset). When <paramref name="multiHost"/> is <c>true</c> a tap-mode tunnel exposes the whole L2 broadcast domain
+        /// unset). <paramref name="fallbackCipher"/> is the configured data cipher (the <c>cipher</c> /
+        /// <c>data-ciphers-fallback</c> directive) used when the server does not speak NCP (PUSH_REPLY carries no
+        /// <c>cipher</c> and the server pushed back no <c>IV_CIPHERS</c>); null falls back to AES-256-GCM.
+        /// When <paramref name="multiHost"/> is <c>true</c> a tap-mode tunnel exposes the whole L2 broadcast domain
         /// (the tap channel becomes an uplink port on an in-memory switch and each station leases its own IP), reachable
         /// through <see cref="MultiHostSession"/>; the default (<c>false</c>) keeps the single-host tap bridge (tun-mode
         /// ignores it). <paramref name="clock"/> supplies the keepalive millisecond clock (default: the system tick clock) —
@@ -112,6 +116,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             int tunMtu = 1500,
             OpenVpnReliabilityOptions? reliabilityOptions = null,
             OpenVpnPeerInfoOptions? peerInfoOptions = null,
+            string? fallbackCipher = null,
             bool multiHost = false,
             Func<long>? clock = null,
             ILoggerFactory? loggerFactory = null)
@@ -133,6 +138,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             if (tunMtu < 1) throw new ArgumentOutOfRangeException(nameof(tunMtu));
             _tunMtu = tunMtu;
             _peerInfoOptions = peerInfoOptions;
+            _fallbackCipher = string.IsNullOrEmpty(fallbackCipher) ? null : fallbackCipher;
             _multiHost = multiHost;
             _tapMac = GenerateLocalMac();
         }
@@ -221,7 +227,13 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
 
             // --- key-method-2 over TLS (peer-info advertises IV_CIPHERS for NCP, plus IV_MTU and informational IV_*) ---
             Logger.LogHandshake(DriverName, "key-method-2 key exchange over TLS (peer-info IV_CIPHERS for NCP)");
-            OpenVpnPeerInfoOptions peerInfoOptions = _peerInfoOptions ?? new OpenVpnPeerInfoOptions();
+            OpenVpnPeerInfoOptions peerInfoOptions = _peerInfoOptions
+                // Default peer-info also advertises explicit-exit-notify (we send EXIT_NOTIFY on teardown); a caller that
+                // supplied its own options controls IV_PROTO itself, so we don't override it.
+                ?? new OpenVpnPeerInfoOptions
+                {
+                    IvProto = OpenVpnPeerInfo.IvProtoDataV2 | OpenVpnPeerInfo.IvProtoRequestPush | OpenVpnPeerInfo.IvProtoCcExitNotify,
+                };
             if (peerInfoOptions.Mtu is null) peerInfoOptions = peerInfoOptions with { Mtu = _tunMtu };
             string peerInfo = OpenVpnPeerInfo.Build(peerInfoOptions);
             OpenVpnKeyMaterial keyMaterial = await control
@@ -238,7 +250,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             Logger.LogHandshake(DriverName, $"PUSH_REPLY: ifconfig {push.IfconfigLocal?.ToString() ?? "(none — pure DHCP)"}, cipher {push.Cipher ?? "(default)"}");
 
             // --- NCP: honour the server's cipher pick, then slice the data-channel keys for it ---
-            OpenVpnDataCipher cipher = ResolveCipher(push.Cipher);
+            OpenVpnDataCipher cipher = ResolveCipher(push.Cipher, control.ServerKeyMethodOptions);
             uint peerId = push.PeerId ?? 0;
             OpenVpnDataChannelKeys keys = keyMaterial.DeriveDataKeys(cipher, isServer: false);
             var dataChannel = new OpenVpnDataChannel(keys, keyId: 0, peerId: peerId, cipher: cipher.CreateCipher());
@@ -285,13 +297,40 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             StartKeepalive(push.Ping ?? 0, push.PingRestart ?? 0);
         }
 
-        // The server didn't push a cipher ⇒ the default AES-256-GCM; pushed-and-supported ⇒ that; pushed-and-unsupported ⇒ fail.
-        static OpenVpnDataCipher ResolveCipher(string? pushed)
+        // NCP cipher selection, in priority order:
+        //  1) the server pushed a `cipher` in PUSH_REPLY (normal NCP) — honour it (unsupported ⇒ fail).
+        //  2) no pushed cipher, but the server echoed an IV_CIPHERS list in its key-method-2 reply — pick the first
+        //     mutually-supported entry in the server's order (its preference wins).
+        //  3) NCP-less server (neither of the above) — fall back to the configured `cipher`/`data-ciphers-fallback`.
+        //  4) nothing configured — AES-256-GCM (OpenVPN's default data cipher).
+        OpenVpnDataCipher ResolveCipher(string? pushed, string? serverKeyMethodOptions)
         {
-            if (string.IsNullOrEmpty(pushed)) return OpenVpnDataCipher.Aes256Gcm;
-            if (OpenVpnDataCipher.TryResolve(pushed, out OpenVpnDataCipher cipher)) return cipher;
-            throw new VpnConnectionException(
-                $"OpenVPN server selected an unsupported data cipher '{pushed}' (NCP). Supported: {OpenVpnDataCipher.AdvertisedList}.");
+            if (!string.IsNullOrEmpty(pushed))
+            {
+                if (OpenVpnDataCipher.TryResolve(pushed, out OpenVpnDataCipher cipher)) return cipher;
+                throw new VpnConnectionException(
+                    $"OpenVPN server selected an unsupported data cipher '{pushed}' (NCP). Supported: {OpenVpnDataCipher.AdvertisedList}.");
+            }
+
+            string? serverList = OpenVpnDataCipher.ExtractIvCiphers(serverKeyMethodOptions);
+            if (OpenVpnDataCipher.TryResolveServerList(serverList, out OpenVpnDataCipher fromServer))
+            {
+                Logger.LogHandshake(DriverName, $"NCP-less PUSH_REPLY; chose '{fromServer.Name}' from the server's IV_CIPHERS offer");
+                return fromServer;
+            }
+
+            if (_fallbackCipher != null)
+            {
+                if (OpenVpnDataCipher.TryResolve(_fallbackCipher, out OpenVpnDataCipher configured))
+                {
+                    Logger.LogHandshake(DriverName, $"NCP-less server; falling back to the configured cipher '{configured.Name}'");
+                    return configured;
+                }
+                throw new VpnConnectionException(
+                    $"OpenVPN configured fallback cipher '{_fallbackCipher}' is unsupported (no NCP). Supported: {OpenVpnDataCipher.AdvertisedList}.");
+            }
+
+            return OpenVpnDataCipher.Aes256Gcm;
         }
 
         // ---- tap single-host bridge: one VirtualHost + ARP on the tap channel, bridged down to the L3 facade ----
@@ -485,6 +524,25 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
         }
 
         // ---- teardown ----
+
+        /// <summary>
+        /// Tears the tunnel down permanently. First sends OpenVPN's <c>explicit-exit-notify</c> (<c>EXIT_NOTIFY</c>) over
+        /// the control channel best-effort (time-boxed) so the server drops the session at once instead of waiting for its
+        /// keepalive timeout, then runs the shared teardown (stop timers/receive loop, dispose transport/channels). The
+        /// exit-notify never blocks or fails teardown.
+        /// </summary>
+        public override async Task DisconnectAsync(CancellationToken cancellationToken = default)
+        {
+            OpenVpnControlChannel? control = _control;
+            if (control != null && _dataActive)
+            {
+                Logger.LogHandshake(DriverName, "sending explicit-exit-notify (EXIT_NOTIFY) before teardown");
+                using var exitCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                exitCts.CancelAfter(TimeSpan.FromSeconds(2)); // best-effort: never let a stuck write delay teardown
+                try { await control.SendExitNotifyAsync(exitCts.Token).ConfigureAwait(false); } catch { }
+            }
+            await DisconnectCoreAsync().ConfigureAwait(false);
+        }
 
         /// <inheritdoc/>
         protected override async Task CleanupAttemptResourcesAsync()

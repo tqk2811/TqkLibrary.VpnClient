@@ -9,6 +9,7 @@ using TqkLibrary.VpnClient.Drivers.OpenVpn.Transport;
 using TqkLibrary.VpnClient.OpenVpn;
 using TqkLibrary.VpnClient.OpenVpn.Config;
 using TqkLibrary.VpnClient.OpenVpn.Enums;
+using TqkLibrary.VpnClient.OpenVpn.Helpers;
 
 namespace TqkLibrary.VpnClient.Drivers.OpenVpn
 {
@@ -93,18 +94,23 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             if (endpoint is null) throw new ArgumentNullException(nameof(endpoint));
             if (credentials is null) throw new ArgumentNullException(nameof(credentials));
 
+            // Client-cert auth: an explicit collection (back-compat) always wins; otherwise auto-load the profile's
+            // cert/key (inline PEM or file path) so a parsed .ovpn needs no manual wiring.
+            X509CertificateCollection? clientCertificates = OpenVpnClientCertificate.Resolve(_profile, _clientCertificates);
+
             var factory = new OpenVpnSocketTransportFactory(_profile.Protocol);
             var connection = new OpenVpnConnection(endpoint.Host, endpoint.Port, factory,
                 optionsString: BuildOccOptions(_profile),
                 device: _profile.Device,
                 username: credentials.Username,
                 password: credentials.Password,
-                clientCertificates: _clientCertificates,
+                clientCertificates: clientCertificates,
                 serverCertificateValidation: _serverCertificateValidation,
                 controlWrap: _controlWrap ?? BuildControlWrap(_profile),
                 reconnectOptions: _reconnectOptions,
                 addressFamilyPreference: endpoint.AddressFamilyPreference,
                 tunMtu: _profile.TunMtu ?? 1500,
+                fallbackCipher: _profile.Cipher ?? (_profile.DataCiphers.Count > 0 ? _profile.DataCiphers[0] : null),
                 multiHost: _multiHost,
                 loggerFactory: _loggerFactory);
             try

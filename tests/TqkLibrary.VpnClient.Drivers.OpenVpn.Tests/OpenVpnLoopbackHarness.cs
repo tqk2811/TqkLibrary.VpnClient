@@ -95,6 +95,11 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn.Tests
         /// <summary>The raw peer-info block the client sent in key-method-2 (captured for assertions).</summary>
         public string? ReceivedPeerInfo { get; private set; }
 
+        readonly TaskCompletionSource<string> _exitNotify = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Completes with the OCC control message (e.g. <c>EXIT_NOTIFY</c>) the client sends after PUSH_REPLY.</summary>
+        public Task<string> ExitNotifyReceived => _exitNotify.Task;
+
         protected SimulatedOpenVpnServerBase(IOpenVpnTransport transport, X509Certificate2 certificate)
         {
             _transport = transport;
@@ -109,6 +114,9 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn.Tests
 
         /// <summary>The PUSH_REPLY options string (override per scenario). Default: a /24 subnet pool + peer-id + the selected cipher.</summary>
         protected virtual string PushReply => $"PUSH_REPLY,ifconfig 10.8.0.2 255.255.255.0,topology subnet,peer-id {PeerId},cipher {DataCipher.Name}";
+
+        /// <summary>The OCC options string the server returns in its key-method-2 reply (override to echo IV_CIPHERS for NCP-less tests).</summary>
+        protected virtual string ServerKeyMethodOptions => $"V4,cipher {DataCipher.Name}";
 
         /// <summary>Handles one decrypted data-channel payload from the client (tun: a bare IP packet; tap: an Ethernet frame).</summary>
         protected abstract void OnData(byte[] plaintext);
@@ -140,7 +148,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn.Tests
                 ReceivedPeerInfo = await ReadStringAsync(); // peer-info (the connection always sends IV_* peer-info)
 
                 var serverKs = ServerKeySource();
-                byte[] reply = BuildServerKeyMethod2(serverKs, $"V4,cipher {DataCipher.Name}");
+                byte[] reply = BuildServerKeyMethod2(serverKs, ServerKeyMethodOptions);
                 await _ssl.WriteAsync(reply, 0, reply.Length);
                 await _ssl.FlushAsync();
 
@@ -153,8 +161,15 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn.Tests
                 byte[] push = OpenVpnControlMessage.Build(PushReply);
                 await _ssl.WriteAsync(push, 0, push.Length);
                 await _ssl.FlushAsync();
+
+                // Keep draining control messages: the client sends explicit-exit-notify (EXIT_NOTIFY) on teardown.
+                while (true)
+                {
+                    string message = await OpenVpnControlMessage.ReadAsync(_ssl);
+                    if (message.StartsWith("EXIT_NOTIFY", StringComparison.Ordinal)) _exitNotify.TrySetResult(message);
+                }
             }
-            catch { /* test harness: connection torn down at end of test */ }
+            catch { /* test harness: connection torn down at end of test (the EXIT_NOTIFY read throws on close) */ }
         }
 
         void OnDatagram(ReadOnlyMemory<byte> datagram)
