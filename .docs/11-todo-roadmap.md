@@ -1,4 +1,4 @@
-# 11 — Roadmap & TODO (chỉ chứa việc chưa làm)
+﻿# 11 — Roadmap & TODO (chỉ chứa việc chưa làm)
 
 > **Mục tiêu dài hạn: clone lại mọi VPN opensource** thành driver userspace thuần .NET trong thư viện này
 > (đối chiếu plan gốc `wild-stargazing-spark.md` + as-built [`10-codebase-architecture-and-flow.md`](10-codebase-architecture-and-flow.md)).
@@ -90,11 +90,10 @@
 
 ## L2 — Tầng Ethernet còn lại (LAN ảo multi-host)
 
-> L2.0 codec + L2.1 `EthernetSwitch` + L2.2 `VirtualHost` + L2.3 ARP + L2.4 NDISC + L2.5 DHCPv4 + L2.6 SLAAC/DHCPv6 + L2.7 `EthernetAdapter` ráp + L2.8 năng lực/multi-host-session **đã xong** (as-built: [`10`](10-codebase-architecture-and-flow.md) + [README Ethernet](../src/TqkLibrary.VpnClient.Ethernet/README-vi.md)).
+> L2.0 codec + L2.1 `EthernetSwitch` + L2.2 `VirtualHost` + L2.3 ARP + L2.4 NDISC + L2.5 DHCPv4 + L2.6 SLAAC/DHCPv6 + L2.7 `EthernetAdapter` ráp + L2.8 năng lực/multi-host-session + L2.9 composite dual-stack (`DualStackNeighborResolver`/`DualStackAddressConfigurator`) + test multi-host dual-stack offline **đã xong** (as-built: [`10`](10-codebase-architecture-and-flow.md) + [README Ethernet](../src/TqkLibrary.VpnClient.Ethernet/README-vi.md)).
 > Quy tắc vàng giữ nguyên: IpStack chỉ bind `IPacketChannel`, mọi ARP/ND/DHCP nằm trong tầng L2.
 > **Driver L2 thật** tiêu thụ fabric này: **OpenVPN tap-mode (V2.h — bắc cầu 1-host: `OpenVpnTapChannel`→`VirtualHost`+`ArpResolver`→`IPacketChannel`, IP từ ifconfig)** và **SoftEther (V4.c — bắc cầu 1-host: `SoftEtherEthernetChannel`→`VirtualHost`+`ArpResolver`→`IPacketChannel`, IP từ **DHCP** SecureNAT qua `DhcpV4Configurator` L2.5)**; **`EthernetAdapter` (L2.7)** ráp sẵn multi-host (switch + N×`VirtualHost` + backpressure) và **`MultiHostSession` (L2.8)** phơi N station = N `IVpnSession`, capability driver tap/SoftEther đã khai báo `L2Ethernet`/`L2BroadcastDomain`/`SupportsMultiHost` — **còn lại** chỉ là **data-plane**: gắn uplink VPN vào adapter như một port thay bắc-cầu-1-host (+ OpenVPN tap pure-DHCP).
 
-- [ ] **L2.9 — Test + docs**: kịch bản multi-host ARP/ND/DHCP **dual-stack** qua switch in-memory; cập nhật [`10`](10-codebase-architecture-and-flow.md) + đồng bộ `00`–`09` + README. **Phụ thuộc tất cả.**
 - [ ] **Driver L2 đa-host data-plane**: gắn uplink VPN thật (`OpenVpnTapChannel` / `SoftEtherEthernetChannel`) vào `EthernetAdapter`/`MultiHostSession` (L2.7/L2.8) như một port — cấp **cả broadcast domain + DHCP do server** thay bắc-cầu-1-host thủ công; + OpenVPN tap pure-DHCP (server không push ifconfig). **Phụ thuộc L2.8.**
 
 ---
