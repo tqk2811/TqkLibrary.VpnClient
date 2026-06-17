@@ -56,6 +56,16 @@ namespace TqkLibrary.VpnClient
         /// <summary>Registers the IKEv2-native driver with explicit auto-reconnect options (e.g. to disable it).</summary>
         public VpnClientBuilder UseIkev2(Ikev2ReconnectOptions reconnectOptions) => AddDriver(new Ikev2Driver(reconnectOptions));
 
+        /// <summary>
+        /// Registers the IKEv2-native driver that verifies the gateway by <b>certificate</b> (RFC 7296 §2.15 digital
+        /// signature): the responder's CERT must be trusted by <paramref name="responderTrust"/> and its AUTH signature
+        /// must verify, otherwise the connection is refused. Auto-reconnect is enabled by default unless
+        /// <paramref name="reconnectOptions"/> says otherwise.
+        /// </summary>
+        public VpnClientBuilder UseIkev2(Ipsec.Ike.V2.Models.IkeCertificateTrust responderTrust,
+            Ikev2ReconnectOptions? reconnectOptions = null)
+            => AddDriver(new Ikev2Driver(reconnectOptions, responderTrust: responderTrust));
+
         /// <summary>Registers the OpenVPN driver (community-server compatible: UDP/TCP, tun-mode, NCP AEAD) from a parsed profile.</summary>
         public VpnClientBuilder UseOpenVpn(OpenVpnProfile profile) => AddDriver(new OpenVpnDriver(profile));
 

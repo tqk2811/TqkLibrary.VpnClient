@@ -52,6 +52,9 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
         readonly byte[] _preSharedKey;
         readonly string? _eapUserName;
         readonly string? _eapPassword;
+        readonly IkeCertificateTrust? _responderTrust;
+        readonly IReadOnlyList<TrafficSelector>? _initiatorSelectors;
+        readonly IReadOnlyList<TrafficSelector>? _responderSelectors;
         readonly AddressFamilyPreference _addressFamilyPreference;
         readonly IHostResolver _hostResolver;
         readonly SemaphoreSlim _exchangeGate = new(1, 1); // one post-handshake request/response in flight at a time
@@ -75,21 +78,33 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
         int _rekeyInProgress;
 
         /// <summary>
-        /// Creates a connection to the given IKEv2 gateway. <paramref name="preSharedKey"/> always authenticates the
-        /// responder (RFC 7296 §2.15). When <paramref name="eapUserName"/>/<paramref name="eapPassword"/> are both
-        /// supplied, the initiator authenticates with EAP-MSCHAPv2 instead of a PSK AUTH (RFC 7296 §2.16); otherwise it
-        /// authenticates with the PSK as well. <paramref name="loggerFactory"/> receives diagnostic traces
-        /// (handshake/DPD/rekey/reconnect); null logs to a no-op logger.
+        /// Creates a connection to the given IKEv2 gateway. <paramref name="preSharedKey"/> authenticates the
+        /// responder by default (RFC 7296 §2.15 PSK). When <paramref name="eapUserName"/>/<paramref name="eapPassword"/>
+        /// are both supplied, the initiator authenticates with EAP-MSCHAPv2 instead of a PSK AUTH (RFC 7296 §2.16);
+        /// otherwise it authenticates with the PSK as well. When <paramref name="responderTrust"/> is supplied, a gateway
+        /// that authenticates with a digital signature is verified against that trust (its CERT must be trusted and its
+        /// AUTH signature must verify — otherwise <see cref="VpnServerRejectedException"/>); a PSK AUTH from the gateway
+        /// is refused in that mode. <paramref name="initiatorSelectors"/>/<paramref name="responderSelectors"/> offer
+        /// several traffic selectors (RFC 7296 §3.13); null offers the usual single match-all IPv4 selector.
+        /// <paramref name="loggerFactory"/> receives diagnostic traces (handshake/DPD/rekey/reconnect); null logs to a
+        /// no-op logger.
         /// </summary>
         public Ikev2Connection(string host, byte[] preSharedKey, Ikev2ReconnectOptions? reconnectOptions = null,
             AddressFamilyPreference addressFamilyPreference = AddressFamilyPreference.Auto, IHostResolver? hostResolver = null,
-            string? eapUserName = null, string? eapPassword = null, ILoggerFactory? loggerFactory = null)
+            string? eapUserName = null, string? eapPassword = null,
+            IkeCertificateTrust? responderTrust = null,
+            IReadOnlyList<TrafficSelector>? initiatorSelectors = null,
+            IReadOnlyList<TrafficSelector>? responderSelectors = null,
+            ILoggerFactory? loggerFactory = null)
             : base(DriverNameConst, reconnectOptions ?? new Ikev2ReconnectOptions(), clock: null, loggerFactory: loggerFactory)
         {
             _host = host;
             _preSharedKey = preSharedKey;
             _eapUserName = eapUserName;
             _eapPassword = eapPassword;
+            _responderTrust = responderTrust;
+            _initiatorSelectors = initiatorSelectors;
+            _responderSelectors = responderSelectors;
             _addressFamilyPreference = addressFamilyPreference;
             _hostResolver = hostResolver ?? DnsHostResolver.Default;
         }
@@ -135,7 +150,9 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
             bool useEap = _eapUserName is not null && _eapPassword is not null;
             NatTraversalChannel natt = StartAttemptChannel(serverIp, cancellationToken);
             var ike = new IkeClient(_preSharedKey, BuildIdentity(useEap), requestTransportMode: false, requestConfiguration: true,
-                eapUserName: _eapUserName, eapPassword: _eapPassword);
+                eapUserName: _eapUserName, eapPassword: _eapPassword,
+                responderTrust: _responderTrust,
+                initiatorSelectors: _initiatorSelectors, responderSelectors: _responderSelectors);
             _ike = ike;
 
             // --- IKE_SA_INIT on UDP/500 ---

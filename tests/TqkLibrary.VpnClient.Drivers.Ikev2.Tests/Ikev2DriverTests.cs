@@ -1,6 +1,9 @@
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Enums;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
 using TqkLibrary.VpnClient.Drivers.Ikev2;
+using TqkLibrary.VpnClient.Ipsec.Ike.V2.Models;
 using Xunit;
 
 namespace TqkLibrary.VpnClient.Drivers.Ikev2.Tests
@@ -25,6 +28,22 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2.Tests
             Assert.Equal(VpnAuthMethod.PreSharedKey | VpnAuthMethod.Eap, caps.AuthMethods); // PSK or EAP-MSCHAPv2
             Assert.Equal(AddressAssignment.ConfigPush, caps.AddressAssignment); // CFG_REPLY pushes the virtual IP
             Assert.Equal(MultiHostModel.None, caps.MultiHostModel);
+        }
+
+        [Fact]
+        public void Capabilities_AdvertiseCertificate_WhenResponderTrustConfigured()
+        {
+            using var rsa = RSA.Create(2048);
+            var request = new CertificateRequest("CN=gateway", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            using X509Certificate2 cert = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1));
+
+            var driver = new Ikev2Driver(responderTrust: IkeCertificateTrust.PinLeaf(cert));
+            VpnDriverCapabilities caps = driver.Capabilities;
+
+            // Certificate is added to the always-present PSK/EAP methods when a trust anchor is configured.
+            Assert.True(caps.AuthMethods.HasFlag(VpnAuthMethod.Certificate));
+            Assert.True(caps.AuthMethods.HasFlag(VpnAuthMethod.PreSharedKey));
+            Assert.True(caps.AuthMethods.HasFlag(VpnAuthMethod.Eap));
         }
 
         [Fact]

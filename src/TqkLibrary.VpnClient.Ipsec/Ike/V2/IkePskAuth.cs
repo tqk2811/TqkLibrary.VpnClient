@@ -23,9 +23,13 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             IPrf prf, byte[] preSharedKey, byte[] realMessage2, byte[] nonceInitiator, byte[] skPr, byte[] restOfIdResponder)
             => ComputeAuth(prf, preSharedKey, realMessage2, nonceInitiator, skPr, restOfIdResponder);
 
-        static byte[] ComputeAuth(IPrf prf, byte[] preSharedKey, byte[] realMessage, byte[] peerNonce, byte[] skP, byte[] restOfId)
+        /// <summary>
+        /// The octets fed into the AUTH computation (RFC 7296 §2.15):
+        /// <c>RealMessage | peerNonce | prf(SK_p, RestOfID)</c>. The PSK path then runs these through one more
+        /// <c>prf</c>; a digital-signature path (RFC 7296 method 1/9/14) signs/verifies these octets directly.
+        /// </summary>
+        public static byte[] ComputeSignedOctets(IPrf prf, byte[] realMessage, byte[] peerNonce, byte[] skP, byte[] restOfId)
         {
-            byte[] innerKey = Prf(prf, preSharedKey, KeyPad);
             byte[] macedId = Prf(prf, skP, restOfId);
 
             byte[] signed = new byte[realMessage.Length + peerNonce.Length + macedId.Length];
@@ -33,7 +37,13 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             Buffer.BlockCopy(realMessage, 0, signed, offset, realMessage.Length); offset += realMessage.Length;
             Buffer.BlockCopy(peerNonce, 0, signed, offset, peerNonce.Length); offset += peerNonce.Length;
             Buffer.BlockCopy(macedId, 0, signed, offset, macedId.Length);
+            return signed;
+        }
 
+        static byte[] ComputeAuth(IPrf prf, byte[] preSharedKey, byte[] realMessage, byte[] peerNonce, byte[] skP, byte[] restOfId)
+        {
+            byte[] innerKey = Prf(prf, preSharedKey, KeyPad);
+            byte[] signed = ComputeSignedOctets(prf, realMessage, peerNonce, skP, restOfId);
             return Prf(prf, innerKey, signed);
         }
 

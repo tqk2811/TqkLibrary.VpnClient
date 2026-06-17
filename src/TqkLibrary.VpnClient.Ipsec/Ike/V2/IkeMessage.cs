@@ -122,6 +122,8 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             IkePayloadType.IdInitiator => IdentificationPayload.Parse(body, isInitiator: true),
             IkePayloadType.IdResponder => IdentificationPayload.Parse(body, isInitiator: false),
             IkePayloadType.Authentication => AuthenticationPayload.Parse(body),
+            IkePayloadType.Certificate => CertificatePayload.Parse(body),
+            IkePayloadType.CertificateRequest => CertificateRequestPayload.Parse(body),
             IkePayloadType.TrafficSelectorInitiator => TrafficSelectorPayload.Parse(body, isInitiator: true),
             IkePayloadType.TrafficSelectorResponder => TrafficSelectorPayload.Parse(body, isInitiator: false),
             IkePayloadType.Configuration => ConfigurationPayload.Parse(body),

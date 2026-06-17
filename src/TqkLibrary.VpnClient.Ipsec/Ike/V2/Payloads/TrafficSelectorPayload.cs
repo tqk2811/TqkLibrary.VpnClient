@@ -83,6 +83,50 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2.Payloads
             return payload;
         }
 
+        /// <summary>
+        /// Builds a TSi/TSr payload offering several traffic selectors (RFC 7296 §3.13 allows more than one — e.g. a
+        /// split-tunnel that protects several subnets). Falls back to a single "match all IPv4" selector when the list
+        /// is empty so callers can pass through a null/empty configuration unchanged.
+        /// </summary>
+        public static TrafficSelectorPayload Multiple(bool isInitiator, IEnumerable<TrafficSelector>? selectors)
+        {
+            var payload = new TrafficSelectorPayload { IsInitiator = isInitiator };
+            if (selectors is not null)
+                foreach (TrafficSelector selector in selectors)
+                    payload.Selectors.Add(selector);
+            if (payload.Selectors.Count == 0)
+                payload.Selectors.Add(TrafficSelector.AnyIpv4());
+            return payload;
+        }
+
+        /// <summary>A traffic selector for the IPv4 subnet <paramref name="network"/>/<paramref name="prefixLength"/> (all protocols/ports).</summary>
+        public static TrafficSelector Subnet(IPAddress network, int prefixLength)
+        {
+            if (network.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+                throw new ArgumentException("Only IPv4 subnets are supported (TS_IPV4_ADDR_RANGE).", nameof(network));
+            if (prefixLength < 0 || prefixLength > 32)
+                throw new ArgumentOutOfRangeException(nameof(prefixLength));
+
+            byte[] networkBytes = network.GetAddressBytes();
+            uint mask = prefixLength == 0 ? 0u : 0xFFFFFFFFu << (32 - prefixLength);
+            uint baseAddress =
+                ((uint)networkBytes[0] << 24) | ((uint)networkBytes[1] << 16) | ((uint)networkBytes[2] << 8) | networkBytes[3];
+            uint start = baseAddress & mask;
+            uint end = start | ~mask;
+
+            return new TrafficSelector
+            {
+                Protocol = 0,
+                StartPort = 0,
+                EndPort = 0xFFFF,
+                StartAddress = FromUInt32(start),
+                EndAddress = FromUInt32(end),
+            };
+        }
+
+        static IPAddress FromUInt32(uint value)
+            => new(new[] { (byte)(value >> 24), (byte)(value >> 16), (byte)(value >> 8), (byte)value });
+
         /// <inheritdoc/>
         public override void WriteBody(List<byte> output)
         {

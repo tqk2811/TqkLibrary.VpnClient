@@ -1,5 +1,7 @@
 using System.Net;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using TqkLibrary.VpnClient.Abstractions.Drivers;
 using TqkLibrary.VpnClient.Crypto;
 using TqkLibrary.VpnClient.Ipsec.Esp;
 using TqkLibrary.VpnClient.Ipsec.Ike.V2.Eap;
@@ -24,6 +26,9 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
         readonly bool _requestConfiguration;
         readonly string? _eapUserName;
         readonly string? _eapPassword;
+        readonly IkeCertificateTrust? _responderTrust;
+        readonly IReadOnlyList<TrafficSelector>? _initiatorSelectors;
+        readonly IReadOnlyList<TrafficSelector>? _responderSelectors;
 
         IkeCipher? _cipher;
         uint _nextMessageId = 2; // IKE_SA_INIT=0, IKE_AUTH=1; post-auth exchanges start here.
@@ -48,10 +53,19 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
         /// transport mode (L2TP); <paramref name="requestConfiguration"/> attaches a CFG_REQUEST so the gateway
         /// assigns a virtual IP/DNS (tunnel mode, IKEv2-native). The two are mutually exclusive in practice —
         /// transport mode keeps the host's address, tunnel mode pulls one.
+        /// <para>When <paramref name="responderTrust"/> is supplied, the client sends a CERTREQ in IKE_AUTH and accepts
+        /// a responder that authenticates with a <em>digital signature</em> (RFC 7296 §2.15): it validates the CERT the
+        /// gateway returns against the trust and verifies the AUTH signature with that certificate's public key (a PSK
+        /// AUTH from the gateway is still accepted as a fallback). <paramref name="initiatorSelectors"/> /
+        /// <paramref name="responderSelectors"/> offer several traffic selectors (multiple subnets, RFC 7296 §3.13);
+        /// null/empty offers the usual single "match all IPv4" selector.</para>
         /// </summary>
         public IkeClient(byte[] preSharedKey, IdentificationPayload identity, bool requestTransportMode = true,
             byte[]? initiatorSpi = null, bool requestConfiguration = false,
-            string? eapUserName = null, string? eapPassword = null)
+            string? eapUserName = null, string? eapPassword = null,
+            IkeCertificateTrust? responderTrust = null,
+            IReadOnlyList<TrafficSelector>? initiatorSelectors = null,
+            IReadOnlyList<TrafficSelector>? responderSelectors = null)
         {
             _preSharedKey = preSharedKey;
             _identity = identity;
@@ -59,10 +73,20 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             _requestConfiguration = requestConfiguration;
             _eapUserName = eapUserName;
             _eapPassword = eapPassword;
+            _responderTrust = responderTrust;
+            _initiatorSelectors = initiatorSelectors;
+            _responderSelectors = responderSelectors;
             _initiator = new IkeSaInitiator(initiatorSpi);
             _currentInitiatorSpi = _initiator.InitiatorSpi;
             ChildInboundSpi = RandomSpi();
         }
+
+        /// <summary>The certificate the responder presented in IKE_AUTH (digital-signature auth), or null for PSK.</summary>
+        public X509Certificate2? ResponderCertificate { get; private set; }
+
+        // Builds the TSi/TSr pair — the configured multi-selector list, or the single match-all default.
+        TrafficSelectorPayload BuildInitiatorTs() => TrafficSelectorPayload.Multiple(isInitiator: true, _initiatorSelectors);
+        TrafficSelectorPayload BuildResponderTs() => TrafficSelectorPayload.Multiple(isInitiator: false, _responderSelectors);
 
         /// <summary>The ESP SPI we chose (the peer uses it when sending to us). Updated after a CHILD_SA rekey.</summary>
         public byte[] ChildInboundSpi { get; private set; }
@@ -119,6 +143,9 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
                 MessageId = 1,
             };
             message.Payloads.Add(_identity);
+            // CERTREQ (digital-signature auth): ask the gateway to send its certificate so we can verify its AUTH.
+            if (_responderTrust is not null)
+                message.Payloads.Add(CertificateRequestPayload.AnyX509());
             message.Payloads.Add(new AuthenticationPayload { Method = IkeAuthMethod.SharedKey, Data = auth });
 
             // CFG_REQUEST (if asked): goes before SAi2 so the gateway assigns a virtual IP/DNS for tunnel mode.
@@ -129,8 +156,8 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             foreach (IkeProposal proposal in IkeProposals.EspProposals(ChildInboundSpi))
                 sa.Proposals.Add(proposal);
             message.Payloads.Add(sa);
-            message.Payloads.Add(TrafficSelectorPayload.AnyIpv4(isInitiator: true));
-            message.Payloads.Add(TrafficSelectorPayload.AnyIpv4(isInitiator: false));
+            message.Payloads.Add(BuildInitiatorTs());
+            message.Payloads.Add(BuildResponderTs());
             if (_requestTransportMode)
                 message.Payloads.Add(NotifyPayload.Create(IkeNotifyMessageType.UseTransportMode, Array.Empty<byte>()));
 
@@ -153,10 +180,7 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             SecurityAssociationPayload? sa = response.Find<SecurityAssociationPayload>();
             if (idR is null || auth is null || sa is null) return false;
 
-            byte[] expected = IkePskAuth.ComputeResponderAuth(
-                _prf, _preSharedKey, _initiator.InitResponseBytes, _initiator.Nonce,
-                _initiator.Keys.SkPr, idR.BodyBytes());
-            if (!FixedTimeEquals(expected, auth.Data)) return false;
+            if (!VerifyResponderAuth(response, idR, auth)) return false;
 
             IkeProposal? proposal = sa.Proposals.FirstOrDefault();
             if (proposal is null || proposal.Spi.Length == 0) return false;
@@ -169,6 +193,64 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             Configuration = response.Find<ConfigurationPayload>();
             ChildKeys = ChildSaKeys.Derive(_prf, _initiator.Keys.SkD, _initiator.Nonce, _initiator.PeerNonce,
                 selection.EncryptionKeyLengthBytes, selection.SecondSliceLengthBytes);
+            return true;
+        }
+
+        /// <summary>
+        /// Verifies the responder's AUTH. When the responder authenticated with a digital signature (RFC 7296 §2.15
+        /// method 1/9/14) we validate the CERT it sent against the configured trust and verify the signature with that
+        /// certificate's public key — a failure means a deliberate server rejection (<see cref="VpnServerRejectedException"/>).
+        /// When it authenticated with the PSK (Shared Key) — the only path when no trust is configured — a MIC mismatch
+        /// returns false (the caller surfaces it as an authentication failure), preserving the original behaviour.
+        /// </summary>
+        bool VerifyResponderAuth(IkeMessage response, IdentificationPayload idR, AuthenticationPayload auth)
+        {
+            byte[] restOfIdR = idR.BodyBytes();
+
+            if (auth.Method == IkeAuthMethod.SharedKey)
+            {
+                // A PSK AUTH where we required a certificate is a downgrade — refuse it.
+                if (_responderTrust is not null)
+                    throw new VpnServerRejectedException(
+                        "The IKEv2 gateway authenticated with a pre-shared key, but a certificate was required (possible downgrade).");
+
+                byte[] expected = IkePskAuth.ComputeResponderAuth(
+                    _prf, _preSharedKey, _initiator.InitResponseBytes, _initiator.Nonce, _initiator.Keys!.SkPr, restOfIdR);
+                return FixedTimeEquals(expected, auth.Data);
+            }
+
+            // Digital-signature responder auth requires a configured trust anchor and a CERT payload to verify against.
+            if (_responderTrust is null)
+                throw new VpnServerRejectedException(
+                    "The IKEv2 gateway authenticated with a digital signature, but no certificate trust was configured to verify it.");
+
+            CertificatePayload? cert = response.Find<CertificatePayload>();
+            if (cert is null || cert.Encoding != IkeCertificateEncoding.X509CertificateSignature || cert.Data.Length == 0)
+                throw new VpnServerRejectedException("The IKEv2 gateway signed its AUTH but sent no X.509 certificate to verify it.");
+
+            X509Certificate2 certificate;
+            try { certificate = new X509Certificate2(cert.Data); }
+            catch (CryptographicException ex)
+            {
+                throw new VpnServerRejectedException("The IKEv2 gateway's certificate could not be parsed.", ex);
+            }
+
+            if (!_responderTrust.IsTrusted(certificate))
+            {
+                certificate.Dispose();
+                throw new VpnServerRejectedException("The IKEv2 gateway's certificate is not trusted (no pinned match and no chain to a trusted CA).");
+            }
+
+            bool valid = IkeSignatureAuth.VerifyResponderSignature(
+                _prf, auth.Method, certificate, auth.Data,
+                _initiator.InitResponseBytes, _initiator.Nonce, _initiator.Keys!.SkPr, restOfIdR);
+            if (!valid)
+            {
+                certificate.Dispose();
+                throw new VpnServerRejectedException("The IKEv2 gateway's AUTH signature did not verify against its certificate.");
+            }
+
+            ResponderCertificate = certificate;
             return true;
         }
 
@@ -214,8 +296,8 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             foreach (IkeProposal proposal in IkeProposals.EspProposals(ChildInboundSpi))
                 sa.Proposals.Add(proposal);
             message.Payloads.Add(sa);
-            message.Payloads.Add(TrafficSelectorPayload.AnyIpv4(isInitiator: true));
-            message.Payloads.Add(TrafficSelectorPayload.AnyIpv4(isInitiator: false));
+            message.Payloads.Add(BuildInitiatorTs());
+            message.Payloads.Add(BuildResponderTs());
             if (_requestTransportMode)
                 message.Payloads.Add(NotifyPayload.Create(IkeNotifyMessageType.UseTransportMode, Array.Empty<byte>()));
 
@@ -408,8 +490,8 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
                 rekey,
                 sa,
                 new NoncePayload { Nonce = newNonce },
-                TrafficSelectorPayload.AnyIpv4(isInitiator: true),
-                TrafficSelectorPayload.AnyIpv4(isInitiator: false),
+                BuildInitiatorTs(),
+                BuildResponderTs(),
             });
         }
 

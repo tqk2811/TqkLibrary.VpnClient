@@ -11,5 +11,17 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2.Enums
 
         /// <summary>DSS digital signature.</summary>
         DssSignature = 3,
+
+        /// <summary>ECDSA with SHA-256 on the P-256 curve (RFC 4754).</summary>
+        EcdsaSha256 = 9,
+
+        /// <summary>ECDSA with SHA-384 on the P-384 curve (RFC 4754).</summary>
+        EcdsaSha384 = 10,
+
+        /// <summary>ECDSA with SHA-512 on the P-521 curve (RFC 4754).</summary>
+        EcdsaSha512 = 11,
+
+        /// <summary>Generic "Digital Signature" with the algorithm carried in the AUTH data (RFC 7427).</summary>
+        DigitalSignature = 14,
     }
 }

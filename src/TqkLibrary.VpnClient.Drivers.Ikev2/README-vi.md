@@ -1,6 +1,6 @@
 # TqkLibrary.VpnClient.Drivers.Ikev2
 
-Driver **IKEv2-native** (RFC 7296) — kết nối trực tiếp tới gateway IKEv2/IPsec (strongSwan, libreswan, Windows RRAS…) **không qua L2TP/PPP**. Khác với [Drivers.L2tpIpsec](../TqkLibrary.VpnClient.Drivers.L2tpIpsec) (IKEv1 + L2TP + PPP), driver này dùng **IKEv2** + **Configuration Payload** lấy IP ảo + **ESP tunnel mode** đẩy thẳng gói IP vào userspace stack. Auth: **PSK** (mặc định) hoặc **EAP-MSCHAPv2** (username/password, RFC 7296 §2.16) — tự chọn theo `VpnCredentials`.
+Driver **IKEv2-native** (RFC 7296) — kết nối trực tiếp tới gateway IKEv2/IPsec (strongSwan, libreswan, Windows RRAS…) **không qua L2TP/PPP**. Khác với [Drivers.L2tpIpsec](../TqkLibrary.VpnClient.Drivers.L2tpIpsec) (IKEv1 + L2TP + PPP), driver này dùng **IKEv2** + **Configuration Payload** lấy IP ảo + **ESP tunnel mode** đẩy thẳng gói IP vào userspace stack. Auth client: **PSK** (mặc định) hoặc **EAP-MSCHAPv2** (username/password, RFC 7296 §2.16) — tự chọn theo `VpnCredentials`. Auth responder (gateway): **PSK** mặc định, hoặc **chữ ký số / certificate** (RFC 7296 §2.15 method 1 RSA, 9/10/11 ECDSA) khi cấu hình `IkeCertificateTrust` (pin leaf hoặc trust CA) qua driver — verify CERT + chữ ký AUTH, fail ⇒ `VpnServerRejectedException`. Hỗ trợ **multi-traffic-selector** (nhiều subnet TSi/TSr, RFC 7296 §3.13).
 
 ## Vị trí kiến trúc
 
@@ -17,7 +17,7 @@ Driver **IKEv2-native** (RFC 7296) — kết nối trực tiếp tới gateway I
 | Dùng | [Abstractions](../TqkLibrary.VpnClient.Abstractions) | `IVpnProtocolDriver`/`IVpnConnection`/`IVpnSession`, `IPacketChannel`, `SwappablePacketChannel`, exceptions, `IHostResolver`, **`Diagnostics`** (`VpnEventIds`/`VpnLogExtensions` — log handshake/DPD/rekey/reconnect, Q.2) |
 | Dùng | [Drivers.Core](../TqkLibrary.VpnClient.Drivers.Core) | base [`ReconnectingVpnConnection<TState>`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L25) (supervisor/reconnect/backoff-jitter/facade/state, F.6) + [`VpnReconnectOptions`](../TqkLibrary.VpnClient.Drivers.Core/Models/VpnReconnectOptions.cs#L17) |
 | Dùng | [Ipsec](../TqkLibrary.VpnClient.Ipsec) | `Ike/V2` (IkeClient + payloads), `Esp` (EspSession/EspTunnelChannel), `Nat` (NAT-T) |
-| Được dùng bởi | [TqkLibrary.VpnClient](../TqkLibrary.VpnClient) (façade) | `VpnClientBuilder.UseIkev2()` đăng ký driver |
+| Được dùng bởi | [TqkLibrary.VpnClient](../TqkLibrary.VpnClient) (façade) | `VpnClientBuilder.UseIkev2()` / `UseIkev2(IkeCertificateTrust)` đăng ký driver |
 
 ## Cấu trúc thư mục
 
@@ -36,7 +36,7 @@ TqkLibrary.VpnClient.Drivers.Ikev2/
 
 | Type | Vai trò | Vị trí |
 |------|---------|--------|
-| `Ikev2Driver` | `IVpnProtocolDriver`: capabilities (L3Ip, **không PPP**, ESP, **PSK\|EAP**, ConfigPush), `ConnectAsync` dựng `Ikev2Connection`; có username+password ⇒ EAP, không ⇒ PSK (lệch một nửa ⇒ `ArgumentException`) | [Ikev2Driver.cs:8](Ikev2Driver.cs#L8) |
+| `Ikev2Driver` | `IVpnProtocolDriver`: capabilities (L3Ip, **không PPP**, ESP, **PSK\|EAP** (+**Certificate** khi cấu hình `responderTrust`), ConfigPush), `ConnectAsync` dựng `Ikev2Connection`; có username+password ⇒ EAP, không ⇒ PSK (lệch một nửa ⇒ `ArgumentException`); ctor nhận `IkeCertificateTrust?` + danh sách `TrafficSelector` initiator/responder | [Ikev2Driver.cs:9](Ikev2Driver.cs#L9) |
 | `Ikev2Connection` | Bộ điều phối, **kế thừa** [`ReconnectingVpnConnection<Ikev2ConnectionState>`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L25) (F.6): override `EstablishAsync` (forced NAT-T 500→4500 → IKE_SA_INIT → IKE_AUTH PSK **hoặc** EAP-MSCHAPv2 loop `RunEapAuthAsync` +CP → `EspTunnelChannel` bind sau `Facade`) + `CleanupAttemptResourcesAsync`/`StopAttemptLoop` + ánh xạ 4 state + `OnReconnected`. **Phần IKEv2-riêng giữ ngoài supervisor trên timer riêng**: keepalive DPD, rekey CHILD_SA make-before-break **+ rekey IKE SA** (`RekeyIkeSaAsync`, ~90% lifetime 8h), **DELETE SA cũ sau cả 2 loại rekey** (`SendDeleteAsync`); `DisconnectAsync` gửi DELETE IKE SA trước teardown base. Supervisor/reconnect/backoff-jitter/facade/lifetime/state ở base | [Ikev2Connection.cs:36](Ikev2Connection.cs#L36) |
 | `Ikev2VpnConnection` | `IVpnConnection`: 1 session; `OpenSessionAsync` ⇒ `NotSupportedException` (IKEv2 strictly 1 CHILD_SA ở driver này) | [Ikev2VpnConnection.cs:7](Ikev2VpnConnection.cs#L7) |
 | `Ikev2VpnSession` | `IVpnSession`: `PacketChannel` (facade) + `Config`; `ApplyReconnect` cập nhật IP/DNS sau reconnect | [Ikev2VpnSession.cs:10](Ikev2VpnSession.cs#L10) |
@@ -49,7 +49,8 @@ TqkLibrary.VpnClient.Drivers.Ikev2/
 3. **IKE_SA_INIT** (UDP/500): `IkeClient.BuildInitRequest` → `ProcessInitResponse` (DH MODP-2048, SK_*).
 4. **Float 4500** (`SwitchToNatTPort`) — forced NAT-T: cổng nguồn ephemeral ⇒ gateway luôn thấy NATed.
 5. **IKE_AUTH** (UDP/4500, SK-encrypted):
-   - **PSK**: IDi(IPv4 0.0.0.0) + AUTH(PSK) + **CFG_REQUEST** + SAi2 (chào AES-CBC-256 + AES-GCM) + TSi/TSr. `ProcessAuthResponse` verify AUTH responder → CHILD_SA keys + đọc **CFG_REPLY** (virtual IP/DNS).
+   - **PSK**: IDi(IPv4 0.0.0.0) + AUTH(PSK) + **CFG_REQUEST** + SAi2 (chào AES-CBC-256 + AES-GCM) + TSi/TSr (1 selector match-all hoặc **nhiều subnet** khi cấu hình). Khi cấu hình `IkeCertificateTrust` còn gửi **CERTREQ** (RFC 7296 §3.7). `ProcessAuthResponse` verify AUTH responder → CHILD_SA keys + đọc **CFG_REPLY** (virtual IP/DNS).
+     - **Verify responder bằng cert** (RFC 7296 §2.15 method 1/9/10/11): nếu AUTH responder là **chữ ký số**, [`IkeClient.VerifyResponderAuth`](../TqkLibrary.VpnClient.Ipsec/Ike/V2/IkeClient.cs) parse CERT payload → [`IkeCertificateTrust.IsTrusted`](../TqkLibrary.VpnClient.Ipsec/Ike/V2/Models/IkeCertificateTrust.cs#L11) (pin leaf hoặc chain tới CA) → [`IkeSignatureAuth.VerifyResponderSignature`](../TqkLibrary.VpnClient.Ipsec/Ike/V2/IkeSignatureAuth.cs#L25) verify chữ ký trên `ResponderSignedOctets` bằng public key của cert (RSA PKCS#1 cả 2 TFM; ECDSA chỉ net5+); cert không tin / chữ ký sai / responder rớt xuống PSK (downgrade) ⇒ `VpnServerRejectedException`. Khi **không** cấu hình trust: giữ nguyên hành vi PSK cũ (mismatch ⇒ auth fail).
    - **EAP-MSCHAPv2** (`RunEapAuthAsync`): IDi = username (Rfc822/FQDN), IKE_AUTH đầu **không** AUTH (báo dùng EAP); loop `BuildAuthRequestEap`→`ProcessAuthResponseEap` chạy EAP-Identity → MSCHAPv2 Challenge/Response/Success qua các message-id liên tiếp; cả 2 bên tính AUTH cuối từ **EAP MSK**. Responder vẫn xác thực bằng PSK (lab Q.1 sẽ kiểm cert). Không có IP ảo ⇒ `VpnServerRejectedException`.
 6. **Data plane**: dựng `EspSession` (suite gateway chọn) → `EspTunnelChannel(esp, natt.SendEspAsync, mtu=1400)`; `Facade.SetInner(dataPlane)` (facade ổn định của base) → `MarkConnected()`; bật keepalive/rekey timer.
 
@@ -65,6 +66,6 @@ TqkLibrary.VpnClient.Drivers.Ikev2/
 ## Trạng thái & ghi chú
 
 - **Validate live cần lab Q.1** (strongSwan Docker) — môi trường Termux/PRoot không có Docker. Toán protocol (handshake, CP, DPD/DELETE, rekey) đã test offline ở [`Ipsec.Ike.Tests`](../../tests/TqkLibrary.VpnClient.Ipsec.Ike.Tests) + data plane ở [`Ipsec.Esp.Tests`](../../tests/TqkLibrary.VpnClient.Ipsec.Esp.Tests); test client của driver (capabilities + guard) ở [`Drivers.Ikev2.Tests`](../../tests/TqkLibrary.VpnClient.Drivers.Ikev2.Tests).
-- **PSK hoặc EAP-MSCHAPv2** + **forced NAT-T** + **1 CHILD_SA / 1 IP ảo** + rekey **CHILD_SA và IKE SA** đều gắn timer trong driver, **mỗi loại rekey phát DELETE cho SA cũ** (không để gateway tự timeout). **Chưa**: honest-first NAT-T, multi-traffic-selector, responder AUTH bằng cert (EAP hiện verify responder bằng PSK) — xem roadmap V.1/[`11`](../../.docs/11-todo-roadmap.md).
+- **PSK hoặc EAP-MSCHAPv2** (auth client) + **PSK hoặc cert** (auth responder) + **forced NAT-T** + **1 CHILD_SA / 1 IP ảo** + **multi-traffic-selector** (offer nhiều subnet) + rekey **CHILD_SA và IKE SA** đều gắn timer trong driver, **mỗi loại rekey phát DELETE cho SA cũ** (không để gateway tự timeout). Responder-cert + multi-TS test offline self-interop ở [`IkeCertAuthHandshakeTests`](../../tests/TqkLibrary.VpnClient.Ipsec.Ike.Tests/IkeCertAuthHandshakeTests.cs) (responder ký AUTH bằng RSA test-cert; cert sai/CA không tin/chữ ký hỏng ⇒ từ chối). **Chưa**: honest-first NAT-T; responder AUTH bằng cert trên **đường EAP** (EAP hiện verify responder bằng PSK) — xem roadmap V.1/[`11`](../../.docs/11-todo-roadmap.md).
 - **Logging/diagnostics (Q.2) đã có**: luồng `ILoggerFactory?` qua driver/connection → trace handshake (IKE_SA_INIT/IKE_AUTH)/HandshakeCompleted/DPD/rekey/state/link-lost/reconnect (xem Vòng đời); mặc định no-op, không đổi hành vi runtime.
 - **Thuần client**: không có code server; "responder" trong test chỉ là harness in-process.
