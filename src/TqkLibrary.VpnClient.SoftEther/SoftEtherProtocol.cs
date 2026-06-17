@@ -38,6 +38,13 @@ namespace TqkLibrary.VpnClient.SoftEther
         /// <summary>The <see cref="MethodName"/> value for an authentication request.</summary>
         public const string MethodLogin = "login";
 
+        /// <summary>
+        /// The <see cref="MethodName"/> value for an <b>additional connection</b> request: a secondary TCP/TLS
+        /// connection that reattaches to an already-established logical session (the server looks it up by the session
+        /// key from the <c>welcome</c> PACK via its <c>GetSessionFromKey</c>), pooling throughput across 1–32 sockets.
+        /// </summary>
+        public const string MethodAdditionalConnect = "additional_connect";
+
         /// <summary>STR element carrying the target Virtual Hub name.</summary>
         public const string HubNameName = "hubname";
 
@@ -84,6 +91,12 @@ namespace TqkLibrary.VpnClient.SoftEther
 
         /// <summary>DATA element carrying the longer (32-byte) session key in the welcome PACK.</summary>
         public const string SessionKey32Name = "session_key_32";
+
+        /// <summary>
+        /// INT element echoing the number of parallel TCP connections the server granted for the session (welcome PACK).
+        /// Reuses the same name as the login request field (<see cref="MaxConnectionName"/>).
+        /// </summary>
+        public const string MaxConnectionWelcomeName = MaxConnectionName;
 
         /// <summary>INT element carrying a SoftEther error code (non-zero ⇒ the request failed).</summary>
         public const string ErrorName = "error";

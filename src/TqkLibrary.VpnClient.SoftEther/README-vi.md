@@ -6,6 +6,7 @@ Thư viện **protocol SoftEther SSL-VPN** thuần .NET. Gồm **PACK codec** (V
 > - **V4.a (PACK codec) xong** (code + test offline). PACK = **list `PackElement`**; mỗi element có **name** (≤63 ký tự), một **`PackValueType`** (int/data/str/unistr/int64), và **mảng `PackValue`** (≥1) cùng kiểu. Encode/decode **big-endian** đúng wire SoftEther: `uint32(num_elements)` → mỗi element `BufStr(name) · uint32(type) · uint32(num_value) · value[]`. Codec **thuần, không I/O**. Helper `Set*`/`Get*` theo tên (single + array), tra cứu **case-insensitive**, chống input lỗi ⇒ `FormatException`.
 > - **V4.b (watermark POST + hello/login handshake + auth SHA-0) xong** (code + test offline). **Tách phần codec/state thuần khỏi I/O**: `SoftEtherWatermark` dựng byte POST watermark; `SoftEtherAuth` tính `secure_password` SHA-0 (tái dùng [`Sha0`](../TqkLibrary.VpnClient.Crypto/Sha0.cs) F.5a); `SoftEtherHandshake` có **3 hàm thuần** `ParseHello`/`BuildLoginPack`/`ParseWelcome` (test trực tiếp) + driver `RunAsync` lắp chúng lên [`IByteStreamTransport`](../TqkLibrary.VpnClient.Abstractions/Transport/Interfaces/IByteStreamTransport.cs) (F.1/TLS). PACK đi trong thân HTTP qua `SoftEtherHttpPackCodec` (`uint32 len` + PACK bytes). Test chạy **offline** với server giả lập in-memory.
 > - **V4.c (data plane Ethernet-over-TLS) xong** (code + test offline). Sau `welcome`, cùng byte-stream chuyển sang **session data**: codec block thuần `SoftEtherDataFrameCodec` (`uint32(num_frames)` + mỗi frame `uint32(size)·bytes`), reader streaming `SoftEtherDataBlockReader` (ráp block qua partial read), và `SoftEtherEthernetChannel` (`IEthernetChannel`: encode frame ra block / `Deliver` block vào, drop keep-alive). Driver L2 thật ([`Drivers.SoftEther`](../TqkLibrary.VpnClient.Drivers.SoftEther)) cắm channel này vào fabric DHCP/ARP/VirtualHost.
+> - **V.4 multi-connection xong** (code + test offline). `welcome` đọc `max_connection`/`half_connection`; `additional_connect` codec + I/O (`RunAdditionalConnectAsync`) reattach socket phụ bằng session key; `SoftEtherMultiConnectionMux` gộp 1–32 socket = 1 data path (round-robin egress + N decode loop merge ingress, one-shot link-lost); `SoftEtherConnectionDirectionPlanner` chia full/half-duplex.
 
 ## Vị trí kiến trúc
 
@@ -41,11 +42,15 @@ TqkLibrary.VpnClient.SoftEther/
 ├─ SoftEtherHttpPackCodec.cs   — V4.b framing PACK trong thân HTTP (uint32 len + PACK; build POST/200 + parse body)
 ├─ SoftEtherHandshake.cs       — V4.b state machine: ParseHello/BuildLoginPack/ParseWelcome (thuần) + RunAsync(IByteStreamTransport)
 ├─ SoftEtherProtocolException.cs — V4.b lỗi protocol (hello hỏng / login bị từ chối, mang ErrorCode)
-├─ DataChannel/                — V4.c data plane Ethernet-over-TLS
+├─ DataChannel/                — V4.c data plane Ethernet-over-TLS + V.4 multi-connection
 │  ├─ SoftEtherDataConstants.cs    keep-alive string + guard MaxFramesPerBlock/MaxFrameSize
 │  ├─ SoftEtherDataFrameCodec.cs   codec block thuần: EncodeBlock/EncodeSingle/DecodeBlock + IsKeepAlive
 │  ├─ SoftEtherDataBlockReader.cs  reader streaming: ráp 1 block qua partial read của IByteStreamTransport
-│  └─ SoftEtherEthernetChannel.cs  IEthernetChannel: WriteFrameAsync (encode block) + Deliver (raise InboundFrame, drop keep-alive)
+│  ├─ SoftEtherEthernetChannel.cs  IEthernetChannel: WriteFrameAsync (encode block) + Deliver (raise InboundFrame, drop keep-alive)
+│  ├─ SoftEtherMultiConnectionMux.cs   V.4 gộp 1-32 socket = 1 session: round-robin egress + N decode loop merge ingress, one-shot link-lost
+│  ├─ SoftEtherConnectionDirectionPlanner.cs  V.4 chia hướng full/half-duplex (Both / Send-only / Receive-only)
+│  └─ Enums/
+│     └─ SoftEtherConnectionDirection.cs   V.4 hướng 1 connection: Both=0 / Send=1 / Receive=2
 ├─ Enums/
 │  └─ SoftEtherAuthType.cs     — V4.b authtype: Anonymous=0/Password=1/PlainPassword=2/Certificate=3
 └─ Models/
@@ -71,17 +76,20 @@ TqkLibrary.VpnClient.SoftEther/
 | `SoftEtherWatermark` | builder POST watermark: `BuildRequest(host)` (POST line + headers + signature‖padding), `Matches(body)`, `WithSignature`/`WithRandomPadding` | [SoftEtherWatermark.cs:23](SoftEtherWatermark.cs#L23) |
 | `SoftEtherAuth` | codec auth (nhận `IHashAlgo`=SHA-0): `HashPassword`/`SecureFromHashedPassword`/`ComputeSecurePassword` (password gốc **không** qua wire) | [SoftEtherAuth.cs:21](SoftEtherAuth.cs#L21) |
 | `SoftEtherHttpPackCodec` | framing PACK trong thân HTTP: `FrameBody`/`ParseBody` (uint32 len + PACK) + `BuildPostRequest`/`BuildOkResponse` | [SoftEtherHttpPackCodec.cs:15](SoftEtherHttpPackCodec.cs#L15) |
-| `SoftEtherHandshake` | state machine: `ParseHello`/`BuildLoginPack`/`ParseWelcome` (thuần) + `RunAsync(IByteStreamTransport)` + reader HTTP nội bộ | [SoftEtherHandshake.cs:24](SoftEtherHandshake.cs#L24) |
+| `SoftEtherHandshake` | state machine: `ParseHello`/`BuildLoginPack`/`ParseWelcome` (thuần) + `RunAsync(IByteStreamTransport)` + reader HTTP nội bộ; **V.4 multi-connection**: `BuildAdditionalConnectPack`/`ParseAdditionalConnectReply` (thuần) + `RunAdditionalConnectAsync` (watermark→hello→`additional_connect`+session key→ack) | [SoftEtherHandshake.cs:24](SoftEtherHandshake.cs#L24) |
 | `SoftEtherProtocolException` | lỗi protocol (hello hỏng / login từ chối), mang `ErrorCode` từ field `error` của server | [SoftEtherProtocolException.cs:9](SoftEtherProtocolException.cs#L9) |
 | `SoftEtherDataFrameCodec` | V4.c codec block thuần: `EncodeBlock`/`EncodeSingle` (`uint32(n)·{uint32(size)·bytes}`), `DecodeBlock`, `IsKeepAlive` | [DataChannel/SoftEtherDataFrameCodec.cs:15](DataChannel/SoftEtherDataFrameCodec.cs#L15) |
 | `SoftEtherDataBlockReader` | V4.c reader streaming: `ReadBlockAsync` ráp 1 block qua partial read; EOF ranh block ⇒ list rỗng, EOF giữa block ⇒ `SoftEtherProtocolException` | [DataChannel/SoftEtherDataBlockReader.cs:16](DataChannel/SoftEtherDataBlockReader.cs#L16) |
 | `SoftEtherEthernetChannel` | V4.c `IEthernetChannel`: `WriteFrameAsync` (encode block 1-frame → sink), `Deliver` (raise `InboundFrame`, drop keep-alive); MAC + `MaxHeaderLength`=14 + `RequiresLinkAddressResolution` | [DataChannel/SoftEtherEthernetChannel.cs:23](DataChannel/SoftEtherEthernetChannel.cs#L23) |
+| `SoftEtherMultiConnectionMux` | V.4 gộp 1-32 `IByteStreamTransport` = 1 data path: `SendBlockAsync` round-robin các connection gửi-được, `StartReceiveLoops` 1 decode loop/connection nhận-được → merge `InboundFrame`, `linkLost` callback **một lần** (one-shot), `DisposeAsync` hủy loop + đóng mọi socket | [DataChannel/SoftEtherMultiConnectionMux.cs:34](DataChannel/SoftEtherMultiConnectionMux.cs#L26) |
+| `SoftEtherConnectionDirectionPlanner` | V.4 thuần: `Plan(count, halfConnection)` → mảng `SoftEtherConnectionDirection` (full-duplex ⇒ mọi `Both`; half ⇒ floor(n/2) `Send` + còn lại `Receive`, ≥1 mỗi hướng; 1 connection ⇒ `Both`) | [DataChannel/SoftEtherConnectionDirectionPlanner.cs:20](DataChannel/SoftEtherConnectionDirectionPlanner.cs#L19) |
+| `SoftEtherConnectionDirection` | V.4 enum hướng 1 connection: `Both=0`/`Send=1`/`Receive=2` | [DataChannel/Enums/SoftEtherConnectionDirection.cs:11](DataChannel/Enums/SoftEtherConnectionDirection.cs#L9) |
 | `SoftEtherDataConstants` | V4.c keep-alive string `"Internet Connection Keep Alive Packet"` + guard `MaxFramesPerBlock`/`MaxFrameSize` | [DataChannel/SoftEtherDataConstants.cs:11](DataChannel/SoftEtherDataConstants.cs#L11) |
 | `SoftEtherAuthType` | enum authtype: `Anonymous=0`/`Password=1`/`PlainPassword=2`/`Certificate=3` | [Enums/SoftEtherAuthType.cs:10](Enums/SoftEtherAuthType.cs#L10) |
 | `SoftEtherSessionParams` | record session: `MaxConnection`/`UseEncrypt`/`UseCompress`/`HalfConnection`/`UniqueId` | [Models/SoftEtherSessionParams.cs:11](Models/SoftEtherSessionParams.cs#L11) |
 | `SoftEtherLoginRequest` | record input login: `HubName`/`UserName`/`AuthType`/`Password`/`Session` | [Models/SoftEtherLoginRequest.cs:14](Models/SoftEtherLoginRequest.cs#L14) |
 | `SoftEtherHelloInfo` | record hello đã parse: `Hello`/`Version`/`Build`/`Random`(20B) | [Models/SoftEtherHelloInfo.cs:10](Models/SoftEtherHelloInfo.cs#L10) |
-| `SoftEtherWelcomeInfo` | record welcome đã parse: `SessionKey`(20B)/`SessionKey32` | [Models/SoftEtherWelcomeInfo.cs:10](Models/SoftEtherWelcomeInfo.cs#L10) |
+| `SoftEtherWelcomeInfo` | record welcome đã parse: `SessionKey`(20B)/`SessionKey32` + **V.4** `MaxConnection`(server cấp 1–32, default 1)/`HalfConnection` | [Models/SoftEtherWelcomeInfo.cs:9](Models/SoftEtherWelcomeInfo.cs#L9) |
 
 ## Wire format (PACK)
 
@@ -122,9 +130,19 @@ VALUE theo type:
 1. **Watermark POST** ([`SoftEtherWatermark.BuildRequest`](SoftEtherWatermark.cs#L80)): ghi `POST /vpnsvc/connect.cgi HTTP/1.1` + headers (`Host`/`Content-Type: image/jpeg`/`Content-Length`/`Connection: Keep-Alive`) + thân = signature ‖ padding. **Signature** mặc định là blob **placeholder** byte-exact tái tạo được ([`DefaultSignature`](SoftEtherWatermark.cs#L36)) — **KHÔNG** phải blob GPL `Watermark.c`; nối server thật thì truyền blob thật qua [`WithSignature`](SoftEtherWatermark.cs#L60).
 2. **Đọc hello** ([`ReadHttpPackAsync`](SoftEtherHandshake.cs#L161) → [`ParseHello`](SoftEtherHandshake.cs#L43)): đọc 1 message HTTP (header tới `\r\n\r\n` + `Content-Length`), parse thân qua [`SoftEtherHttpPackCodec.ParseBody`](SoftEtherHttpPackCodec.cs#L41) → PACK `hello`/`version`/`build`/`random`(20B challenge).
 3. **Dựng & gửi login** ([`BuildLoginPack`](SoftEtherHandshake.cs#L74) → [`SoftEtherHttpPackCodec.BuildPostRequest`](SoftEtherHttpPackCodec.cs#L52)): PACK `method=login`/`hubname`/`username`/`authtype` + credential + session params. **Auth password**: [`SoftEtherAuth.ComputeSecurePassword`](SoftEtherAuth.cs#L82) = `SHA0(SHA0(password‖UPPER(username))‖server_random)` (tái dùng [`Sha0`](../TqkLibrary.VpnClient.Crypto/Sha0.cs) qua `IHashAlgo`) — password gốc **không** qua wire. POST tới `/vpnsvc/vpn.cgi`.
-4. **Đọc welcome / lỗi** ([`ParseWelcome`](SoftEtherHandshake.cs#L110)): field `error` ≠ 0 ⇒ `SoftEtherProtocolException(ErrorCode)`; else trả `session_name`(20B handle) + `session_key_32`.
+4. **Đọc welcome / lỗi** ([`ParseWelcome`](SoftEtherHandshake.cs#L110)): field `error` ≠ 0 ⇒ `SoftEtherProtocolException(ErrorCode)`; else trả `session_name`(20B handle) + `session_key_32` + **`max_connection`** (server cấp 1–32, mặc định 1) + **`half_connection`**.
 
 **Tách codec/state khỏi I/O**: bước 1/3 (dựng byte) và 2/4 (parse PACK) là **hàm thuần** test offline trực tiếp; `RunAsync` chỉ ghép chúng với `WriteAsync`/`ReadAsync` của transport. Reader HTTP nội bộ (`HttpMessageReader`) buffer phần thân đã đọc lố qua ranh header để ráp đúng `Content-Length`.
+
+## Luồng multi-connection (V.4)
+
+SoftEther cho phép 1 session logic chạy trên **1–32 TCP/TLS song song** để gộp throughput. Sau khi login lấy `session_key` + `max_connection` (server cấp), client mở thêm connection phụ và gộp lại:
+
+1. **Mở connection phụ** ([`RunAdditionalConnectAsync`](SoftEtherHandshake.cs#L209)): mỗi connection phụ chạy watermark POST → đọc hello (bỏ qua challenge — không auth lại) → POST PACK `method=additional_connect` + `session_name`=session key (server `GetSessionFromKey` gắn socket vào session đã login) → đọc ack (`error`≠0 ⇒ từ chối, vd session key sai/hết hạn). Codec thuần: [`BuildAdditionalConnectPack`](SoftEtherHandshake.cs#L140)/[`ParseAdditionalConnectReply`](SoftEtherHandshake.cs#L155).
+2. **Chia hướng** ([`SoftEtherConnectionDirectionPlanner.Plan`](DataChannel/SoftEtherConnectionDirectionPlanner.cs#L19)): full-duplex ⇒ mọi connection `Both`; **half_connection** ⇒ nửa đầu `Send`-only (client→server) + nửa sau `Receive`-only (server→client), ≥1 mỗi hướng; 1 connection thì luôn `Both`.
+3. **Gộp data path** ([`SoftEtherMultiConnectionMux`](DataChannel/SoftEtherMultiConnectionMux.cs#L26)): **egress** [`SendBlockAsync`](DataChannel/SoftEtherMultiConnectionMux.cs#L97) spread block **round-robin** các connection gửi-được; **ingress** [`StartReceiveLoops`](DataChannel/SoftEtherMultiConnectionMux.cs#L82) chạy 1 decode loop ([`SoftEtherDataBlockReader`](DataChannel/SoftEtherDataBlockReader.cs#L16)) trên mỗi connection nhận-được, gộp `InboundFrame`. Frame SoftEther **self-contained** (không sequencing chéo connection ở tầng block) ⇒ reassemble = **hợp** mọi connection; thứ tự **trong-1-connection** giữ nguyên, tầng IP/TCP trên chịu reorder nhẹ giữa các connection. Fault/peer-close ⇒ `linkLost` **một lần** (one-shot guard). Driver gắn [`SoftEtherEthernetChannel`](DataChannel/SoftEtherEthernetChannel.cs#L23) lên mux (egress = `mux.SendBlockAsync`, ingress = `mux.InboundFrame += channel.Deliver`).
+
+**Degenerate 1 connection**: mux với N=1 hành xử y hệt data path 1-socket cũ (round-robin chọn luôn index 0, 1 decode loop). `additional_connect` lỗi = **best-effort**: session vẫn chạy trên số connection đã gắn.
 
 ## Bảng chuẩn / nguồn
 
@@ -143,4 +161,5 @@ VALUE theo type:
 - Build xanh cả `netstandard2.0` + `net8.0`. Dùng `System.Buffers.Binary.BinaryPrimitives` (cả 2 TFM qua `System.Memory`); `record`/`init`/`required` qua `TqkLibrary.CompilerServices`. `PackBufferReader` là `ref struct` (zero-copy đọc span).
 - **Namespace**: type codec ở namespace gốc `TqkLibrary.VpnClient.SoftEther` (KHÔNG đặt segment `.Pack` để tránh tên type `Pack` bị namespace cùng tên che khuất — bài học `~/.claude/csharp.md`); thư mục vẫn là `Pack/`. Enum ở `.Enums`, model ở `.Models`.
 - **Data plane (V4.c) đã có**: block frame codec (`SoftEtherDataFrameCodec`/`SoftEtherDataBlockReader`) + `SoftEtherEthernetChannel`; driver L2 thật ([`Drivers.SoftEther`](../TqkLibrary.VpnClient.Drivers.SoftEther)) cắm vào fabric DHCP/ARP/VirtualHost → `IPacketChannel` (bridge **1-host**).
-- **Còn lại (sau V4.c)**: multi-host broadcast domain (L2.7+); multi-connection (`additional_connect`/`session_key`/`half_connection`); deflate/RC4 payload (`use_compress`/`use_encrypt`); IPv6 trong tunnel. Lộ trình V.4 đầy đủ ở [`.docs/11`](../../.docs/11-todo-roadmap.md) §V.4; design-intent SoftEther ở [`.docs/07`](../../.docs/07-softether.md).
+- **Multi-connection (V.4) đã có**: `welcome` PACK đọc `max_connection`/`half_connection`; `additional_connect` codec + I/O (`RunAdditionalConnectAsync`) reattach socket phụ bằng session key; `SoftEtherMultiConnectionMux` gộp 1–32 socket = 1 data path (round-robin egress + N decode loop merge ingress, frame self-contained ⇒ reassemble = hợp mọi connection, thứ tự trong-1-connection giữ nguyên), one-shot link-lost; `SoftEtherConnectionDirectionPlanner` chia full/half-duplex. Driver [`Drivers.SoftEther`](../TqkLibrary.VpnClient.Drivers.SoftEther) lắp ráp + clamp số connection. Test offline (mux/planner/codec + driver N-connection round-trip không mất gói + half-duplex).
+- **Còn lại (sau V.4 multi-connection)**: deflate/RC4 payload (`use_compress`/`use_encrypt`); IPv6 trong tunnel. Lộ trình V.4 đầy đủ ở [`.docs/11`](../../.docs/11-todo-roadmap.md) §V.4; design-intent SoftEther ở [`.docs/07`](../../.docs/07-softether.md).

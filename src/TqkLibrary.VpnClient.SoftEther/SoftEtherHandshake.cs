@@ -119,11 +119,45 @@ namespace TqkLibrary.VpnClient.SoftEther
             if (sessionKey is null)
                 throw new SoftEtherProtocolException("SoftEther login reply has no error but is missing the session key.");
 
+            // The server clamps max_connection to the hub policy (1–32); a missing/zero field means a single connection.
+            uint maxConnection = reply.GetInt(SoftEtherProtocol.MaxConnectionWelcomeName);
+            if (maxConnection == 0) maxConnection = 1;
+
             return new SoftEtherWelcomeInfo
             {
                 SessionKey = sessionKey,
                 SessionKey32 = reply.GetData(SoftEtherProtocol.SessionKey32Name) ?? Array.Empty<byte>(),
+                MaxConnection = maxConnection,
+                HalfConnection = reply.GetBool(SoftEtherProtocol.HalfConnectionName),
             };
+        }
+
+        /// <summary>
+        /// Builds the PACK an <b>additional</b> TCP connection POSTs after its own watermark/hello, to reattach to an
+        /// already-logged-in session: <c>method=additional_connect</c> plus the session key the server returned in the
+        /// primary <c>welcome</c> (its <c>GetSessionFromKey</c> joins the socket to that session). Pure — no I/O.
+        /// </summary>
+        public Pack BuildAdditionalConnectPack(ReadOnlySpan<byte> sessionKey)
+        {
+            if (sessionKey.Length != SoftEtherProtocol.RandomSize)
+                throw new ArgumentException($"sessionKey must be {SoftEtherProtocol.RandomSize} bytes.", nameof(sessionKey));
+
+            return new Pack()
+                .SetStr(SoftEtherProtocol.MethodName, SoftEtherProtocol.MethodAdditionalConnect)
+                .SetData(SoftEtherProtocol.SessionKeyName, sessionKey.ToArray());
+        }
+
+        /// <summary>
+        /// Parses a server reply to an <c>additional_connect</c>: a non-zero <c>error</c> field ⇒
+        /// <see cref="SoftEtherProtocolException"/> (the server refused to attach the connection, e.g. an unknown or
+        /// expired session key), otherwise it succeeded. Pure — no I/O.
+        /// </summary>
+        public void ParseAdditionalConnectReply(Pack reply)
+        {
+            if (reply is null) throw new ArgumentNullException(nameof(reply));
+            uint error = reply.GetInt(SoftEtherProtocol.ErrorName);
+            if (error != 0)
+                throw new SoftEtherProtocolException($"SoftEther additional_connect was rejected (error {error}).", error);
         }
 
         byte[] NewUniqueId()
@@ -163,6 +197,37 @@ namespace TqkLibrary.VpnClient.SoftEther
                 .ConfigureAwait(false);
             Pack welcomePack = await ReadHttpPackAsync(transport, cancellationToken).ConfigureAwait(false);
             return ParseWelcome(welcomePack);
+        }
+
+        /// <summary>
+        /// Runs the handshake for an <b>additional</b> connection over <paramref name="transport"/> (already connected +
+        /// TLS-established): writes the watermark POST, reads the server hello, then POSTs the
+        /// <c>additional_connect</c> PACK carrying <paramref name="sessionKey"/> and reads the server's ack. Succeeds
+        /// when the server attaches the socket to the existing session; throws <see cref="SoftEtherProtocolException"/>
+        /// if it refuses. Mirrors <see cref="RunAsync"/> but reattaches instead of logging in.
+        /// </summary>
+        public async ValueTask RunAdditionalConnectAsync(
+            IByteStreamTransport transport,
+            string host,
+            ReadOnlyMemory<byte> sessionKey,
+            SoftEtherWatermark? watermark = null,
+            CancellationToken cancellationToken = default)
+        {
+            if (transport is null) throw new ArgumentNullException(nameof(transport));
+
+            watermark ??= new SoftEtherWatermark();
+
+            // 1) Watermark POST → hello (we ignore its random challenge — additional_connect carries no auth).
+            await transport.WriteAsync(watermark.BuildRequest(host), cancellationToken).ConfigureAwait(false);
+            Pack helloPack = await ReadHttpPackAsync(transport, cancellationToken).ConfigureAwait(false);
+            _ = ParseHello(helloPack);
+
+            // 2) additional_connect POST → ack (error == 0 ⇒ joined the session).
+            Pack pack = BuildAdditionalConnectPack(sessionKey.Span);
+            await transport.WriteAsync(SoftEtherHttpPackCodec.BuildPostRequest(host, pack), cancellationToken)
+                .ConfigureAwait(false);
+            Pack ackPack = await ReadHttpPackAsync(transport, cancellationToken).ConfigureAwait(false);
+            ParseAdditionalConnectReply(ackPack);
         }
 
         /// <summary>

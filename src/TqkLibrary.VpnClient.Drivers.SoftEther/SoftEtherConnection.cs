@@ -20,6 +20,7 @@ using TqkLibrary.VpnClient.Ethernet;
 using TqkLibrary.VpnClient.Ethernet.Models;
 using TqkLibrary.VpnClient.SoftEther;
 using TqkLibrary.VpnClient.SoftEther.DataChannel;
+using TqkLibrary.VpnClient.SoftEther.DataChannel.Enums;
 using TqkLibrary.VpnClient.SoftEther.Models;
 
 namespace TqkLibrary.VpnClient.Drivers.SoftEther
@@ -40,6 +41,7 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
     {
         static readonly TimeSpan KeepAliveTick = TimeSpan.FromSeconds(5);
         const string DriverNameConst = "softether";
+        const int MaxParallelConnections = 32;   // SoftEther caps a session at 1–32 parallel TCP connections
 
         readonly string _host;
         readonly int _port;
@@ -57,15 +59,14 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
         IPAddress? _lastAssignedAddress;
         TunnelConfig _config = new();
 
-        IByteStreamTransport? _transport;
+        SoftEtherMultiConnectionMux? _mux;     // the 1–32 parallel TCP/TLS connections aggregated into one data path
         SoftEtherEthernetChannel? _channel;
         VirtualHost? _host2;                   // 1-host bridge: the L2↔L3 bridge whose IPacketChannel feeds the facade
         ArpResolver? _arp;                     // 1-host bridge: IPv4 neighbour resolver sharing the data channel
         DhcpV4Configurator? _dhcp;             // 1-host bridge: the DHCPv4 client (drains inbound DHCP during/after the lease)
         MultiHostSession? _multiHostSession;   // multi-host: the broadcast domain (uplink-as-port + N stations)
-        CancellationTokenSource? _loopCts;
-        Task? _receiveTask;
         System.Threading.Timer? _keepAliveTimer;
+        int _connectionCount = 1;              // how many TCP/TLS connections the last attempt actually opened
 
         /// <summary>
         /// Creates a connection. <paramref name="login"/> carries the hub/user/credential + session params;
@@ -121,6 +122,12 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
         /// <summary>This endpoint's virtual MAC address on the SoftEther L2 segment (the first/primary station in multi-host mode).</summary>
         public MacAddress LinkAddress => _mac;
 
+        /// <summary>
+        /// The number of parallel TCP/TLS connections the current session is using (the primary login connection plus
+        /// any <c>additional_connect</c> ones), 1–32. Valid after connect; the data session is spread across them.
+        /// </summary>
+        public int ConnectionCount => _connectionCount;
+
         /// <summary><c>true</c> when this connection exposes the whole L2 broadcast domain (uplink-as-port) via <see cref="MultiHostSession"/>.</summary>
         public bool IsMultiHost => _multiHost;
 
@@ -157,25 +164,38 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
         {
             await CleanupAttemptResourcesAsync().ConfigureAwait(false);
 
-            _loopCts = CancellationTokenSource.CreateLinkedTokenSource(LifetimeToken, cancellationToken);
-            CancellationToken loopToken = _loopCts.Token;
-
-            // --- TLS + control handshake (watermark → hello → login → welcome) over one byte stream ---
-            IByteStreamTransport transport = await _transportFactory
+            // --- TLS + control handshake (watermark → hello → login → welcome) over the primary byte stream ---
+            IByteStreamTransport primary = await _transportFactory
                 .ConnectAsync(_host, _port, _addressFamilyPreference, cancellationToken).ConfigureAwait(false);
-            _transport = transport;
-            await transport.ConnectAsync(cancellationToken).ConfigureAwait(false);
+            await primary.ConnectAsync(cancellationToken).ConfigureAwait(false);
 
             Logger.LogHandshake(DriverName, "control handshake (watermark -> hello -> login -> welcome)");
             var handshake = new SoftEtherHandshake(new SoftEtherAuth(new Sha0()), new Random());
-            await handshake.RunAsync(transport, _host, _login, _watermark, cancellationToken).ConfigureAwait(false);
+            SoftEtherWelcomeInfo welcome = await handshake
+                .RunAsync(primary, _host, _login, _watermark, cancellationToken).ConfigureAwait(false);
             Logger.LogHandshake(DriverName, "login accepted; switching stream into the Ethernet-over-HTTPS data session");
 
-            // --- the stream is now the data session: expose it as an L2 channel and start decoding inbound blocks ---
-            var channel = new SoftEtherEthernetChannel(_mac.ToArray(), SendBlockAsync, _mtu);
+            // --- open the additional connections (up to what we requested AND the server granted), reattaching each by
+            //     session key, then aggregate them into one logical data path (1 session owning N sockets) ---
+            var connections = new List<IByteStreamTransport> { primary };
+            int desired = ResolveConnectionCount(welcome.MaxConnection);
+            await OpenAdditionalConnectionsAsync(handshake, welcome, desired, connections, cancellationToken).ConfigureAwait(false);
+
+            SoftEtherConnectionDirection[] directions =
+                SoftEtherConnectionDirectionPlanner.Plan(connections.Count, welcome.HalfConnection);
+            var mux = new SoftEtherMultiConnectionMux(connections, directions, OnLinkLost);
+            _mux = mux;
+            _connectionCount = connections.Count;
+            if (connections.Count > 1)
+                Logger.LogHandshake(DriverName, $"data session spread across {connections.Count} TCP connections" +
+                    (welcome.HalfConnection ? " (half-duplex)" : ""));
+
+            // --- the stream(s) are now the data session: expose it as one L2 channel; the mux delivers inbound frames ---
+            var channel = new SoftEtherEthernetChannel(_mac.ToArray(), mux.SendBlockAsync, _mtu);
             _channel = channel;
-            MarkRunning(); // a peer-close/fault from the receive loop below must now arm reconnect (before MarkConnected)
-            _receiveTask = Task.Run(() => ReceiveLoopAsync(transport, channel, loopToken));
+            mux.InboundFrame += channel.Deliver;   // keep-alive frames are dropped inside Deliver
+            MarkRunning(); // a peer-close/fault from a receive loop below must now arm reconnect (before MarkConnected)
+            mux.StartReceiveLoops();
 
             if (_multiHost)
                 await EstablishMultiHostAsync(channel, cancellationToken).ConfigureAwait(false);
@@ -185,6 +205,46 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
             StartKeepAlive();
             Logger.LogHandshakeCompleted(DriverName);
             MarkConnected();
+        }
+
+        // The session uses at most what we asked for (login max_connection) and the server granted (welcome
+        // max_connection), clamped to the protocol's 1–32 range.
+        int ResolveConnectionCount(uint serverGranted)
+        {
+            uint requested = _login.Session.MaxConnection == 0 ? 1 : _login.Session.MaxConnection;
+            uint granted = serverGranted == 0 ? 1 : serverGranted;
+            uint count = Math.Min(requested, granted);
+            if (count < 1) count = 1;
+            if (count > MaxParallelConnections) count = MaxParallelConnections;
+            return (int)count;
+        }
+
+        // Opens (desired-1) extra TCP/TLS connections and reattaches each to the session via additional_connect. A failed
+        // extra connection is non-fatal: the session still works (best-effort throughput pooling) on the connections that
+        // did attach, so we log and continue with however many we have.
+        async Task OpenAdditionalConnectionsAsync(SoftEtherHandshake handshake, SoftEtherWelcomeInfo welcome,
+            int desired, List<IByteStreamTransport> connections, CancellationToken cancellationToken)
+        {
+            for (int i = 1; i < desired; i++)
+            {
+                IByteStreamTransport extra;
+                try
+                {
+                    extra = await _transportFactory
+                        .ConnectAsync(_host, _port, _addressFamilyPreference, cancellationToken).ConfigureAwait(false);
+                    await extra.ConnectAsync(cancellationToken).ConfigureAwait(false);
+                    await handshake.RunAdditionalConnectAsync(extra, _host, welcome.SessionKey, _watermark, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    Logger.LogHandshake(DriverName, $"additional_connect #{i} failed ({ex.GetType().Name}); continuing with {connections.Count}");
+                    break;   // stop adding more; the session runs on what attached
+                }
+                connections.Add(extra);
+                Logger.LogHandshake(DriverName, $"additional_connect #{i} attached to the session");
+            }
         }
 
         // ---- single-host bridge (default): one DHCP lease, one VirtualHost bridged down to the L3 facade ----
@@ -281,39 +341,8 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
             return station;
         }
 
-        // ---- write side: seal a data block and push it down the TLS transport ----
-
-        ValueTask SendBlockAsync(ReadOnlyMemory<byte> block, CancellationToken cancellationToken)
-        {
-            IByteStreamTransport? transport = _transport;
-            return transport?.WriteAsync(block, cancellationToken) ?? default;
-        }
-
-        // ---- receive loop: decode inbound data blocks and dispatch each frame to the channel ----
-
-        async Task ReceiveLoopAsync(IByteStreamTransport transport, SoftEtherEthernetChannel channel, CancellationToken cancellationToken)
-        {
-            var reader = new SoftEtherDataBlockReader(transport);
-            try
-            {
-                while (!cancellationToken.IsCancellationRequested)
-                {
-                    IReadOnlyList<byte[]> frames = await reader.ReadBlockAsync(cancellationToken).ConfigureAwait(false);
-                    if (frames.Count == 0)
-                    {
-                        OnLinkLost("SoftEther server closed the data session.");
-                        return;
-                    }
-                    for (int i = 0; i < frames.Count; i++)
-                        channel.Deliver(frames[i]);   // keep-alive frames are dropped inside Deliver
-                }
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { /* teardown */ }
-            catch (Exception)
-            {
-                OnLinkLost("SoftEther data session faulted while reading.");
-            }
-        }
+        // ---- send/receive of data blocks is owned by the multi-connection mux (round-robin across N sockets,
+        //      one decode loop per receive-capable socket). The channel writes/receives through it. ----
 
         // ---- keep-alive: send the SoftEther idle keep-alive frame periodically so the session stays open ----
 
@@ -323,19 +352,20 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
         async Task KeepAliveTickAsync()
         {
             if (!IsRunning) return;
-            IByteStreamTransport? transport = _transport;
-            if (transport is null) return;
+            SoftEtherMultiConnectionMux? mux = _mux;
+            if (mux is null) return;
             try
             {
                 byte[] block = SoftEtherDataFrameCodec.EncodeSingle(SoftEtherDataConstants.KeepAliveBytes);
-                await transport.WriteAsync(block).ConfigureAwait(false);
+                await mux.SendBlockAsync(block).ConfigureAwait(false);
                 Logger.LogKeepalive(DriverName, "sent SoftEther idle keep-alive frame");
             }
-            catch { /* a missed keep-alive is harmless; the receive loop trips link-loss if the peer goes away */ }
+            catch { /* a missed keep-alive is harmless; a receive loop trips link-loss if the peer goes away */ }
         }
 
         // ---- link-loss handling + auto-reconnect supervisor live in ReconnectingVpnConnection (roadmap F.6). ----
-        // The receive loop (peer-close / fault) calls the inherited OnLinkLost, which arms the shared ReconnectLoopAsync.
+        // A receive loop (peer-close / fault) inside the mux calls the inherited OnLinkLost, which arms the shared
+        // ReconnectLoopAsync.
 
         /// <inheritdoc/>
         protected override void OnReconnected()
@@ -352,15 +382,6 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
         protected override async Task CleanupAttemptResourcesAsync()
         {
             StopAttemptLoop();
-
-            CancellationTokenSource? loop = _loopCts;
-            _loopCts = null;
-            try { loop?.Cancel(); } catch { }
-
-            Task? receive = _receiveTask;
-            _receiveTask = null;
-            if (receive != null) { try { await receive.ConfigureAwait(false); } catch { } }
-            loop?.Dispose();
 
             // L2 fabric: disposing the host detaches + disposes the channel; the resolver/DHCP release any pending work.
             VirtualHost? host2 = _host2;
@@ -385,9 +406,11 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
             _channel = null;
             if (channel != null && host2 is null) { try { await channel.DisposeAsync().ConfigureAwait(false); } catch { } }
 
-            IByteStreamTransport? transport = _transport;
-            _transport = null;
-            if (transport != null) { try { await transport.DisposeAsync().ConfigureAwait(false); } catch { } }
+            // The mux owns every TCP/TLS connection + its receive loops; disposing it cancels the loops and closes all sockets.
+            SoftEtherMultiConnectionMux? mux = _mux;
+            _mux = null;
+            if (mux != null) { try { await mux.DisposeAsync().ConfigureAwait(false); } catch { } }
+            _connectionCount = 1;
         }
 
         /// <inheritdoc/>
