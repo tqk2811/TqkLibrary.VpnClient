@@ -8,6 +8,14 @@
       "commandName": "Project",
       "commandLineArgs": "proxy-server --vpn l2tp://vpn:vpn@public-vpn-226.opengw.net --proxy-host 0.0.0.0 --proxy-port 18080"
     },
+    "proxy-server openvpn public-vpn-206 udp/1195 (.ovpn, chạy live)": {
+      "commandName": "Project",
+      "commandLineArgs": "proxy-server --vpn OvpnConfigureFiles/vpngate_public-vpn-206.opengw.net_udp_1195.ovpn --proxy-host 0.0.0.0 --proxy-port 18080"
+    },
+    "proxy-server softether public-vpn-206 (cần --watermark blob thật)": {
+      "commandName": "Project",
+      "commandLineArgs": "proxy-server --vpn softether://vpn:vpn@public-vpn-206.opengw.net?hub=VPNGATE --watermark watermark.bin --proxy-host 0.0.0.0 --proxy-port 18080"
+    },
     "http-request sstp checkip (GET rồi thoát)": {
       "commandName": "Project",
       "commandLineArgs": "http-request --vpn sstp://vpn:vpn@public-vpn-226.opengw.net --url https://checkip.amazonaws.com/"
@@ -15,6 +23,14 @@
     "http-request l2tp checkip (GET rồi thoát)": {
       "commandName": "Project",
       "commandLineArgs": "http-request --vpn l2tp://vpn:vpn@public-vpn-226.opengw.net --url https://checkip.amazonaws.com/"
+    },
+    "http-request openvpn public-vpn-206 udp/1195 (http, chạy live)": {
+      "commandName": "Project",
+      "commandLineArgs": "http-request --vpn OvpnConfigureFiles/vpngate_public-vpn-206.opengw.net_udp_1195.ovpn --url http://checkip.amazonaws.com/"
+    },
+    "http-request softether public-vpn-206 (cần --watermark blob thật)": {
+      "commandName": "Project",
+      "commandLineArgs": "http-request --vpn softether://vpn:vpn@public-vpn-206.opengw.net?hub=VPNGATE --watermark watermark.bin --url http://checkip.amazonaws.com/"
     },
     "dns sstp resolve example.com (VPN-assigned DNS)": {
       "commandName": "Project",

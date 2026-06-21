@@ -9,11 +9,18 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Driver façades: SstpConnection (MS-SSTP) + L2tpIpsecConnection (L2TP/IPsec). -->
+    <!-- Driver façades: SstpConnection (MS-SSTP) + L2tpIpsecConnection (L2TP/IPsec) + SoftEther SSL-VPN + OpenVPN. -->
     <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.L2tpIpsec\TqkLibrary.VpnClient.Drivers.L2tpIpsec.csproj" />
     <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.Sstp\TqkLibrary.VpnClient.Drivers.Sstp.csproj" />
+    <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.SoftEther\TqkLibrary.VpnClient.Drivers.SoftEther.csproj" />
+    <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.OpenVpn\TqkLibrary.VpnClient.Drivers.OpenVpn.csproj" />
     <!-- Socket API trên tunnel: VpnTcpClient + TcpIpStack (dùng bởi VpnProxySource cục bộ). -->
     <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Sockets\TqkLibrary.VpnClient.Sockets.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Các file .ovpn mẫu (VPN Gate) copy sang output để chạy demo OpenVPN bằng đường dẫn tương đối. -->
+    <None Include="OvpnConfigureFiles\*.ovpn" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

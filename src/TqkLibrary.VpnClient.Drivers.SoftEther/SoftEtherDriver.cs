@@ -5,6 +5,7 @@ using TqkLibrary.VpnClient.Abstractions.Drivers.Enums;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
 using TqkLibrary.VpnClient.Drivers.SoftEther.Transport;
+using TqkLibrary.VpnClient.SoftEther;
 using TqkLibrary.VpnClient.SoftEther.Enums;
 using TqkLibrary.VpnClient.SoftEther.Models;
 
@@ -26,6 +27,7 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
         readonly SoftEtherReconnectOptions? _reconnectOptions;
         readonly ISoftEtherTransportFactory? _transportFactory;
         readonly RemoteCertificateValidationCallback? _serverCertificateValidation;
+        readonly SoftEtherWatermark? _watermark;
         readonly bool _multiHost;
         readonly bool _enableIpv6;
         readonly ILoggerFactory? _loggerFactory;
@@ -35,7 +37,9 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
         /// overrides the session params (parallel connections, encrypt/compress flags); <paramref name="reconnectOptions"/>
         /// tunes (or disables) auto-reconnect; <paramref name="transportFactory"/> overrides the TLS transport (an
         /// in-process loopback drives the driver offline in tests); <paramref name="serverCertificateValidation"/> validates
-        /// the server TLS certificate (null = accept any, since SoftEther binds identity through its own auth). When
+        /// the server TLS certificate (null = accept any, since SoftEther binds identity through its own auth);
+        /// <paramref name="watermark"/> overrides the watermark POST blob — a real SoftEther server rejects the default
+        /// placeholder (HTTP 403), so pass the genuine blob (e.g. loaded at runtime from a file) to interop with one. When
         /// <paramref name="multiHost"/> is <c>true</c> the connection exposes the whole L2 broadcast domain (uplink-as-port);
         /// <c>OpenSessionAsync</c> then adds a station instead of throwing. When <paramref name="enableIpv6"/> is <c>true</c>
         /// the bridge also runs IPv6 autoconfiguration (SLAAC/DHCPv6 — L2.6) + NDISC v6 over SecureNAT, best-effort (an
@@ -47,6 +51,7 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
             SoftEtherReconnectOptions? reconnectOptions = null,
             ISoftEtherTransportFactory? transportFactory = null,
             RemoteCertificateValidationCallback? serverCertificateValidation = null,
+            SoftEtherWatermark? watermark = null,
             bool multiHost = false,
             bool enableIpv6 = false,
             ILoggerFactory? loggerFactory = null)
@@ -56,6 +61,7 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
             _reconnectOptions = reconnectOptions;
             _transportFactory = transportFactory;
             _serverCertificateValidation = serverCertificateValidation;
+            _watermark = watermark;
             _multiHost = multiHost;
             _enableIpv6 = enableIpv6;
             _loggerFactory = loggerFactory;
@@ -100,6 +106,7 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
             var connection = new SoftEtherConnection(endpoint.Host, endpoint.Port, login, factory,
                 reconnectOptions: _reconnectOptions,
                 addressFamilyPreference: endpoint.AddressFamilyPreference,
+                watermark: _watermark,
                 multiHost: _multiHost,
                 enableIpv6: _enableIpv6,
                 loggerFactory: _loggerFactory);

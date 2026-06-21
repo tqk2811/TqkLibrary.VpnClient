@@ -18,6 +18,7 @@ namespace Vpn2ProxyDemo.CommandModules
     internal abstract class CommandModuleBase : ICommandModule
     {
         Option<string> VpnOption { get; }
+        Option<string> WatermarkOption { get; }
 
         readonly Command _command;
         public Command Command => _command;
@@ -28,11 +29,20 @@ namespace Vpn2ProxyDemo.CommandModules
 
             VpnOption = new Option<string>("--vpn")
             {
-                Description = "VPN target dạng URI scheme://user:pass@host[:port]. scheme = sstp (MS-SSTP/TLS, default port 443) "
-                    + "hoặc l2tp (L2TP/IPsec IKEv1 PSK \"vpn\", NAT-T 500/4500 — bỏ qua port). Thiếu user:pass ⇒ mặc định vpn:vpn.",
+                Description = "VPN target. URI scheme://user:pass@host[:port]: scheme = sstp (MS-SSTP/TLS, port 443), "
+                    + "l2tp (L2TP/IPsec IKEv1 PSK \"vpn\", NAT-T 500/4500), softether|ssl (SoftEther SSL-VPN/TLS 443, "
+                    + "?hub= mặc định VPNGATE). Hoặc trỏ thẳng tới một file .ovpn cho OpenVPN. Thiếu user:pass ⇒ vpn:vpn.",
                 DefaultValueFactory = _ => "sstp://vpn:vpn@public-vpn-226.opengw.net",
             };
             _command.Options.Add(VpnOption);
+
+            WatermarkOption = new Option<string>("--watermark")
+            {
+                Description = "(Chỉ SoftEther) đường dẫn file chứa watermark blob THẬT của SoftEther — server thật từ "
+                    + "chối blob placeholder (HTTP 403). Để trống ⇒ dùng placeholder (chỉ chạy với server giả lập offline).",
+                DefaultValueFactory = _ => string.Empty,
+            };
+            _command.Options.Add(WatermarkOption);
 
             _command.SetAction(InvokeAsync);
         }
@@ -58,10 +68,12 @@ namespace Vpn2ProxyDemo.CommandModules
             string tag = target!.Protocol.ToString().ToLowerInvariant();
             PrintHeader(tag);
 
+            string watermarkPath = parseResult.GetValue(WatermarkOption) ?? string.Empty;
+
             try
             {
                 // Connect VPN theo giao thức đã chọn và trả về tunnel (giữ vòng đời kết nối).
-                await using VpnTunnel tunnel = await ConnectAsync(target, ct);
+                await using VpnTunnel tunnel = await ConnectAsync(target, watermarkPath, ct);
 
                 // Panel "VPN này hỗ trợ gì" — probe (UDP/LAN ảo) + suy luận (IPv6/listen-external) ngay sau khi tunnel lên,
                 // TRƯỚC hành động (tự bao timeout, nuốt lỗi nên không làm hỏng lệnh).
@@ -118,11 +130,13 @@ namespace Vpn2ProxyDemo.CommandModules
         protected virtual string? ValidateOptions(ParseResult parseResult) => null;
 
         /// <summary>Dispatch connect theo giao thức đã parse về hàm static tương ứng của <see cref="VpnTunnel"/>.</summary>
-        Task<VpnTunnel> ConnectAsync(VpnTarget target, CancellationToken ct)
+        Task<VpnTunnel> ConnectAsync(VpnTarget target, string watermarkPath, CancellationToken ct)
             => target.Protocol switch
             {
                 VpnProtocol.Sstp => VpnTunnel.ConnectSstpAsync(target.Host, target.Port, target.User, target.Pass, ct),
                 VpnProtocol.L2tp => VpnTunnel.ConnectL2tpAsync(target.Host, target.User, target.Pass, target.PreSharedKey, ct),
+                VpnProtocol.SoftEther => VpnTunnel.ConnectSoftEtherAsync(target.Host, target.Port, target.User, target.Pass, target.HubName, watermarkPath, ct),
+                VpnProtocol.OpenVpn => VpnTunnel.ConnectOpenVpnAsync(target.ConfigPath!, target.User, target.Pass, ct),
                 _ => throw new ArgumentOutOfRangeException(nameof(target), target.Protocol, "Giao thức VPN không hỗ trợ."),
             };
 
