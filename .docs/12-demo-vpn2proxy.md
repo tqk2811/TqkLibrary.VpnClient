@@ -6,20 +6,20 @@
 
 ## 1. Mục đích & vị trí
 
-Demo console chứng minh: kết nối VPN Gate (**MS-SSTP** hoặc **L2TP/IPsec**) → biến tunnel thành `IProxySource` của
+Demo console chứng minh: kết nối VPN Gate (**MS-SSTP**, **L2TP/IPsec**, **SoftEther SSL-VPN** hoặc **OpenVPN** từ file `.ovpn`) → biến tunnel thành `IProxySource` của
 **`TqkLibrary.Proxy` 1.0.35** → dựng HTTP/SOCKS proxy local định tuyến mọi kết nối **trong** tunnel, rồi **giữ proxy +
 tunnel sống tới khi nhấn Enter** (Ctrl+C cũng dừng) để test VPN duy trì kết nối (keepalive/auto-reconnect) trong lúc
 client trỏ traffic vào proxy.
 
 Đây là **project demo** ([`demo/Vpn2ProxyDemo`](../demo/Vpn2ProxyDemo)), **không** phải project `src/`. Adapter
 `IProxySource`/`IConnectSource` viết **inline trong demo** (chưa tách thành `TqkLibrary.VpnClient.Proxy` — xem roadmap
-[`11`](11-todo-roadmap.md) mục "Adapter proxy"). Tham chiếu project: `Drivers.L2tpIpsec` + `Drivers.Sstp` + `Sockets`;
-NuGet `TqkLibrary.Proxy` 1.0.35 + `Microsoft.Extensions.Logging`/`.Console` 10.0.x (console log cho `ProxyServer` + `VpnProxySource`).
+[`11`](11-todo-roadmap.md) mục "Adapter proxy"). Tham chiếu project: `Drivers.L2tpIpsec` + `Drivers.Sstp` + `Drivers.SoftEther` + `Drivers.OpenVpn` + `OpenVpn` (parse `.ovpn`) + `Sockets`;
+NuGet `TqkLibrary.Proxy` 1.0.35 + `Microsoft.Extensions.Logging`/`.Console` 10.0.x (console log cho `ProxyServer` + `VpnProxySource` + driver SoftEther/OpenVPN).
 
 ## 2. Luồng
 
 ```
-[chung]         SstpConnection / L2tpIpsecConnection    (kết nối VPN từ --vpn, nhận IP ảo + DNS + PacketChannel)
+[chung]         SSTP / L2TP / SoftEther / OpenVPN        (kết nối VPN từ --vpn, nhận IP ảo + DNS + PacketChannel)
    -> new TcpIpStack(channel, ip)                       (userspace TCP/IP trong tunnel)
    -> VpnCapabilityProbe.RunAsync(tunnel).Print()       (panel "VPN hỗ trợ gì": UDP/LAN ảo PROBE thật + IPv6/listen-external SUY LUẬN — in NGAY sau connect, trước hành động)
 
@@ -36,7 +36,7 @@ NuGet `TqkLibrary.Proxy` 1.0.35 + `Microsoft.Extensions.Logging`/`.Console` 10.0
 gọi [`VpnCapabilityProbe.RunAsync` @ :26](../demo/Vpn2ProxyDemo/VpnCapabilityProbe.cs#L26)): gộp **3 nguồn** — (1) **probe thật** qua tunnel: UDP =
 DNS-over-UDP (tái dùng [`UdpDnsProbe.ResolveAsync`](../demo/Vpn2ProxyDemo/UdpDnsProbe.cs#L29)), LAN ảo = ICMP ping gateway nội bộ
 ([`TcpIpStack.PingAsync`](../src/TqkLibrary.VpnClient.IpStack/TcpIpStack.cs#L107) — [`ProbeVirtualLanAsync` @ :99](../demo/Vpn2ProxyDemo/VpnCapabilityProbe.cs#L99); **phát hiện LAN ảo thì panel thêm dòng "Gateway nội bộ"** ở phần Info); (2) **năng lực
-driver tĩnh** đọc thẳng từ [`SstpDriver.Capabilities`](../src/TqkLibrary.VpnClient.Drivers.Sstp/SstpDriver.cs#L29)/[`L2tpIpsecDriver.Capabilities`](../src/TqkLibrary.VpnClient.Drivers.L2tpIpsec/L2tpIpsecDriver.cs#L27)
+driver tĩnh** đọc thẳng từ `Capabilities` của driver tương ứng ([`SstpDriver`](../src/TqkLibrary.VpnClient.Drivers.Sstp/SstpDriver.cs#L29)/[`L2tpIpsecDriver`](../src/TqkLibrary.VpnClient.Drivers.L2tpIpsec/L2tpIpsecDriver.cs#L27)/[`SoftEtherDriver`](../src/TqkLibrary.VpnClient.Drivers.SoftEther/SoftEtherDriver.cs#L74)/[`OpenVpnDriver`](../src/TqkLibrary.VpnClient.Drivers.OpenVpn/OpenVpnDriver.cs#L72))
 (transport/bảo mật/auth/cấp địa chỉ); (3) **heuristic** từ IP cấp: phân loại public/private (RFC1918/CGNAT) ⇒ suy listen-external,
 IPv6 = No vì chưa có IPv6CP. Panel tự bao timeout (mỗi sub-probe ngắn + chặn-trên 20s) và **nuốt mọi lỗi** (trừ hủy của caller) nên
 không bao giờ làm hỏng hành động chính. Các khả năng thư viện chưa hỗ trợ ⇒ xem §6.
@@ -64,15 +64,15 @@ không routable từ internet ([VpnProxySource.cs:44-46](../demo/Vpn2ProxyDemo/V
 | [VpnProxySource.VpnUdpAssociateSource.cs:21](../demo/Vpn2ProxyDemo/VpnProxySource.VpnUdpAssociateSource.cs#L21) | `IUdpAssociateSource` (nested): egress UDP qua `UdpConnection` (`SendTo`/`ReceiveAsync` đa đích), `UnbindUdp` khi `Dispose`; **log** associate/send/receive/unbind qua `ILogger?` |
 | [UdpDnsProbe.cs:18](../demo/Vpn2ProxyDemo/UdpDnsProbe.cs#L18) | Build/parse gói DNS (RFC 1035) trên `VpnUdpClient` → gửi truy vấn A qua UDP xuyên tunnel (kiểm tra UDP + phân giải domain), retry + timeout |
 | [UdpDnsProbeResult.cs:11](../demo/Vpn2ProxyDemo/UdpDnsProbeResult.cs#L11) | Kết quả probe: `UdpSupported` + danh sách IPv4 + số lần thử/thời gian/lỗi |
-| [VpnTunnel.cs:22](../demo/Vpn2ProxyDemo/VpnTunnel.cs#L22) | Bọc `TcpIpStack` + vòng đời tunnel (`IAsyncDisposable`); lộ `AssignedAddress`/`AssignedDns`/`Mtu`/`Capabilities`/`ProtocolName` cho panel khả năng (ctor [@ :26](../demo/Vpn2ProxyDemo/VpnTunnel.cs#L26)). **Hàm static connect** [`ConnectSstpAsync` @ :58](../demo/Vpn2ProxyDemo/VpnTunnel.cs#L58) (MS-SSTP/TLS, nhận `host`+`port`) + [`ConnectL2tpAsync` @ :84](../demo/Vpn2ProxyDemo/VpnTunnel.cs#L84) (L2TP/IPsec IKEv1, NAT-T — không port; nhận `preSharedKey` từ caller) — mỗi hàm dựng `SstpConnection`/`L2tpIpsecConnection` → `TcpIpStack` + đọc `new SstpDriver()/L2tpIpsecDriver().Capabilities` → `VpnTunnel` |
+| [VpnTunnel.cs:28](../demo/Vpn2ProxyDemo/VpnTunnel.cs#L28) | Bọc `TcpIpStack` + vòng đời tunnel (`IAsyncDisposable`); lộ `AssignedAddress`/`AssignedDns`/`Mtu`/`Capabilities`/`ProtocolName` cho panel khả năng (ctor [@ :32](../demo/Vpn2ProxyDemo/VpnTunnel.cs#L32)). **4 hàm static connect** (thêm giao thức = thêm 1 hàm + 1 nhánh dispatch): [`ConnectSstpAsync` @ :65](../demo/Vpn2ProxyDemo/VpnTunnel.cs#L65) (MS-SSTP/TLS, `host`+`port`), [`ConnectL2tpAsync` @ :91](../demo/Vpn2ProxyDemo/VpnTunnel.cs#L91) (L2TP/IPsec IKEv1, NAT-T — không port; `preSharedKey`), [`ConnectSoftEtherAsync` @ :122](../demo/Vpn2ProxyDemo/VpnTunnel.cs#L122) (SoftEther SSL-VPN qua `SoftEtherDriver` → `connection.Sessions[0]`; nhận `hubName` + `watermarkPath` — nạp blob thật từ file nếu có, rỗng ⇒ placeholder + CẢNH BÁO 403) + [`ConnectOpenVpnAsync` @ :175](../demo/Vpn2ProxyDemo/VpnTunnel.cs#L175) (parse `.ovpn` → `OpenVpnDriver` → `connection.Sessions[0]`, transport UDP/TCP theo `proto`) — SoftEther/OpenVPN có console logger cho driver ([`CreateDriverLoggerFactory` @ :220](../demo/Vpn2ProxyDemo/VpnTunnel.cs#L220)); mỗi hàm dựng connection → `TcpIpStack` + đọc `driver.Capabilities` → `VpnTunnel` |
 | [CapabilityStatus.cs:7](../demo/Vpn2ProxyDemo/CapabilityStatus.cs#L7) | Enum trạng thái 1 khả năng: `Yes`[✓]/`No`[✗]/`Likely`·`Unlikely`[~]/`Unknown`[?] |
 | [VpnCapability.cs:8](../demo/Vpn2ProxyDemo/VpnCapability.cs#L8) | Một dòng khả năng: `Name` + `Status` (`CapabilityStatus`) + `Detail` (lý do/số đo) |
 | [VpnCapabilityReport.cs:10](../demo/Vpn2ProxyDemo/VpnCapabilityReport.cs#L10) | Kết quả panel: `Info` (IP/DNS/MTU/transport/bảo mật/auth) + `Capabilities`; [`Print` @ :31](../demo/Vpn2ProxyDemo/VpnCapabilityReport.cs#L31) in ra Console (✓/✗/~/?) |
 | [VpnCapabilityProbe.cs:23](../demo/Vpn2ProxyDemo/VpnCapabilityProbe.cs#L23) | **Static probe** (mirror `UdpDnsProbe`): [`RunAsync` @ :26](../demo/Vpn2ProxyDemo/VpnCapabilityProbe.cs#L26) gộp probe thật (UDP qua `UdpDnsProbe`; LAN ảo qua [`ProbeVirtualLanAsync` @ :99](../demo/Vpn2ProxyDemo/VpnCapabilityProbe.cs#L99) → `PingAsync`, trả kèm gateway phát hiện) + năng lực driver + heuristic NAT/IPv6 → `VpnCapabilityReport`; mỗi sub-probe tự timeout, không ném khi hết giờ |
 | [CommandModules/Interfaces/ICommandModule.cs:6](../demo/Vpn2ProxyDemo/CommandModules/Interfaces/ICommandModule.cs#L6) | Hợp đồng command: `Command Command { get; }` |
-| [CommandModules/Enums/VpnProtocol.cs:4](../demo/Vpn2ProxyDemo/CommandModules/Enums/VpnProtocol.cs#L4) | Enum giao thức (`Sstp` / `L2tp`) — map từ scheme của URI `--vpn` |
-| [CommandModules/Models/VpnTarget.cs:14](../demo/Vpn2ProxyDemo/CommandModules/Models/VpnTarget.cs#L14) | Tham số kết nối parse từ `--vpn` (`scheme://user:pass@host[:port][?psk=...]`); [`TryParse` @ :42](../demo/Vpn2ProxyDemo/CommandModules/Models/VpnTarget.cs#L42) dùng `System.Uri` → `Protocol/Host/Port/User/Pass/PreSharedKey` (thiếu user:pass ⇒ `vpn:vpn`; SSTP thiếu port ⇒ 443; L2TP thiếu `?psk=` ⇒ `vpn`) + thông báo lỗi |
-| [CommandModules/CommandModuleBase.cs:18](../demo/Vpn2ProxyDemo/CommandModules/CommandModuleBase.cs#L18) | **Base abstract** cho mọi subcommand action: chỉ option chung `--vpn`, parse target, in header (Protocol), connect VPN (giữ vòng đời), **in panel khả năng** [`PrintCapabilitiesAsync` @ :95](../demo/Vpn2ProxyDemo/CommandModules/CommandModuleBase.cs#L95) (sau connect, trước hành động) rồi gọi [`RunAsync` @ :88](../demo/Vpn2ProxyDemo/CommandModules/CommandModuleBase.cs#L88) (abstract); [`ConnectAsync` @ :121](../demo/Vpn2ProxyDemo/CommandModules/CommandModuleBase.cs#L121) dispatch theo `VpnTarget.Protocol`; [`ValidateOptions` @ :118](../demo/Vpn2ProxyDemo/CommandModules/CommandModuleBase.cs#L118) (virtual) cho subclass fail-fast option riêng |
+| [CommandModules/Enums/VpnProtocol.cs:4](../demo/Vpn2ProxyDemo/CommandModules/Enums/VpnProtocol.cs#L4) | Enum giao thức (`Sstp` / `L2tp` / `SoftEther` / `OpenVpn`) — map từ scheme của URI `--vpn` (hoặc đuôi `.ovpn`) |
+| [CommandModules/Models/VpnTarget.cs:18](../demo/Vpn2ProxyDemo/CommandModules/Models/VpnTarget.cs#L18) | Tham số kết nối parse từ `--vpn`: **URI** `scheme://user:pass@host[:port][?psk=...][?hub=...]` (SSTP/L2TP/SoftEther) **hoặc đường dẫn một file `.ovpn`** (OpenVPN — host/port/proto/cert đọc từ file). [`TryParse` @ :56](../demo/Vpn2ProxyDemo/CommandModules/Models/VpnTarget.cs#L56): `.ovpn` ⇒ `OpenVpn` + `ConfigPath`; còn lại `System.Uri` → `Protocol/Host/Port/User/Pass/PreSharedKey/HubName` (scheme `ssl` = alias SoftEther; thiếu user:pass ⇒ `vpn:vpn`; SSTP/SoftEther thiếu port ⇒ 443; L2TP thiếu `?psk=` ⇒ `vpn`; SoftEther thiếu `?hub=` ⇒ `VPNGATE`) + thông báo lỗi |
+| [CommandModules/CommandModuleBase.cs:18](../demo/Vpn2ProxyDemo/CommandModules/CommandModuleBase.cs#L18) | **Base abstract** cho mọi subcommand action: option chung `--vpn` + `--watermark` ([@ :39](../demo/Vpn2ProxyDemo/CommandModules/CommandModuleBase.cs#L39); **chỉ SoftEther** — đường dẫn file watermark blob thật, để trống ⇒ placeholder/403), parse target, in header (Protocol), connect VPN (giữ vòng đời), **in panel khả năng** [`PrintCapabilitiesAsync` @ :107](../demo/Vpn2ProxyDemo/CommandModules/CommandModuleBase.cs#L107) (sau connect, trước hành động) rồi gọi [`RunAsync` @ :100](../demo/Vpn2ProxyDemo/CommandModules/CommandModuleBase.cs#L100) (abstract); [`ConnectAsync` @ :133](../demo/Vpn2ProxyDemo/CommandModules/CommandModuleBase.cs#L133) dispatch theo `VpnTarget.Protocol` về 4 hàm static của `VpnTunnel` (Sstp/L2tp/SoftEther/OpenVpn — truyền `watermarkPath` cho SoftEther); [`ValidateOptions` @ :130](../demo/Vpn2ProxyDemo/CommandModules/CommandModuleBase.cs#L130) (virtual) cho subclass fail-fast option riêng |
 | [CommandModules/ProbeUdpDnsCommandModule.cs:11](../demo/Vpn2ProxyDemo/CommandModules/ProbeUdpDnsCommandModule.cs#L11) | Subcommand `dns`: thêm `--dns-server/--resolve`; [`RunAsync` → `ProbeUdpDnsAsync` @ :44](../demo/Vpn2ProxyDemo/CommandModules/ProbeUdpDnsCommandModule.cs#L44) probe UDP + phân giải domain qua tunnel (không dựng proxy) |
 | [CommandModules/ProxyServerCommandModule.cs:18](../demo/Vpn2ProxyDemo/CommandModules/ProxyServerCommandModule.cs#L18) | Subcommand `proxy-server` (NOT sealed): thêm `--proxy-host/--proxy-port` + [`ValidateOptions` @ :44](../demo/Vpn2ProxyDemo/CommandModules/ProxyServerCommandModule.cs#L44) (fail-fast bind); [`RunAsync` @ :55](../demo/Vpn2ProxyDemo/CommandModules/ProxyServerCommandModule.cs#L55) dựng `ILoggerFactory` console ([`CreateLoggerFactory` @ :96](../demo/Vpn2ProxyDemo/CommandModules/ProxyServerCommandModule.cs#L96)) + `VpnProxySource` + `ProxyServer` (cùng chia sẻ factory) rồi gọi [`OnProxyReadyAsync` @ :87](../demo/Vpn2ProxyDemo/CommandModules/ProxyServerCommandModule.cs#L87) (virtual, mặc định: giữ tới khi nhấn Enter) |
 | [CommandModules/HttpRequestProxyServerCommandModule.cs:12](../demo/Vpn2ProxyDemo/CommandModules/HttpRequestProxyServerCommandModule.cs#L12) | Subcommand `http-request` (kế thừa `ProxyServerCommandModule`): thêm `--url`, override [`OnProxyReadyAsync` @ :27](../demo/Vpn2ProxyDemo/CommandModules/HttpRequestProxyServerCommandModule.cs#L27) — GET `--url` qua proxy (WebProxy), in body rồi **thoát luôn** (không chờ Enter) |
@@ -90,7 +90,8 @@ gọi `RunAsync` của subclass). `dns` chạy [`ProbeUdpDnsAsync` @ :44](../dem
 
 | Option | Mặc định | Ý nghĩa |
 |---|---|---|
-| `--vpn` | `sstp://vpn:vpn@public-vpn-226.opengw.net` | target VPN dạng URI `scheme://user:pass@host[:port][?psk=...]`. `scheme` = `sstp` (MS-SSTP/TLS, default port 443) hoặc `l2tp` (L2TP/IPsec IKEv1, NAT-T 500/4500 — bỏ qua port; PSK qua `?psk=`). Thiếu `user:pass` ⇒ mặc định `vpn:vpn`; L2TP thiếu `?psk=` ⇒ PSK `vpn` (group PSK VPN Gate) |
+| `--vpn` | `sstp://vpn:vpn@public-vpn-226.opengw.net` | target VPN: **URI** `scheme://user:pass@host[:port][?psk=...][?hub=...]` **hoặc đường dẫn một file `.ovpn`** (OpenVPN — host/port/proto/cert đọc từ file). `scheme` = `sstp` (MS-SSTP/TLS, default port 443), `l2tp` (L2TP/IPsec IKEv1, NAT-T 500/4500 — bỏ qua port; PSK qua `?psk=`), `softether`/`ssl` (SoftEther SSL-VPN/TLS, default 443; Hub qua `?hub=`). Thiếu `user:pass` ⇒ `vpn:vpn`; L2TP thiếu `?psk=` ⇒ PSK `vpn`; SoftEther thiếu `?hub=` ⇒ `VPNGATE` (group PSK/hub VPN Gate) |
+| `--watermark` | *(rỗng)* | **(Chỉ SoftEther)** đường dẫn file chứa **watermark blob THẬT** của SoftEther — server thật từ chối blob placeholder (HTTP 403). Rỗng ⇒ placeholder (chỉ chạy với server giả lập offline). Blob là dữ liệu GPL, KHÔNG có sẵn trong repo |
 
 **`dns`** (probe UDP-DNS) thêm:
 
@@ -118,7 +119,7 @@ Bind `0.0.0.0` thì client vẫn nối qua `127.0.0.1`; bind IP cụ thể thì 
 
 ## 5. Trạng thái & chưa làm
 
-- ✅ HTTP/HTTPS CONNECT + SOCKS4/5 CONNECT qua tunnel (chỉ IPv4, active-open) cho **cả** MS-SSTP và L2TP/IPsec.
+- ✅ HTTP/HTTPS CONNECT + SOCKS4/5 CONNECT qua tunnel (chỉ IPv4, active-open) cho **cả 4 giao thức**: MS-SSTP, L2TP/IPsec, **SoftEther SSL-VPN** (`softether://user:pass@host?hub=VPNGATE`, alias `ssl`) và **OpenVPN** (`--vpn <file>.ovpn`). SoftEther/OpenVPN tái dùng thẳng `SoftEtherDriver`/`OpenVpnDriver` qua `IVpnConnection.Sessions[0]`.
 - ✅ **SOCKS5 UDP-ASSOCIATE qua proxy** (`VpnUdpAssociateSource` → `UdpConnection`): client gửi UDP qua proxy, server
   relay datagram ra ngoài bằng userspace UDP của stack (đa đích, `SendTo`/`ReceiveAsync`); socket được `UnbindUdp` khi
   association đóng. IPv4-only (đích IPv6 bị từ chối).
@@ -129,6 +130,9 @@ Bind `0.0.0.0` thì client vẫn nối qua `127.0.0.1`; bind IP cụ thể thì 
 - ✅ **Panel "VPN này hỗ trợ gì"** (`VpnCapabilityProbe` → `VpnCapabilityReport.Print`): in tự động sau mọi connect,
   trước hành động. Gộp probe thật (UDP, LAN ảo ICMP) + năng lực driver (transport/bảo mật/auth) + heuristic NAT/IPv6.
   Các khả năng thư viện chưa hỗ trợ ⇒ §6.
+- ⚠️ **SoftEther cần watermark blob THẬT** để chạy live: VPN Gate trả **HTTP 403** với placeholder; truyền `--watermark <file>`
+  (blob GPL, không có sẵn trong repo). Để trống ⇒ chỉ dùng được với server giả lập offline. **OpenVPN**: tun-UDP đã validate
+  live VPN Gate (TCP nhỏ/UDP/ICMP), gói lớn (https) chưa qua — nghi MTU/MSS (xem [`11`](11-todo-roadmap.md) §V.2).
 - ⏳ **Chưa:** BIND (stack active-open-only + địa chỉ tunnel private không routable từ internet ⇒ peer ngoài không
   dial vào được), proxy resolve host vẫn bằng host DNS, IPv6. Tách adapter thành project `TqkLibrary.VpnClient.Proxy` nếu
   cần tái dùng — xem [`11`](11-todo-roadmap.md).
