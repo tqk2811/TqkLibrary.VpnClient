@@ -17,15 +17,15 @@ namespace TqkLibrary.VpnClient.OpenVpn.DataChannel
         readonly object _swapLock = new();
         readonly uint _rekeyThreshold;
         readonly uint _rekeyRetryStep;
-        OpenVpnDataChannel _current;
-        OpenVpnDataChannel? _previousInbound;
+        IOpenVpnDataChannel _current;
+        IOpenVpnDataChannel? _previousInbound;
         long _rekeySignalAt;
 
-        /// <summary>Creates the data plane over the established data channel.</summary>
+        /// <summary>Creates the data plane over the established data channel (AEAD or CBC).</summary>
         /// <param name="current">The current key generation's data channel.</param>
         /// <param name="rekeyAtPacket">Outbound packet-id high-watermark that first triggers <see cref="RekeyNeeded"/>.</param>
         /// <param name="rekeyRetryStep">Packets between re-raising <see cref="RekeyNeeded"/> while no fresh channel arrives.</param>
-        public OpenVpnDataPlane(OpenVpnDataChannel current, uint rekeyAtPacket = DefaultRekeyThreshold, uint rekeyRetryStep = DefaultRekeyRetryStep)
+        public OpenVpnDataPlane(IOpenVpnDataChannel current, uint rekeyAtPacket = DefaultRekeyThreshold, uint rekeyRetryStep = DefaultRekeyRetryStep)
         {
             _current = current ?? throw new ArgumentNullException(nameof(current));
             _rekeyThreshold = rekeyAtPacket;
@@ -43,7 +43,7 @@ namespace TqkLibrary.VpnClient.OpenVpn.DataChannel
         /// Installs a rekeyed data channel: new packets use it immediately while the previous one is retained for
         /// inbound only until <see cref="DropPreviousInbound"/> (make-before-break).
         /// </summary>
-        public void Swap(OpenVpnDataChannel next)
+        public void Swap(IOpenVpnDataChannel next)
         {
             if (next is null) throw new ArgumentNullException(nameof(next));
             lock (_swapLock)
@@ -63,7 +63,7 @@ namespace TqkLibrary.VpnClient.OpenVpn.DataChannel
         /// <summary>Seals one outgoing packet on the current channel and signals rekey near packet-id exhaustion.</summary>
         public byte[] Protect(ReadOnlySpan<byte> plaintext)
         {
-            OpenVpnDataChannel current;
+            IOpenVpnDataChannel current;
             lock (_swapLock) current = _current;
             byte[] wire = current.Protect(plaintext);
             MaybeSignalRekey(current.SentPacketCount);
@@ -76,8 +76,8 @@ namespace TqkLibrary.VpnClient.OpenVpn.DataChannel
         /// </summary>
         public bool TryUnprotect(ReadOnlySpan<byte> wire, out byte[] plaintext)
         {
-            OpenVpnDataChannel current;
-            OpenVpnDataChannel? previous;
+            IOpenVpnDataChannel current;
+            IOpenVpnDataChannel? previous;
             lock (_swapLock) { current = _current; previous = _previousInbound; }
 
             return current.TryUnprotect(wire, out plaintext)

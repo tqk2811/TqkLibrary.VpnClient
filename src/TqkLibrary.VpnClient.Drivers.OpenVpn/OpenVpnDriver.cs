@@ -111,6 +111,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
                 addressFamilyPreference: endpoint.AddressFamilyPreference,
                 tunMtu: _profile.TunMtu ?? 1500,
                 fallbackCipher: _profile.Cipher ?? (_profile.DataCiphers.Count > 0 ? _profile.DataCiphers[0] : null),
+                dataAuth: _profile.Auth,
                 multiHost: _multiHost,
                 loggerFactory: _loggerFactory);
             try

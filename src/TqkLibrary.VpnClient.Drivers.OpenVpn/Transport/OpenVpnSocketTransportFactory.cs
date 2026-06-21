@@ -45,25 +45,38 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn.Transport
         /// <summary>A connected UDP datagram pipe over a real socket (live-only; mirrors the <c>TlsByteStream</c> TFM handling).</summary>
         sealed class UdpDatagramSocket : Abstractions.Transport.Interfaces.IDatagramTransport
         {
+            // Windows-only ioctl: when false, a UDP send that draws an ICMP "port unreachable" no longer makes the *next*
+            // receive/send on the connected socket throw SocketException(ConnectionReset, WSAECONNRESET). Without this the
+            // receive loop faults on the first spurious ICMP, the connection reconnects, the socket is disposed, and an
+            // in-flight send NREs (UdpClient.Client goes null) inside a timer callback — crashing the process.
+            const int SIO_UDP_CONNRESET = unchecked((int)0x9800000C);
+
             readonly IPEndPoint _remote;
             readonly UdpClient _client;
+            readonly Socket _socket;   // captured once so a concurrent dispose can't turn UdpClient.Client into a null deref
 
             public UdpDatagramSocket(IPEndPoint remote)
             {
                 _remote = remote;
                 _client = new UdpClient(remote.AddressFamily);
+                _socket = _client.Client;
             }
 
             public ValueTask ConnectAsync(CancellationToken cancellationToken = default)
             {
                 _client.Connect(_remote); // sets the default peer; sends/receives are then connection-style
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    // Swallow the ICMP-unreachable → ConnectionReset behaviour (best-effort; not all stacks honour it).
+                    try { _socket.IOControl(SIO_UDP_CONNRESET, new byte[] { 0, 0, 0, 0 }, null); } catch { }
+                }
                 return default;
             }
 
             public ValueTask SendAsync(ReadOnlyMemory<byte> datagram, CancellationToken cancellationToken = default)
             {
 #if NET5_0_OR_GREATER
-                return new ValueTask(_client.Client.SendAsync(datagram, SocketFlags.None, cancellationToken).AsTask());
+                return new ValueTask(_socket.SendAsync(datagram, SocketFlags.None, cancellationToken).AsTask());
 #else
                 byte[] copy = datagram.ToArray();
                 return new ValueTask(_client.SendAsync(copy, copy.Length)); // connected ⇒ no endpoint
@@ -73,7 +86,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn.Transport
             public async ValueTask<int> ReceiveAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
             {
 #if NET5_0_OR_GREATER
-                return await _client.Client.ReceiveAsync(buffer, SocketFlags.None, cancellationToken).ConfigureAwait(false);
+                return await _socket.ReceiveAsync(buffer, SocketFlags.None, cancellationToken).ConfigureAwait(false);
 #else
                 using (cancellationToken.Register(() => { try { _client.Dispose(); } catch { } }))
                 {

@@ -59,6 +59,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
         readonly int _tunMtu;
         readonly OpenVpnPeerInfoOptions? _peerInfoOptions;
         readonly string? _fallbackCipher;
+        readonly string? _dataAuth;       // the --auth HMAC for the non-AEAD CBC data channel (null = SHA1 default)
         readonly bool _multiHost;
         readonly MacAddress _tapMac;      // a stable locally-administered MAC for the tap endpoint (kept across reconnects)
 
@@ -95,7 +96,9 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
         /// customises the advertised <c>IV_*</c> peer-info block (null = defaults; the tun MTU fills <c>IV_MTU</c> when
         /// unset). <paramref name="fallbackCipher"/> is the configured data cipher (the <c>cipher</c> /
         /// <c>data-ciphers-fallback</c> directive) used when the server does not speak NCP (PUSH_REPLY carries no
-        /// <c>cipher</c> and the server pushed back no <c>IV_CIPHERS</c>); null falls back to AES-256-GCM.
+        /// <c>cipher</c> and the server pushed back no <c>IV_CIPHERS</c>); null falls back to AES-256-GCM. When that
+        /// fallback is a non-AEAD AES-CBC cipher, <paramref name="dataAuth"/> is the <c>--auth</c> HMAC paired with it
+        /// (null = HMAC-SHA1, OpenVPN's default).
         /// When <paramref name="multiHost"/> is <c>true</c> a tap-mode tunnel exposes the whole L2 broadcast domain
         /// (the tap channel becomes an uplink port on an in-memory switch and each station leases its own IP), reachable
         /// through <see cref="MultiHostSession"/>; the default (<c>false</c>) keeps the single-host tap bridge (tun-mode
@@ -117,6 +120,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             OpenVpnReliabilityOptions? reliabilityOptions = null,
             OpenVpnPeerInfoOptions? peerInfoOptions = null,
             string? fallbackCipher = null,
+            string? dataAuth = null,
             bool multiHost = false,
             Func<long>? clock = null,
             ILoggerFactory? loggerFactory = null)
@@ -139,6 +143,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             _tunMtu = tunMtu;
             _peerInfoOptions = peerInfoOptions;
             _fallbackCipher = string.IsNullOrEmpty(fallbackCipher) ? null : fallbackCipher;
+            _dataAuth = string.IsNullOrEmpty(dataAuth) ? null : dataAuth;
             _multiHost = multiHost;
             _tapMac = GenerateLocalMac();
         }
@@ -249,11 +254,11 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             }
             Logger.LogHandshake(DriverName, $"PUSH_REPLY: ifconfig {push.IfconfigLocal?.ToString() ?? "(none — pure DHCP)"}, cipher {push.Cipher ?? "(default)"}");
 
-            // --- NCP: honour the server's cipher pick, then slice the data-channel keys for it ---
-            OpenVpnDataCipher cipher = ResolveCipher(push.Cipher, control.ServerKeyMethodOptions);
+            // --- NCP / fallback: pick the data cipher and build the matching channel (AEAD or non-AEAD CBC) ---
+            // P_DATA_V2 (peer-id) when the server assigned one; P_DATA_V1 (no peer-id) for an older server (SoftEther).
             uint peerId = push.PeerId ?? 0;
-            OpenVpnDataChannelKeys keys = keyMaterial.DeriveDataKeys(cipher, isServer: false);
-            var dataChannel = new OpenVpnDataChannel(keys, keyId: 0, peerId: peerId, cipher: cipher.CreateCipher());
+            bool dataV2 = push.PeerId.HasValue;
+            IOpenVpnDataChannel dataChannel = BuildDataChannel(push.Cipher, control.ServerKeyMethodOptions, keyMaterial, peerId, dataV2);
             var dataPlane = new OpenVpnDataPlane(dataChannel);
             dataPlane.RekeyNeeded += OnRekeyNeeded;
             _dataPlane = dataPlane;
@@ -262,10 +267,17 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             _compression = compression;
 
             // The data-channel payload sink is identical for tun and tap; an outbound send also feeds the keepalive timer.
-            Func<ReadOnlyMemory<byte>, ValueTask> sink = wire =>
+            // It reads the *current* transport (a reconnect swaps in a fresh one and disposes the old socket): a write that
+            // races the reconnect window — e.g. a TCP-stack RTO retransmit firing on a timer — is dropped rather than
+            // thrown, so a disposed/closed socket never crashes a fire-and-forget timer callback (TCP retransmits later).
+            Func<ReadOnlyMemory<byte>, ValueTask> sink = async wire =>
             {
                 _keepalive?.OnDataSent(Now());
-                return new ValueTask(transport.SendAsync(wire));
+                IOpenVpnTransport? current = _transport;
+                if (current is null || !_dataActive) return;   // reconnecting: no live data plane right now — drop
+                try { await current.SendAsync(wire).ConfigureAwait(false); }
+                catch (ObjectDisposedException) { }                       // socket torn down by a concurrent reconnect
+                catch (System.Net.Sockets.SocketException) { }            // transient send failure — link-loss path handles it
             };
 
             int mtu = _tunMtu;
@@ -297,40 +309,62 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             StartKeepalive(push.Ping ?? 0, push.PingRestart ?? 0);
         }
 
-        // NCP cipher selection, in priority order:
-        //  1) the server pushed a `cipher` in PUSH_REPLY (normal NCP) — honour it (unsupported ⇒ fail).
-        //  2) no pushed cipher, but the server echoed an IV_CIPHERS list in its key-method-2 reply — pick the first
-        //     mutually-supported entry in the server's order (its preference wins).
-        //  3) NCP-less server (neither of the above) — fall back to the configured `cipher`/`data-ciphers-fallback`.
-        //  4) nothing configured — AES-256-GCM (OpenVPN's default data cipher).
-        OpenVpnDataCipher ResolveCipher(string? pushed, string? serverKeyMethodOptions)
+        // Builds the data channel for the negotiated/fallback cipher, slicing the matching keys from key2:
+        //  1) the server pushed a `cipher` (normal NCP) — honour it (unsupported AEAD ⇒ fail).
+        //  2) no pushed cipher, but the server echoed an IV_CIPHERS list — pick the first mutually-supported entry.
+        //  3) NCP-less server — fall back to the configured `cipher`: AES-GCM/ChaCha (AEAD) or AES-CBC (+ --auth HMAC).
+        //  4) nothing configured — AES-256-GCM (OpenVPN's default).
+        IOpenVpnDataChannel BuildDataChannel(string? pushed, string? serverKeyMethodOptions, OpenVpnKeyMaterial keyMaterial, uint peerId, bool dataV2)
         {
+            // (1) server pushed a cipher — it must be one we support (NCP negotiates AEAD ciphers).
             if (!string.IsNullOrEmpty(pushed))
             {
-                if (OpenVpnDataCipher.TryResolve(pushed, out OpenVpnDataCipher cipher)) return cipher;
+                if (OpenVpnDataCipher.TryResolve(pushed, out OpenVpnDataCipher cipher))
+                    return BuildAead(cipher, keyMaterial, peerId, dataV2);
+                if (OpenVpnCbcCipher.TryResolve(pushed, out OpenVpnCbcCipher cbcPushed))
+                    return BuildCbc(cbcPushed, keyMaterial, peerId, dataV2, "PUSH_REPLY");
                 throw new VpnConnectionException(
-                    $"OpenVPN server selected an unsupported data cipher '{pushed}' (NCP). Supported: {OpenVpnDataCipher.AdvertisedList}.");
+                    $"OpenVPN server selected an unsupported data cipher '{pushed}'. Supported AEAD: {OpenVpnDataCipher.AdvertisedList}; CBC: AES-128/192/256-CBC.");
             }
 
+            // (2) server echoed an IV_CIPHERS offer in its key-method-2 reply — pick the first we support.
             string? serverList = OpenVpnDataCipher.ExtractIvCiphers(serverKeyMethodOptions);
             if (OpenVpnDataCipher.TryResolveServerList(serverList, out OpenVpnDataCipher fromServer))
             {
                 Logger.LogHandshake(DriverName, $"NCP-less PUSH_REPLY; chose '{fromServer.Name}' from the server's IV_CIPHERS offer");
-                return fromServer;
+                return BuildAead(fromServer, keyMaterial, peerId, dataV2);
             }
 
+            // (3) NCP-less server — use the configured cipher (AEAD or CBC).
             if (_fallbackCipher != null)
             {
                 if (OpenVpnDataCipher.TryResolve(_fallbackCipher, out OpenVpnDataCipher configured))
                 {
-                    Logger.LogHandshake(DriverName, $"NCP-less server; falling back to the configured cipher '{configured.Name}'");
-                    return configured;
+                    Logger.LogHandshake(DriverName, $"NCP-less server; falling back to the configured AEAD cipher '{configured.Name}'");
+                    return BuildAead(configured, keyMaterial, peerId, dataV2);
                 }
+                if (OpenVpnCbcCipher.TryResolve(_fallbackCipher, out OpenVpnCbcCipher cbc))
+                    return BuildCbc(cbc, keyMaterial, peerId, dataV2, "configured fallback");
                 throw new VpnConnectionException(
-                    $"OpenVPN configured fallback cipher '{_fallbackCipher}' is unsupported (no NCP). Supported: {OpenVpnDataCipher.AdvertisedList}.");
+                    $"OpenVPN configured fallback cipher '{_fallbackCipher}' is unsupported (no NCP). Supported AEAD: {OpenVpnDataCipher.AdvertisedList}; CBC: AES-128/192/256-CBC.");
             }
 
-            return OpenVpnDataCipher.Aes256Gcm;
+            // (4) nothing configured — OpenVPN's default.
+            return BuildAead(OpenVpnDataCipher.Aes256Gcm, keyMaterial, peerId, dataV2);
+        }
+
+        OpenVpnDataChannel BuildAead(OpenVpnDataCipher cipher, OpenVpnKeyMaterial keyMaterial, uint peerId, bool dataV2)
+        {
+            OpenVpnDataChannelKeys keys = keyMaterial.DeriveDataKeys(cipher, isServer: false);
+            return new OpenVpnDataChannel(keys, keyId: 0, peerId: peerId, cipher: cipher.CreateCipher(), dataV2: dataV2);
+        }
+
+        OpenVpnCbcDataChannel BuildCbc(OpenVpnCbcCipher cipher, OpenVpnKeyMaterial keyMaterial, uint peerId, bool dataV2, string source)
+        {
+            string authName = _dataAuth ?? "SHA1";
+            Logger.LogHandshake(DriverName, $"NCP-less server; using the {source} CBC cipher '{cipher.Name}' with HMAC-{authName} (P_DATA_{(dataV2 ? "V2" : "V1")})");
+            OpenVpnCbcDataKeys keys = keyMaterial.DeriveCbcDataKeys(cipher, OpenVpnDataAuth.KeySizeBytes(_dataAuth), isServer: false);
+            return new OpenVpnCbcDataChannel(keys, cipher.CreateCipher(), OpenVpnDataAuth.CreateIntegrity(_dataAuth), keyId: 0, peerId: peerId, dataV2: dataV2);
         }
 
         // ---- tap single-host bridge: one VirtualHost + ARP on the tap channel, bridged down to the L3 facade ----
@@ -452,7 +486,9 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
         {
             if (!_dataActive) return;
             ReadOnlySpan<byte> span = datagram.Span;
-            if (span.Length < 1 || OpenVpnPacketCodec.ReadOpcode(span[0]) != OpenVpnOpcode.DataV2) return;
+            if (span.Length < 1) return;
+            OpenVpnOpcode op = OpenVpnPacketCodec.ReadOpcode(span[0]);
+            if (op != OpenVpnOpcode.DataV2 && op != OpenVpnOpcode.DataV1) return; // control packets are the channel's job
 
             _keepalive?.OnDataReceived(Now()); // any inbound data packet (incl. the peer's ping) proves it is alive
             _dataLink?.Deliver(span);             // decrypt + decompress + (drop ping) + raise InboundIpPacket

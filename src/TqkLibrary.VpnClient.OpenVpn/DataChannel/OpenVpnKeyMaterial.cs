@@ -21,5 +21,15 @@ namespace TqkLibrary.VpnClient.OpenVpn.DataChannel
         /// <summary>Slices the data-channel keys for the negotiated <paramref name="cipher"/> (client role by default).</summary>
         public OpenVpnDataChannelKeys DeriveDataKeys(OpenVpnDataCipher cipher, bool isServer = false)
             => OpenVpnKeyMethod2.SliceDataKeys(_key2, cipher, isServer);
+
+        /// <summary>
+        /// Slices the non-AEAD CBC data-channel keys for <paramref name="cipher"/> (AES-CBC) + a
+        /// <paramref name="hmacKeyLen"/>-byte HMAC key (from <c>--auth</c>). Client role by default.
+        /// </summary>
+        public OpenVpnCbcDataKeys DeriveCbcDataKeys(OpenVpnCbcCipher cipher, int hmacKeyLen, bool isServer = false)
+        {
+            if (cipher is null) throw new ArgumentNullException(nameof(cipher));
+            return OpenVpnKeyMethod2.SliceCbcDataKeys(_key2, cipher.KeySizeBytes, hmacKeyLen, isServer);
+        }
     }
 }

@@ -101,14 +101,16 @@ namespace TqkLibrary.VpnClient.OpenVpn.DataChannel
         /// <summary>
         /// Slices key2 into the per-direction data-channel keys for <paramref name="cipher"/>: each direction takes a
         /// <see cref="OpenVpnDataCipher.KeySizeBytes"/> cipher key + an 8-byte implicit IV (from the hmac half).
-        /// <paramref name="isServer"/> selects the role's set: client out = set 1 / in = set 0, server the reverse.
+        /// <paramref name="isServer"/> selects the role's set: <b>client out = set 0 / in = set 1</b>, server the reverse
+        /// (OpenVPN's <c>key_direction</c>: the client encrypts with <c>key2.keys[0]</c>, the server with
+        /// <c>key2.keys[1]</c>). Verified live against a real OpenVPN server (VPN Gate).
         /// </summary>
         public static OpenVpnDataChannelKeys SliceDataKeys(byte[] key2, OpenVpnDataCipher cipher, bool isServer)
         {
             if (cipher is null) throw new ArgumentNullException(nameof(cipher));
             // Reuse the static-key model: key2 has the same {cipher[64]|hmac[64]} × 2 layout.
             var sets = OpenVpnStaticKey.FromBytes(key2);
-            (int outSet, int inSet) = isServer ? (0, 1) : (1, 0);
+            (int outSet, int inSet) = isServer ? (1, 0) : (0, 1);
             return new OpenVpnDataChannelKeys(
                 sendCipherKey: sets.CipherKey(outSet, cipher.KeySizeBytes),
                 sendImplicitIv: sets.HmacKey(outSet, OpenVpnDataChannelKeys.ImplicitIvSize),
@@ -120,6 +122,24 @@ namespace TqkLibrary.VpnClient.OpenVpn.DataChannel
         public static OpenVpnDataChannelKeys DeriveDataKeys(OpenVpnKeySource2 client, OpenVpnKeySource2 server,
             ulong clientSessionId, ulong serverSessionId, bool isServer)
             => SliceDataKeys(DeriveKey2(client, server, clientSessionId, serverSessionId), OpenVpnDataCipher.Aes256Gcm, isServer);
+
+        /// <summary>
+        /// Slices key2 into the per-direction keys for the non-AEAD CBC data channel: each direction takes a
+        /// <paramref name="cipherKeyLen"/>-byte AES key (from the cipher half) + a <paramref name="hmacKeyLen"/>-byte
+        /// HMAC key (from the hmac half). <paramref name="isServer"/> selects the role's set, like
+        /// <see cref="SliceDataKeys"/>.
+        /// </summary>
+        public static OpenVpnCbcDataKeys SliceCbcDataKeys(byte[] key2, int cipherKeyLen, int hmacKeyLen, bool isServer)
+        {
+            if (key2 is null) throw new ArgumentNullException(nameof(key2));
+            var sets = OpenVpnStaticKey.FromBytes(key2);
+            (int outSet, int inSet) = isServer ? (1, 0) : (0, 1);
+            return new OpenVpnCbcDataKeys(
+                sendCipherKey: sets.CipherKey(outSet, cipherKeyLen),
+                sendHmacKey: sets.HmacKey(outSet, hmacKeyLen),
+                receiveCipherKey: sets.CipherKey(inSet, cipherKeyLen),
+                receiveHmacKey: sets.HmacKey(inSet, hmacKeyLen));
+        }
 
         static void WriteString(List<byte> buf, string s)
         {
