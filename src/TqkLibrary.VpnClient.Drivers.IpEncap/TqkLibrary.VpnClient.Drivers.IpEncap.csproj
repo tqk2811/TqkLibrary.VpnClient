@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Plain IP-in-IP / GRE tunnel driver runtime (RFC 2784/2890 GRE proto-47, RFC 2003 IPIP proto-4, RFC 4213 SIT/6in4 proto-41): wires the F.9 raw-IP transport (IRawIpTransportFactory) to the IpEncap data-plane channels (GreTunnelChannel / RawIpPassthroughChannel) behind a stable L3 packet channel, with teardown via ReconnectingVpnConnection. Connectionless encap — no control plane, so no handshake/keepalive/auto-reconnect. GRE/IPIP/SIT are UNENCRYPTED — use only on a trusted path or under IPsec ESP. The raw-IP transport requires elevation.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.Core\TqkLibrary.VpnClient.Drivers.Core.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.IpEncap\TqkLibrary.VpnClient.IpEncap.csproj" />
+  </ItemGroup>
+
+</Project>

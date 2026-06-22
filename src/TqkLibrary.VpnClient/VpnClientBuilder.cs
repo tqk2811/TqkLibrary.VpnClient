@@ -3,6 +3,7 @@ using System.Security.Cryptography.X509Certificates;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Drivers.Ikev2;
+using TqkLibrary.VpnClient.Drivers.IpEncap;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec.Enums;
 using TqkLibrary.VpnClient.Drivers.OpenConnect;
@@ -75,6 +76,20 @@ namespace TqkLibrary.VpnClient
         public VpnClientBuilder UsePptp(IRawIpTransportFactory rawIpFactory,
             PptpReconnectOptions? reconnectOptions = null, PptpTimeoutOptions? timeoutOptions = null)
             => AddDriver(new PptpDriver(rawIpFactory, reconnectOptions, timeoutOptions));
+
+        /// <summary>
+        /// Registers the plain IP-in-IP / GRE tunnel driver (RFC 2784/2890 GRE proto-47, RFC 2003 IPIP proto-4,
+        /// RFC 4213 SIT/6in4 proto-41): opens a raw-IP transport on the kind's protocol number and binds the matching
+        /// data-plane channel behind a stable L3 packet channel. <paramref name="rawIpFactory"/> carries the data plane
+        /// (a raw IP socket on the kind's protocol number — requires elevation; pass <c>new RawIpTransportFactory()</c>
+        /// from <c>TqkLibrary.VpnClient.Transport.RawIp</c>). <paramref name="options"/> selects the encap kind / MTU /
+        /// GRE options (default GRE); <paramref name="reconnectOptions"/> tunes (or disables) auto-reconnect.
+        /// <para>There is no control plane (no handshake, no auth, no keepalive) — the tunnel address must be arranged
+        /// out of band. <b>GRE/IPIP/SIT are UNENCRYPTED</b> — use only on a trusted path or under IPsec ESP.</para>
+        /// </summary>
+        public VpnClientBuilder UseIpEncap(IRawIpTransportFactory rawIpFactory, IpEncapOptions? options = null,
+            IpEncapReconnectOptions? reconnectOptions = null)
+            => AddDriver(new IpEncapDriver(rawIpFactory, options, reconnectOptions));
 
         /// <summary>Registers the IKEv2-native driver (RFC 7296 PSK + NAT-T, CP virtual IP, ESP tunnel mode) with auto-reconnect enabled by default.</summary>
         public VpnClientBuilder UseIkev2() => AddDriver(new Ikev2Driver());

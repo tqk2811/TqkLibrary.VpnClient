@@ -14,6 +14,7 @@
     <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.WireGuard\TqkLibrary.VpnClient.Drivers.WireGuard.csproj" />
     <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.SoftEther\TqkLibrary.VpnClient.Drivers.SoftEther.csproj" />
     <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.Pptp\TqkLibrary.VpnClient.Drivers.Pptp.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.IpEncap\TqkLibrary.VpnClient.Drivers.IpEncap.csproj" />
   </ItemGroup>
 
 </Project>
