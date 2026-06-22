@@ -1,8 +1,10 @@
 using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
+using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Drivers.Ikev2;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec;
+using TqkLibrary.VpnClient.Drivers.L2tpIpsec.Enums;
 using TqkLibrary.VpnClient.Drivers.OpenConnect;
 using TqkLibrary.VpnClient.Drivers.OpenVpn;
 using TqkLibrary.VpnClient.Drivers.SoftEther;
@@ -49,6 +51,16 @@ namespace TqkLibrary.VpnClient
         /// <summary>Registers the L2TP/IPsec driver with explicit auto-reconnect and IKE/L2TP timeout options.</summary>
         public VpnClientBuilder UseL2tpIpsec(L2tpIpsecReconnectOptions reconnectOptions, L2tpIpsecTimeoutOptions timeoutOptions)
             => AddDriver(new L2tpIpsecDriver(reconnectOptions, timeoutOptions));
+
+        /// <summary>
+        /// Registers the L2TP/IPsec driver with a raw-IP transport factory, enabling the <b>native ESP (proto-50)</b>
+        /// carrier for a no-NAT gateway under <see cref="L2tpIpsecNatTraversalMode.HonestFirst"/> (the default for this
+        /// overload). Requires elevation; pass <c>new RawIpTransportFactory()</c> from <c>TqkLibrary.VpnClient.Transport.RawIp</c>.
+        /// </summary>
+        public VpnClientBuilder UseL2tpIpsec(IRawIpTransportFactory rawIpFactory,
+            L2tpIpsecNatTraversalMode natTraversalMode = L2tpIpsecNatTraversalMode.HonestFirst,
+            L2tpIpsecReconnectOptions? reconnectOptions = null, L2tpIpsecTimeoutOptions? timeoutOptions = null)
+            => AddDriver(new L2tpIpsecDriver(reconnectOptions, timeoutOptions, natTraversalMode, rawIpFactory: rawIpFactory));
 
         /// <summary>Registers the IKEv2-native driver (RFC 7296 PSK + NAT-T, CP virtual IP, ESP tunnel mode) with auto-reconnect enabled by default.</summary>
         public VpnClientBuilder UseIkev2() => AddDriver(new Ikev2Driver());

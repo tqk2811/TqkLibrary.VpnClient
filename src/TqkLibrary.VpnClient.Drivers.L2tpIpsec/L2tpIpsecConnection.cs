@@ -4,6 +4,7 @@ using TqkLibrary.VpnClient.Abstractions.Channels;
 using TqkLibrary.VpnClient.Abstractions.Diagnostics.Extensions;
 using TqkLibrary.VpnClient.Abstractions.Drivers;
 using TqkLibrary.VpnClient.Abstractions.Net;
+using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Drivers.Core;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec.Enums;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec.Models;
@@ -48,6 +49,7 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
         static readonly TimeSpan Phase1RekeyRetry = TimeSpan.FromMinutes(2);
         static readonly TimeSpan RekeyGrace = TimeSpan.FromSeconds(10);
         const string DriverNameConst = "l2tp-ipsec";
+        const int EspIpProtocol = 50; // IANA IP protocol number for IPsec ESP (native, no UDP encapsulation)
 
         readonly string _host;
         readonly byte[] _preSharedKey;
@@ -55,6 +57,7 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
         readonly bool _enableIpv6;
         readonly L2tpIpsecTimeoutOptions _timeouts;
         readonly L2tpIpsecNatTraversalMode _natMode;
+        readonly IRawIpTransportFactory? _rawIpFactory; // when set, a no-NAT gateway is served native ESP over IP proto-50
         readonly AddressFamilyPreference _addressFamilyPreference;
         readonly IHostResolver _hostResolver;
         readonly object _extraSessionsLock = new();
@@ -67,6 +70,7 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
         IPAddress? _serverIp; // the resolved gateway address (kept so a Phase 1 rekey can rebuild its NAT-D)
 
         NatTraversalChannel? _natt;
+        IDatagramTransport? _nativeEsp; // the raw IP proto-50 ESP carrier, when native ESP was chosen (else null = ESP-in-UDP)
         IpsecL2tpTransport? _dataTransport;
         L2tpClient? _l2tp;
         PppEngine? _ppp;
@@ -96,7 +100,7 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
             L2tpIpsecReconnectOptions? reconnectOptions = null, L2tpIpsecTimeoutOptions? timeoutOptions = null,
             L2tpIpsecNatTraversalMode natTraversalMode = L2tpIpsecNatTraversalMode.ForcedNatT,
             AddressFamilyPreference addressFamilyPreference = AddressFamilyPreference.Auto, IHostResolver? hostResolver = null,
-            bool enableIpv6 = false, ILoggerFactory? loggerFactory = null)
+            bool enableIpv6 = false, ILoggerFactory? loggerFactory = null, IRawIpTransportFactory? rawIpFactory = null)
             : base(DriverNameConst, reconnectOptions ?? new L2tpIpsecReconnectOptions(), clock: null, loggerFactory: loggerFactory)
         {
             _host = host;
@@ -107,6 +111,7 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
             _natMode = natTraversalMode;
             _addressFamilyPreference = addressFamilyPreference;
             _hostResolver = hostResolver ?? DnsHostResolver.Default;
+            _rawIpFactory = rawIpFactory;
         }
 
         /// <summary>The IP address assigned by the server via IPCP (tracks the latest attempt).</summary>
@@ -189,9 +194,10 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
             IPAddress serverIp = await ResolveAsync(_host, cancellationToken).ConfigureAwait(false);
             _serverIp = serverIp;
 
-            // Phase 1 Main Mode 1-4 + the NAT-T port decision (forced, or honest-first with a forced fallback).
+            // Phase 1 Main Mode 1-4 + the NAT-T port decision (forced; or honest-first → float UDP/4500, native ESP proto-50, or forced fallback).
             Logger.LogHandshake(DriverName, "IKEv1 Phase 1 Main Mode + NAT-T port decision");
-            (NatTraversalChannel natt, IkeV1Client ike) = await BringUpPhase1Async(serverIp, cancellationToken).ConfigureAwait(false);
+            (NatTraversalChannel natt, IkeV1Client ike, IDatagramTransport? nativeEsp) =
+                await BringUpPhase1Async(serverIp, cancellationToken).ConfigureAwait(false);
 
             // MM5/MM6 (encrypted IDi + HASH_I, then verify HASH_R) on the port Phase 1 settled on.
             Logger.LogHandshake(DriverName, "IKEv1 Phase 1 MM5/MM6 (encrypted ID + HASH)");
@@ -211,10 +217,19 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
             await natt.SendIkeAsync(ike.BuildQuickMode3()).ConfigureAwait(false); // QM3 has no reply
 
             // ESP data plane + L2TP + PPP. The suite (AES-CBC or AES-GCM) follows what the gateway selected in QM2.
+            // The ESP packet is identical either way; only the carrier differs — native IP proto-50 (no-NAT gateway) or
+            // ESP-in-UDP/4500 over the NAT-T channel — so the rest of the data plane is unchanged.
             EspSession esp = BuildEspSession(ike.NegotiatedEsp, ike.CreatePhase2Keys(), ike.ChildOutboundSpi, ike.ChildInboundSpi);
-            _dataTransport = new IpsecL2tpTransport(esp, datagram => natt.SendEspAsync(datagram));
+            Func<ReadOnlyMemory<byte>, Task> sendEsp = nativeEsp != null
+                ? datagram => nativeEsp.SendAsync(datagram).AsTask()
+                : datagram => natt.SendEspAsync(datagram);
+            _dataTransport = new IpsecL2tpTransport(esp, sendEsp);
             _dataTransport.RekeyNeeded += OnRekeyNeeded; // outbound ESP sequence nearing 2^32 → rekey before it wraps
             _espActive = true;
+
+            // Native ESP arrives on its own raw socket (the natt receive loop on UDP/500 carries only IKE), so it needs
+            // its own inbound loop. ESP-in-UDP keeps demuxing through the existing natt receive loop.
+            if (nativeEsp != null) StartNativeEspLoop(nativeEsp);
 
             var l2tp = new L2tpClient(_dataTransport,
                 retransmitOptions: _timeouts.BuildL2tpRetransmitOptions());
@@ -263,17 +278,19 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
 
         // ---- Phase 1 bring-up: pick the NAT-T strategy, run Main Mode 1-4, and settle on the data-plane port ----
 
-        // Returns the channel/client on the port the rest of the handshake will use. Forced mode always floats to
-        // UDP/4500; honest-first binds the real port 500 and lets the gateway's NAT-D verdict decide, falling back to
-        // forced when it cannot bind 500 or the gateway reports no NAT (it would want native ESP, which is not built).
-        async Task<(NatTraversalChannel Natt, IkeV1Client Ike)> BringUpPhase1Async(IPAddress serverIp, CancellationToken cancellationToken)
+        // Returns the channel/client on the port the rest of the handshake will use, plus a native-ESP carrier when one
+        // was chosen. Forced mode always floats to UDP/4500; honest-first binds the real port 500 and lets the gateway's
+        // NAT-D verdict decide — a real NAT floats to 4500, no NAT carries ESP natively over IP proto-50 (when a raw-IP
+        // transport is available), otherwise it falls back to forced (cannot bind 500, no factory, or no elevation).
+        async Task<(NatTraversalChannel Natt, IkeV1Client Ike, IDatagramTransport? NativeEsp)> BringUpPhase1Async(IPAddress serverIp, CancellationToken cancellationToken)
         {
             if (_natMode == L2tpIpsecNatTraversalMode.HonestFirst)
             {
-                (NatTraversalChannel, IkeV1Client)? honest = await TryHonestPhase1Async(serverIp, cancellationToken).ConfigureAwait(false);
-                if (honest != null) return (honest.Value.Item1, honest.Value.Item2);
+                (NatTraversalChannel, IkeV1Client, IDatagramTransport?)? honest = await TryHonestPhase1Async(serverIp, cancellationToken).ConfigureAwait(false);
+                if (honest != null) return (honest.Value.Item1, honest.Value.Item2, honest.Value.Item3);
             }
-            return await ForcedPhase1Async(serverIp, cancellationToken).ConfigureAwait(false);
+            (NatTraversalChannel natt, IkeV1Client ike) = await ForcedPhase1Async(serverIp, cancellationToken).ConfigureAwait(false);
+            return (natt, ike, null);
         }
 
         // Forced NAT-T (the default, proven live): ephemeral source port, NAT-D claims port 500, always float to 4500.
@@ -290,9 +307,10 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
         }
 
         // Honest-first: bind the real port 500, send truthful NAT-D, then read the gateway's MM4 verdict. A real NAT
-        // floats to 4500 (userspace ESP-in-UDP); no NAT means the gateway wants native ESP (not built) — tear down and
-        // return null so the caller retries forced. Returns null too if port 500 is unavailable (e.g. Windows IKEEXT).
-        async Task<(NatTraversalChannel, IkeV1Client)?> TryHonestPhase1Async(IPAddress serverIp, CancellationToken cancellationToken)
+        // floats to 4500 (userspace ESP-in-UDP). No NAT means the gateway expects native ESP: when a raw-IP transport is
+        // available, keep IKE on UDP/500 and open a raw IP proto-50 ESP carrier bound to the same local address; without
+        // it, tear down and return null so the caller retries forced. Returns null too if port 500 cannot be bound.
+        async Task<(NatTraversalChannel, IkeV1Client, IDatagramTransport?)?> TryHonestPhase1Async(IPAddress serverIp, CancellationToken cancellationToken)
         {
             NatTraversalChannel natt;
             try { natt = StartAttemptChannel(serverIp, localPort: NatTraversal.IkePort, cancellationToken); }
@@ -307,14 +325,25 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
             ike.ProcessMainMode4(await ExchangeIkeAsync(natt,
                 ike.BuildMainMode3(localIp, localPort, serverIp, (ushort)NatTraversal.IkePort), cancellationToken).ConfigureAwait(false));
 
-            if (ike.DetectNat(localIp, localPort, serverIp, (ushort)NatTraversal.IkePort).ShouldFloatToNatT)
+            IkeV1NatDetectionResult nat = ike.DetectNat(localIp, localPort, serverIp, (ushort)NatTraversal.IkePort);
+            switch (L2tpIpsecNatStrategy.Decide(nat, rawIpAvailable: _rawIpFactory?.IsAvailable == true, port500Bound: true))
             {
-                natt.SwitchToNatTPort();
-                return (natt, ike);
-            }
+                case L2tpIpsecPhase1Strategy.FloatToNatT:
+                    natt.SwitchToNatTPort();
+                    return (natt, ike, null);
 
-            await TeardownPhase1AttemptAsync(natt).ConfigureAwait(false);
-            return null;
+                case L2tpIpsecPhase1Strategy.NativeEsp:
+                    // No NAT: IKE (incl. MM5/6, Quick Mode, DPD, rekey) stays plain on UDP/500; ESP goes native over
+                    // IP proto-50 from the same source address IKE authenticated on.
+                    IDatagramTransport nativeEsp = _rawIpFactory!.Create(serverIp, EspIpProtocol, localBind: localIp);
+                    _nativeEsp = nativeEsp; // publish for cleanup before any later step can fail
+                    Logger.LogHandshake(DriverName, "No NAT detected — carrying ESP natively over IP proto-50 (raw socket)");
+                    return (natt, ike, nativeEsp);
+
+                default:
+                    await TeardownPhase1AttemptAsync(natt).ConfigureAwait(false);
+                    return null;
+            }
         }
 
         // Opens the attempt's NAT-T channel on the given local port, publishes it + a linked CTS, and starts its
@@ -347,6 +376,15 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
         protected override async Task CleanupAttemptResourcesAsync()
         {
             StopAttemptLoop();
+
+            // Null the native-ESP carrier before disposing it: nulling trips the native loop's identity guard, disposing
+            // closes the raw socket which unblocks its (uncancellable on netstandard2.0) ReceiveFrom so the stale loop exits.
+            IDatagramTransport? nativeEsp = _nativeEsp;
+            _nativeEsp = null;
+            if (nativeEsp != null)
+            {
+                try { await nativeEsp.DisposeAsync().ConfigureAwait(false); } catch { }
+            }
 
             if (_l2tp != null) _l2tp.Disconnected -= OnLinkLost;
 
@@ -408,14 +446,14 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
         }
 
         // Diagnose a failed handshake exchange by the port it stalled on. Past the NAT-T float (UDP/4500) silence is the
-        // signature of a gateway that refuses forced NAT-T: not behind a NAT, it expects native ESP — which this userspace
-        // client cannot send (native-ESP fallback P0.8c not built). An honest real-port handshake is available via
-        // L2tpIpsecNatTraversalMode.HonestFirst, but it only rescues a gateway that actually sees a NAT in front of us.
+        // signature of a gateway that refuses forced NAT-T: not behind a NAT, it expects native ESP. Such a gateway can be
+        // served by L2tpIpsecNatTraversalMode.HonestFirst together with a raw-IP transport (IRawIpTransportFactory), which
+        // keeps IKE on UDP/500 and carries ESP natively over IP proto-50 (requires elevation).
         static VpnNetworkTimeoutException IkeTimedOut(int targetPort)
             => new(targetPort == NatTraversal.NatTPort
                 ? "No IKE response on UDP/4500 after the NAT-T float. The gateway may refuse forced NAT-T (it is not "
-                  + "behind a NAT and rejects UDP-encapsulated IPsec); native-ESP fallback is not yet implemented "
-                  + "(try L2tpIpsecNatTraversalMode.HonestFirst if UDP/500 can be bound)."
+                  + "behind a NAT and rejects UDP-encapsulated IPsec); try L2tpIpsecNatTraversalMode.HonestFirst with a "
+                  + "raw-IP transport (IRawIpTransportFactory) so a no-NAT gateway is served native ESP over IP proto-50 (requires elevation)."
                 : "No IKE response from the gateway on UDP/500 (host unreachable, UDP blocked, or wrong address).");
 
         static VpnServerRejectedException IkeRejected(ushort notifyType, int targetPort)
@@ -473,6 +511,38 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
             {
                 // This attempt's transport died (socket error/dispose). Do NOT touch the shared _ikeWaiter here:
                 // a concurrent new attempt may own it. The pending exchange times out and the attempt fails cleanly.
+            }
+        }
+
+        // ---- native ESP (IP proto-50) inbound loop: only when a no-NAT gateway is served over a raw-IP transport ----
+
+        // ESP arrives on its own raw socket here (not on the natt UDP/500 channel), so it needs a dedicated loop. Tied to
+        // the same _loopCts as the natt loop; the identity guard (ReferenceEquals on _nativeEsp) drops a stale loop after
+        // an attempt is torn down, and CleanupAttemptResourcesAsync nulls then disposes _nativeEsp to unblock the receive.
+        void StartNativeEspLoop(IDatagramTransport nativeEsp)
+        {
+            CancellationToken loopToken = _loopCts?.Token ?? LifetimeToken;
+            _ = Task.Run(() => NativeEspReceiveLoopAsync(nativeEsp, loopToken));
+        }
+
+        async Task NativeEspReceiveLoopAsync(IDatagramTransport nativeEsp, CancellationToken cancellationToken)
+        {
+            byte[] buffer = new byte[ushort.MaxValue];
+            try
+            {
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    int n = await nativeEsp.ReceiveAsync(buffer, cancellationToken).ConfigureAwait(false);
+                    if (cancellationToken.IsCancellationRequested || !ReferenceEquals(_nativeEsp, nativeEsp)) break;
+                    if (n > 0 && _espActive)
+                        _dataTransport?.OnEspPacket(buffer.AsMemory(0, n));
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch
+            {
+                // The raw socket was disposed on teardown, or a receive error occurred. Like the natt loop, do not touch
+                // shared state here; a real drop surfaces via DPD/L2TP and the supervisor drives reconnect.
             }
         }
 

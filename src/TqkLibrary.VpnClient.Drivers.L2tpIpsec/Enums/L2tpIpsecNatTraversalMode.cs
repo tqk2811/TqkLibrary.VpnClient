@@ -15,9 +15,10 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec.Enums
 
         /// <summary>
         /// Try an honest handshake first: bind the real source port 500 and send truthful NAT-D, then let the gateway's
-        /// NAT-D verdict decide — a real NAT floats to UDP/4500, no NAT means the gateway wants native ESP (not yet
-        /// implemented) so the client falls back to <see cref="ForcedNatT"/>. If port 500 cannot be bound (e.g. the
-        /// Windows IKEEXT service holds it) it also falls back to <see cref="ForcedNatT"/>.
+        /// NAT-D verdict decide — a real NAT floats to UDP/4500. No NAT means the gateway expects native ESP: if the
+        /// driver was given a raw-IP transport (<c>IRawIpTransportFactory</c>, requires elevation) it keeps IKE on
+        /// UDP/500 and carries ESP natively over IP proto-50; otherwise it falls back to <see cref="ForcedNatT"/>. It also
+        /// falls back when port 500 cannot be bound (e.g. the Windows IKEEXT service holds it).
         /// </summary>
         HonestFirst = 1,
     }

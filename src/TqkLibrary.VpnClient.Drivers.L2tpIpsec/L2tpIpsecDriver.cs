@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Enums;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
+using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec.Enums;
 
 namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
@@ -14,23 +15,27 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
         readonly L2tpIpsecNatTraversalMode _natTraversalMode;
         readonly bool _enableIpv6;
         readonly ILoggerFactory? _loggerFactory;
+        readonly IRawIpTransportFactory? _rawIpFactory;
 
         /// <summary>
         /// Creates the driver; <paramref name="reconnectOptions"/> tunes (or disables) auto-reconnect,
         /// <paramref name="timeoutOptions"/> tunes the IKE/L2TP handshake timeouts and retransmit caps,
         /// <paramref name="natTraversalMode"/> selects how NAT-T is negotiated (default: always force NAT-T),
         /// <paramref name="enableIpv6"/> also runs IPV6CP for a link-local IPv6 address (best-effort; IPv4 unaffected),
-        /// and <paramref name="loggerFactory"/> receives diagnostic traces (null = no logging).
+        /// <paramref name="loggerFactory"/> receives diagnostic traces (null = no logging), and
+        /// <paramref name="rawIpFactory"/> (with <see cref="L2tpIpsecNatTraversalMode.HonestFirst"/>) enables the native
+        /// ESP (proto-50) carrier for a no-NAT gateway — requires elevation; null keeps the client no-admin.
         /// </summary>
         public L2tpIpsecDriver(L2tpIpsecReconnectOptions? reconnectOptions = null, L2tpIpsecTimeoutOptions? timeoutOptions = null,
             L2tpIpsecNatTraversalMode natTraversalMode = L2tpIpsecNatTraversalMode.ForcedNatT, bool enableIpv6 = false,
-            ILoggerFactory? loggerFactory = null)
+            ILoggerFactory? loggerFactory = null, IRawIpTransportFactory? rawIpFactory = null)
         {
             _reconnectOptions = reconnectOptions;
             _timeoutOptions = timeoutOptions;
             _natTraversalMode = natTraversalMode;
             _enableIpv6 = enableIpv6;
             _loggerFactory = loggerFactory;
+            _rawIpFactory = rawIpFactory;
         }
 
         /// <inheritdoc/>
@@ -60,7 +65,7 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
             var connection = new L2tpIpsecConnection(endpoint.Host, psk, reconnectOptions: _reconnectOptions,
                 timeoutOptions: _timeoutOptions, natTraversalMode: _natTraversalMode,
                 addressFamilyPreference: endpoint.AddressFamilyPreference, enableIpv6: _enableIpv6,
-                loggerFactory: _loggerFactory);
+                loggerFactory: _loggerFactory, rawIpFactory: _rawIpFactory);
             try
             {
                 await connection.ConnectAsync(credentials.Username ?? string.Empty, credentials.Password ?? string.Empty, cancellationToken)
