@@ -29,6 +29,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
         readonly IOpenVpnControlWrap? _controlWrap;
         readonly OpenVpnReconnectOptions? _reconnectOptions;
         readonly bool _multiHost;
+        readonly bool _enableIpv6;
         readonly ILoggerFactory? _loggerFactory;
 
         /// <summary>
@@ -39,8 +40,10 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
         /// inline static keys (supply one when the key is referenced by file path); <paramref name="reconnectOptions"/>
         /// tunes (or disables) auto-reconnect. When <paramref name="multiHost"/> is <c>true</c> a <c>dev tap</c> profile
         /// exposes the whole L2 broadcast domain (the tap channel becomes an uplink port); <c>OpenSessionAsync</c> then
-        /// adds a station instead of throwing (no effect on tun). <paramref name="loggerFactory"/> receives diagnostic
-        /// traces (null = no logging).
+        /// adds a station instead of throwing (no effect on tun). When <paramref name="enableIpv6"/> is <c>true</c> a
+        /// <c>dev tap</c> bridge also runs IPv6 autoconfiguration (SLAAC/DHCPv6 — L2.6) + NDISC v6 over the same segment,
+        /// best-effort (an IPv4-only bridge still connects); the default keeps the wire IPv4-only so existing behaviour is
+        /// unchanged (no effect on tun). <paramref name="loggerFactory"/> receives diagnostic traces (null = no logging).
         /// </summary>
         public OpenVpnDriver(OpenVpnProfile profile,
             X509CertificateCollection? clientCertificates = null,
@@ -48,6 +51,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             IOpenVpnControlWrap? controlWrap = null,
             OpenVpnReconnectOptions? reconnectOptions = null,
             bool multiHost = false,
+            bool enableIpv6 = false,
             ILoggerFactory? loggerFactory = null)
         {
             _profile = profile ?? throw new ArgumentNullException(nameof(profile));
@@ -56,6 +60,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             _controlWrap = controlWrap;
             _reconnectOptions = reconnectOptions;
             _multiHost = multiHost;
+            _enableIpv6 = enableIpv6;
             _loggerFactory = loggerFactory;
             Capabilities = BuildCapabilities(_profile);
         }
@@ -113,6 +118,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
                 fallbackCipher: _profile.Cipher ?? (_profile.DataCiphers.Count > 0 ? _profile.DataCiphers[0] : null),
                 dataAuth: _profile.Auth,
                 multiHost: _multiHost,
+                enableIpv6: _enableIpv6,
                 loggerFactory: _loggerFactory);
             try
             {

@@ -100,6 +100,14 @@ namespace TqkLibrary.VpnClient
             RemoteCertificateValidationCallback? serverCertificateValidation = null, OpenVpnReconnectOptions? reconnectOptions = null)
             => AddDriver(new OpenVpnDriver(profile, clientCertificates, serverCertificateValidation, reconnectOptions: reconnectOptions));
 
+        /// <summary>
+        /// Registers the OpenVPN driver with IPv6 in the tunnel enabled (tap-mode only): besides the IPv4 ifconfig/DHCP
+        /// lease + ARP, the tap bridge also runs SLAAC/DHCPv6 + NDISC v6 over the same L2 segment (best-effort — an
+        /// IPv4-only bridge still connects; no effect on tun-mode).
+        /// </summary>
+        public VpnClientBuilder UseOpenVpn(OpenVpnProfile profile, bool enableIpv6)
+            => AddDriver(new OpenVpnDriver(profile, enableIpv6: enableIpv6));
+
         /// <summary>Registers the WireGuard driver (UDP, Noise_IKpsk2, static point-to-point config) with auto-reconnect enabled by default.</summary>
         public VpnClientBuilder UseWireGuard(WireGuardConfig config) => AddDriver(new WireGuardDriver(config));
 

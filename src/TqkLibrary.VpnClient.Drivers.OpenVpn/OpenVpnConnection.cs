@@ -13,6 +13,7 @@ using TqkLibrary.VpnClient.Drivers.OpenVpn.Enums;
 using TqkLibrary.VpnClient.Drivers.OpenVpn.Models;
 using TqkLibrary.VpnClient.Drivers.OpenVpn.Transport;
 using TqkLibrary.VpnClient.Ethernet;
+using TqkLibrary.VpnClient.Ethernet.Helpers;
 using TqkLibrary.VpnClient.Ethernet.Models;
 using TqkLibrary.VpnClient.OpenVpn;
 using TqkLibrary.VpnClient.OpenVpn.DataChannel;
@@ -41,6 +42,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
     public sealed class OpenVpnConnection : ReconnectingVpnConnection<OpenVpnConnectionState>, IDisposable, IAsyncDisposable
     {
         static readonly TimeSpan KeepaliveTick = TimeSpan.FromSeconds(1);
+        static readonly IPAddress LinkLocalPrefix = IPAddress.Parse("fe80::");   // the fe80::/64 IPv6 link-local prefix (RFC 4291 §2.5.6)
         const string DriverNameConst = "openvpn";
 
         readonly string _host;
@@ -61,6 +63,8 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
         readonly string? _fallbackCipher;
         readonly string? _dataAuth;       // the --auth HMAC for the non-AEAD CBC data channel (null = SHA1 default)
         readonly bool _multiHost;
+        readonly bool _enableIpv6;        // opt-in: also run SLAAC/DHCPv6 + NDISC v6 on the tap bridge (default IPv4-only)
+        readonly Ipv6AddressConfiguratorOptions? _ipv6Options;
         readonly MacAddress _tapMac;      // a stable locally-administered MAC for the tap endpoint (kept across reconnects)
 
         IPAddress? _assignedAddress;
@@ -76,7 +80,9 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
         OpenVpnDataLink? _dataLink;       // tun: OpenVpnTunChannel; tap: OpenVpnTapChannel
         VirtualHost? _tapHost;            // tap 1-host only: the L2↔L3 bridge whose IPacketChannel feeds the facade
         ArpResolver? _tapArp;             // tap 1-host only: IPv4 neighbour resolver sharing the tap port
+        NdiscResolver? _tapNdisc;         // tap 1-host only: IPv6 neighbour resolver (when enableIpv6) sharing the tap port
         DhcpV4Configurator? _tapDhcp;     // tap pure-DHCP only: the DHCPv4 client when the server pushes no ifconfig
+        Ipv6AddressConfigurator? _tapIpv6Config;  // tap 1-host only: the SLAAC/DHCPv6 client (when enableIpv6)
         MultiHostSession? _multiHostSession;  // tap multi-host only: the broadcast domain (uplink-as-port + N stations)
         OpenVpnKeepalive? _keepalive;
         CancellationTokenSource? _loopCts;
@@ -102,8 +108,14 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
         /// When <paramref name="multiHost"/> is <c>true</c> a tap-mode tunnel exposes the whole L2 broadcast domain
         /// (the tap channel becomes an uplink port on an in-memory switch and each station leases its own IP), reachable
         /// through <see cref="MultiHostSession"/>; the default (<c>false</c>) keeps the single-host tap bridge (tun-mode
-        /// ignores it). <paramref name="clock"/> supplies the keepalive millisecond clock (default: the system tick clock) —
-        /// tests inject a deterministic one. <paramref name="loggerFactory"/> receives diagnostic traces
+        /// ignores it). When <paramref name="enableIpv6"/> is <c>true</c> a tap-mode bridge additionally runs IPv6
+        /// autoconfiguration (SLAAC from a Router Advertisement, or stateful DHCPv6 — L2.6
+        /// <see cref="Ipv6AddressConfigurator"/>) plus NDISC v6 neighbour resolution (<see cref="NdiscResolver"/>) over the
+        /// same L2 segment, pushing <see cref="TunnelConfig.AssignedAddressV6"/>/<see cref="TunnelConfig.PrefixLengthV6"/>
+        /// when the bridge hands out an IPv6 address; it is best-effort, so an IPv4-only bridge still connects (the default
+        /// <c>false</c> keeps the wire IPv4-only, and tun-mode ignores it). <paramref name="ipv6Options"/> tunes the
+        /// SLAAC/DHCPv6 exchange. <paramref name="clock"/> supplies the keepalive millisecond clock (default: the system tick
+        /// clock) — tests inject a deterministic one. <paramref name="loggerFactory"/> receives diagnostic traces
         /// (handshake/NCP/keepalive/reconnect/drop); null logs to a no-op logger.
         /// </summary>
         public OpenVpnConnection(string host, int port, IOpenVpnTransportFactory transportFactory,
@@ -122,6 +134,8 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             string? fallbackCipher = null,
             string? dataAuth = null,
             bool multiHost = false,
+            bool enableIpv6 = false,
+            Ipv6AddressConfiguratorOptions? ipv6Options = null,
             Func<long>? clock = null,
             ILoggerFactory? loggerFactory = null)
             : base(DriverNameConst, reconnectOptions ?? new OpenVpnReconnectOptions(), clock, loggerFactory)
@@ -145,6 +159,8 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             _fallbackCipher = string.IsNullOrEmpty(fallbackCipher) ? null : fallbackCipher;
             _dataAuth = string.IsNullOrEmpty(dataAuth) ? null : dataAuth;
             _multiHost = multiHost;
+            _enableIpv6 = enableIpv6;
+            _ipv6Options = ipv6Options;
             _tapMac = GenerateLocalMac();
         }
 
@@ -166,6 +182,15 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
 
         /// <summary>The first DNS server pushed in PUSH_REPLY, if any.</summary>
         public IPAddress? AssignedDns => _assignedDns;
+
+        /// <summary>
+        /// The tunnel IPv6 address autoconfigured over the tap bridge (SLAAC or DHCPv6), or <c>null</c> when IPv6 is
+        /// disabled, the bridge is IPv4-only, or the device is tun. Mirrors <see cref="TunnelConfig.AssignedAddressV6"/>.
+        /// </summary>
+        public IPAddress? AssignedAddressV6 => _config.AssignedAddressV6;
+
+        /// <summary><c>true</c> when this connection also runs IPv6 autoconfiguration (SLAAC/DHCPv6) + NDISC v6 on the tap bridge.</summary>
+        public bool IsIpv6Enabled => _enableIpv6 && _device == OpenVpnDeviceType.Tap;
 
         /// <summary>This endpoint's virtual MAC on the tap segment (the first/primary station in multi-host tap mode).</summary>
         public MacAddress LinkAddress => _tapMac;
@@ -374,11 +399,11 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             IPAddress address;
             if (push.IfconfigLocal != null)
             {
-                // server-bridge managed pool: the address comes from the pushed ifconfig. ARP is IPv4-only (L2.3), so an
-                // IPv6 tunnel address needs NDISC (roadmap L2.4) and is refused here.
+                // server-bridge managed pool: the v4 address comes from the pushed ifconfig (OpenVPN pushes an IPv4
+                // ifconfig; an IPv6 address — when enableIpv6 — is autoconfigured by SLAAC/DHCPv6 over the same segment below).
                 if (push.IfconfigLocal.AddressFamily != AddressFamily.InterNetwork)
                     throw new VpnConnectionException(
-                        "OpenVPN tap-mode bridges IPv4 only (ARP); an IPv6 tunnel address needs NDISC (roadmap L2.4).");
+                        "OpenVPN tap-mode bridges IPv4 over ARP; the pushed ifconfig address must be IPv4 (IPv6 is autoconfigured by SLAAC/DHCPv6).");
                 address = push.IfconfigLocal;
             }
             else
@@ -400,15 +425,79 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             }
 
             var arp = new ArpResolver(_tapMac, address, tap);
-            var host = new VirtualHost(_tapMac, tap, arp);
+            _tapArp = arp;
+
+            // --- IPv6 (opt-in): run NDISC v6 + SLAAC/DHCPv6 on the same tap segment, best-effort. An IPv4-only bridge
+            //     yields no v6 address, which is fine — the tunnel still comes up on IPv4. Mirrors the SoftEther bridge. ---
+            INeighborResolver resolver = arp;
+            Action<ReadOnlyMemory<byte>>? ipSeam = null;
+            if (_enableIpv6)
+            {
+                IPAddress linkLocal = LinkLocalAddress(_tapMac);
+                var ndisc = new NdiscResolver(_tapMac, linkLocal, tap);
+                _tapNdisc = ndisc;
+                var ipv6Config = new Ipv6AddressConfigurator(_tapMac, linkLocal, tap, ndisc, _ipv6Options);
+                _tapIpv6Config = ipv6Config;
+                resolver = new DualStackNeighborResolver(arp, ndisc, ownsInnerResolvers: false);
+                ipSeam = p => { ndisc.HandleInboundFrame(p); ipv6Config.HandleInboundFrame(p); };   // NDISC + DHCPv6 ride inside ordinary IPv6
+                await ConfigureIpv6BestEffortAsync(tap, config, ipv6Config, cancellationToken).ConfigureAwait(false);
+            }
+
+            var host = new VirtualHost(_tapMac, tap, resolver);
             host.InboundNonIpFrame += arp.HandleInboundFrame;    // ARP replies/requests arrive on the non-IP seam
             if (_tapDhcp != null)
                 host.InboundIpPacket += _tapDhcp.HandleInboundFrame;   // a renewal DHCP reply rides ordinary IPv4
-            _tapArp = arp;
+            if (ipSeam != null)
+                host.InboundIpPacket += ipSeam;                  // NDISC/DHCPv6 ride inside ordinary IPv6
             _tapHost = host;
             config.Mtu = host.Mtu;                               // link − 14: the bound stack clamps MSS for the Ethernet header
             Facade.SetInner(host);
+            string v6 = config.AssignedAddressV6 != null ? $" + IPv6 {config.AssignedAddressV6}" : "";
+            Logger.LogHandshake(DriverName, $"tap bridge bound on {address}{v6}");
             return config;
+        }
+
+        // Forms the host's IPv6 link-local address (fe80::/64 + Modified EUI-64 of the MAC, RFC 4291 §2.5.1) — the source
+        // NDISC/SLAAC/DHCPv6 send from before any global address is configured. Reuses the SLAAC interface-identifier codec.
+        static IPAddress LinkLocalAddress(MacAddress mac)
+            => SlaacAddress.Combine(LinkLocalPrefix, 64, SlaacAddress.ModifiedEui64(mac));
+
+        // Runs SLAAC/DHCPv6 over the tap segment and merges any IPv6 address/DNS/route into the v4 config. Best-effort: a
+        // bridge that does not advertise IPv6 (no RA, no DHCPv6) leaves the config IPv4-only rather than failing the tunnel.
+        // Mirrors SoftEtherConnection.ConfigureIpv6BestEffortAsync.
+        async Task ConfigureIpv6BestEffortAsync(OpenVpnTapChannel tap, TunnelConfig config, Ipv6AddressConfigurator ipv6Config, CancellationToken cancellationToken)
+        {
+            Logger.LogHandshake(DriverName, "requesting IPv6 autoconfiguration over the tap segment (RS/RA -> SLAAC or DHCPv6)");
+            // During the exchange the VirtualHost is not yet bound, so feed inbound frames (RA + DHCPv6 reply) straight from
+            // the tap channel; once the bridge is up they ride VirtualHost.InboundIpPacket instead.
+            NdiscResolver? ndisc = _tapNdisc;
+            if (ndisc != null) tap.InboundFrame += ndisc.HandleInboundFrame;
+            tap.InboundFrame += ipv6Config.HandleInboundFrame;
+            try
+            {
+                TunnelConfig v6 = await ipv6Config.ConfigureAsync(cancellationToken).ConfigureAwait(false);
+                config.AssignedAddressV6 = v6.AssignedAddressV6;
+                config.PrefixLengthV6 = v6.PrefixLengthV6;
+                foreach (IPAddress dns in v6.DnsServers)
+                    config.DnsServers.Add(dns);
+                foreach (string route in v6.Routes)
+                    config.Routes.Add(route);
+                Logger.LogHandshake(DriverName, $"IPv6 autoconfiguration succeeded: {v6.AssignedAddressV6}/{v6.PrefixLengthV6}");
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // No RA / no DHCPv6 lease (IPv4-only bridge): keep IPv4 working, drop only the IPv6 leg.
+                Logger.LogHandshake(DriverName, $"IPv6 autoconfiguration skipped ({ex.GetType().Name}: {ex.Message}); continuing IPv4-only");
+            }
+            finally
+            {
+                if (ndisc != null) tap.InboundFrame -= ndisc.HandleInboundFrame;
+                tap.InboundFrame -= ipv6Config.HandleInboundFrame;
+            }
         }
 
         // ---- tap multi-host bridge: the tap channel is an uplink port; the primary station leases over the shared switch ----
@@ -432,8 +521,9 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
         /// <summary>
         /// Adds a station to the multi-host tap broadcast domain with MAC <paramref name="mac"/>. When
         /// <paramref name="staticAddress"/> is non-null the station uses it statically (a server-bridge pushed ifconfig);
-        /// otherwise it leases its own IPv4 over the shared switch (the bridge's DHCP server serving it). Surfaced as an
-        /// <see cref="EthernetHostSession"/>.
+        /// otherwise it leases its own IPv4 over the shared switch (the bridge's DHCP server serving it). When the
+        /// connection has IPv6 enabled the station also runs SLAAC/DHCPv6 + NDISC v6 on the shared switch (best-effort).
+        /// Surfaced as an <see cref="EthernetHostSession"/>.
         /// </summary>
         /// <exception cref="InvalidOperationException">This connection is not in multi-host tap mode.</exception>
         public async ValueTask<EthernetHostSession> AddStationAsync(MacAddress mac, IPAddress? staticAddress = null, CancellationToken cancellationToken = default)
@@ -445,9 +535,9 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             if (staticAddress != null && staticAddress.AddressFamily != AddressFamily.InterNetwork)
                 throw new VpnConnectionException("OpenVPN tap multi-host bridges IPv4 only (ARP); an IPv6 station address needs NDISC (roadmap L2.4).");
 
-            if (staticAddress != null)
+            if (staticAddress != null && !_enableIpv6)
             {
-                // Static station: no DHCP, the address is known up front.
+                // Static IPv4-only station: no configurator, the address is known up front.
                 EthernetHostSession station = session.AddStation(mac, port =>
                 {
                     var arp = new ArpResolver(mac, staticAddress, port);
@@ -456,28 +546,83 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
                 return station;
             }
 
-            // DHCP station: ARP starts on 0.0.0.0; once the lease lands we set the real address so it answers ARP for itself.
+            // A station whose v4 address comes from DHCP starts ARP on 0.0.0.0; once the lease lands we set the real
+            // address so it answers ARP for itself. A static-v4 station already knows its address.
             ArpResolver? arpRef = null;
             EthernetHostSession leased = await session.AddStationAsync(mac, port =>
             {
-                var arp = new ArpResolver(mac, IPAddress.Any, port);
+                var arp = new ArpResolver(mac, staticAddress ?? IPAddress.Any, port);
                 arpRef = arp;
-                var dhcp = new DhcpV4Configurator(mac, port);
-                return new EthernetHostSpec(arp)
+
+                if (!_enableIpv6)
                 {
-                    Configurator = dhcp,
-                    NonIpFrameHandler = arp.HandleInboundFrame,      // ARP rides the non-IP seam
-                    IpPacketHandler = dhcp.HandleInboundFrame,       // DHCP rides inside ordinary IPv4
+                    // DHCPv4-only station (staticAddress is null here).
+                    var dhcp = new DhcpV4Configurator(mac, port);
+                    return new EthernetHostSpec(arp)
+                    {
+                        Configurator = dhcp,
+                        NonIpFrameHandler = arp.HandleInboundFrame,      // ARP rides the non-IP seam
+                        IpPacketHandler = dhcp.HandleInboundFrame,       // DHCP rides inside ordinary IPv4
+                    };
+                }
+
+                // Dual-stack station: ARP for v4 + NDISC for v6. The IPv4 leg is DHCPv4 (required) when no static address
+                // was pushed, or a pre-set static address (so its configurator is the SLAAC/DHCPv6 leg only); the IPv6 leg
+                // is SLAAC/DHCPv6 (best-effort). Mirrors SoftEtherConnection.AddStationAsync.
+                IPAddress linkLocal = LinkLocalAddress(mac);
+                var ndisc = new NdiscResolver(mac, linkLocal, port);
+                var ipv6Config = new Ipv6AddressConfigurator(mac, linkLocal, port, ndisc, _ipv6Options);
+                var dualResolver = new DualStackNeighborResolver(arp, ndisc);                        // owns ARP + NDISC
+                IAddressConfigurator configurator = staticAddress != null
+                    ? new BestEffortIpv6Configurator(ipv6Config)                                     // static v4: only the v6 leg runs
+                    : new DualStackAddressConfigurator(new DhcpV4Configurator(mac, port), new BestEffortIpv6Configurator(ipv6Config));
+                DhcpV4Configurator? dhcpForSeam = configurator is DualStackAddressConfigurator dual ? (DhcpV4Configurator)dual.Ipv4 : null;
+                return new EthernetHostSpec(dualResolver)
+                {
+                    Configurator = configurator,
+                    NonIpFrameHandler = arp.HandleInboundFrame,          // ARP rides the non-IP seam
+                    // NDISC (incl. RA), DHCPv4 (when present) and DHCPv6 all ride inside ordinary IP.
+                    IpPacketHandler = p =>
+                    {
+                        ndisc.HandleInboundFrame(p);
+                        dhcpForSeam?.HandleInboundFrame(p);
+                        ipv6Config.HandleInboundFrame(p);
+                    },
                 };
             }, cancellationToken).ConfigureAwait(false);
 
-            if (leased.Config.AssignedAddress is null || leased.Config.AssignedAddress.AddressFamily != AddressFamily.InterNetwork)
+            // A static-v4 station carries its pushed address (the configurator only ran the v6 leg); a DHCP station leased one.
+            IPAddress? v4 = staticAddress ?? leased.Config.AssignedAddress;
+            if (v4 != null && leased.Config.AssignedAddress is null)
+            {
+                leased.Config.AssignedAddress = staticAddress;          // static v4: merge it back (the v6 configurator left it null)
+                if (leased.Config.PrefixLength == 0) leased.Config.PrefixLength = 24;
+            }
+            if (v4 is null || v4.AddressFamily != AddressFamily.InterNetwork)
             {
                 await session.RemoveStationAsync(mac).ConfigureAwait(false);
                 throw new VpnConnectionException("OpenVPN tap multi-host DHCP did not lease an IPv4 address for the station (the bridge serves IPv4 via DHCP; ARP is IPv4-only).");
             }
-            arpRef?.SetLocalAddress(leased.Config.AssignedAddress);  // ARP now answers for the leased address
+            arpRef?.SetLocalAddress(v4);                                // ARP now answers for the station's v4 address
             return leased;
+        }
+
+        // Wraps an Ipv6AddressConfigurator so a bridge that advertises no IPv6 (no RA / no DHCPv6 lease) yields an empty
+        // IPv6 config instead of throwing — letting a station keep its IPv4 leg on an IPv4-only bridge. Cancellation still
+        // propagates. Mirrors SoftEtherConnection.BestEffortIpv6Configurator.
+        sealed class BestEffortIpv6Configurator : IAddressConfigurator, IAsyncDisposable
+        {
+            readonly Ipv6AddressConfigurator _inner;
+            public BestEffortIpv6Configurator(Ipv6AddressConfigurator inner) => _inner = inner;
+
+            public async ValueTask<TunnelConfig> ConfigureAsync(CancellationToken cancellationToken = default)
+            {
+                try { return await _inner.ConfigureAsync(cancellationToken).ConfigureAwait(false); }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+                catch { return new TunnelConfig(); }   // IPv4-only bridge: no v6 address, drop only the IPv6 leg
+            }
+
+            public ValueTask DisposeAsync() => _inner.DisposeAsync();
         }
 
         // ---- opcode demux: route inbound P_DATA_V2 to the data plane (control packets are the channel's job) ----
@@ -620,9 +765,17 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             _tapArp = null;
             if (tapArp != null) { try { await tapArp.DisposeAsync().ConfigureAwait(false); } catch { } }
 
+            NdiscResolver? tapNdisc = _tapNdisc;
+            _tapNdisc = null;
+            if (tapNdisc != null) { try { await tapNdisc.DisposeAsync().ConfigureAwait(false); } catch { } }
+
             DhcpV4Configurator? tapDhcp = _tapDhcp;
             _tapDhcp = null;
             if (tapDhcp != null) { try { await tapDhcp.DisposeAsync().ConfigureAwait(false); } catch { } }
+
+            Ipv6AddressConfigurator? tapIpv6Config = _tapIpv6Config;
+            _tapIpv6Config = null;
+            if (tapIpv6Config != null) { try { await tapIpv6Config.DisposeAsync().ConfigureAwait(false); } catch { } }
 
             _transport = null;
             _dataLink = null;
