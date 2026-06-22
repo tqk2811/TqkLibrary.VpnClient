@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Raw-IP datagram transport: a concrete IDatagramTransport over an OS raw socket (SocketType.Raw) that carries an arbitrary IP protocol (ESP proto-50, GRE proto-47) directly on IP with no UDP/TCP wrapper — the only userspace path for a custom IP protocol. Requires elevation (Windows Administrator / Linux root or CAP_NET_RAW); best-effort on Windows because the OS IPsec stack/firewall may withhold inbound proto-50. Consumers: L2TP/IPsec native-ESP fallback (roadmap P0.8c), PPTP/GRE (V.6b), IP-in-IP (V.8).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>
