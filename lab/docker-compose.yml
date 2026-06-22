@@ -1,0 +1,62 @@
+# =====================================================================
+# lab Q.1 — Docker compose để VALIDATE LIVE driver VPN của TqkLibrary.VpnClient
+# Chạy TRONG VM Ubuntu Server 24.04 (VMware). Client C#/.NET chạy trên Windows host,
+# nối tới IP của VM.
+#
+# ⚠️ BẢN NHÁP — chưa chạy thử lần nào. Lần đầu bring-up gần như chắc chắn phải
+#    tinh chỉnh config (version accel-ppp, tên option IPv6 ND, image strongSwan).
+#    Xem README-vi.md để biết runbook + bảng ánh xạ P1.1/P1.2/P1.3/P1.7/P0.8c.
+#
+# Vì sao network_mode: host cho cả 2 service VPN?
+#   - L2TP/IPsec dùng ESP (proto-50) + GRE (proto-47, PPTP) + UDP 500/4500/1701.
+#     Docker bridge NAT không forward được proto IP "lạ" (50/47) sạch sẽ; NAT cũng
+#     phá NAT-D của IKE (đúng cái P0.8c muốn TRÁNH — gateway no-NAT mong ESP proto-50).
+#   - SSTP TCP/443, PPTP TCP/1723 cũng publish luôn qua host.
+#   => Dùng host networking để container "nhìn" trực tiếp NIC của VM. Cái giá:
+#      2 service KHÔNG được nghe trùng cổng. Ở đây accel-ppp giữ 443/1701/1723,
+#      strongSwan giữ 500/4500 (+ESP). L2TP control 1701 do accel-ppp đảm nhận;
+#      strongSwan chỉ lo IKE+ESP (transport mode) bọc dưới L2TP của accel-ppp.
+# =====================================================================
+services:
+  # accel-ppp: SSTP (TCP/443) + L2TP (UDP/1701) + PPTP (TCP/1723), BẬT IPv6 pool +
+  # Router Advertisement trên ppp để cấp /64 GLOBAL qua SLAAC — validate P1.1(2).
+  accel-ppp:
+    build:
+      context: ./accel-ppp
+    image: lab-accel-ppp:24.04
+    container_name: lab-accel-ppp
+    network_mode: host
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN      # tạo ppp interface, gán địa chỉ, route
+      - NET_RAW        # gửi Router Advertisement / ICMPv6
+    # ppp cần /dev/ppp. Trên host Ubuntu nạp module: sudo modprobe ppp_generic
+    devices:
+      - /dev/ppp:/dev/ppp
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv6.conf.all.forwarding: "1"
+    volumes:
+      # Cert SSTP self-signed sinh bởi entrypoint, persist để client pin lại nếu muốn.
+      - accel-certs:/etc/accel-ppp/certs
+
+  # strongSwan: L2TP/IPsec IKEv1 PSK (transport mode) — 2 kịch bản:
+  #   (a) conn ikelifetime NGẮN ép rekey Phase1 (P1.3)
+  #   (b) conn no-NAT (không forceencaps) cho ESP proto-50 (P0.8c)
+  # IKE giữ UDP/500, ESP proto-50; khi sau-NAT thì float 4500 (mặc định strongSwan).
+  strongswan:
+    build:
+      context: ./strongswan
+    image: lab-strongswan:latest
+    container_name: lab-strongswan
+    network_mode: host
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    privileged: true   # nhiều build strongSwan cần để cài SA vào kernel XFRM; thu hẹp sau khi chạy được
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv6.conf.all.forwarding: "1"
+
+volumes:
+  accel-certs:
