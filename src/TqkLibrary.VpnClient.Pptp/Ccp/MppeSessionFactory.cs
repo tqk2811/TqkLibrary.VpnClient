@@ -43,5 +43,32 @@ namespace TqkLibrary.VpnClient.Pptp.Ccp
             var receive = new MppeSession(receiveStart, strength, stateless);
             return (send, receive);
         }
+
+        /// <summary>
+        /// Derives the <b>server's</b> send + receive <see cref="MppeSession"/> — the mirror of
+        /// <see cref="CreateClientSessions"/> with RFC 3079 §3.3 <c>isServer:true</c>, so the server's send key equals
+        /// the client's receive key and vice versa (the two ends interoperate). Symmetric helper used by the PPTP
+        /// data plane's peer/responder role and by offline tests; the same MS-CHAPv2 <paramref name="ntResponse"/>
+        /// (24 bytes) and <paramref name="password"/> the client used.
+        /// </summary>
+        /// <returns>A tuple of <c>send</c> (encrypt the server's outbound payloads) and <c>receive</c> (decrypt the client's).</returns>
+        public static (MppeSession send, MppeSession receive) CreateServerSessions(
+            string password, byte[] ntResponse, MppeConfigOption negotiated)
+        {
+            if (negotiated is null) throw new ArgumentNullException(nameof(negotiated));
+            if (!negotiated.HasEncryption)
+                throw new InvalidOperationException("Negotiated CCP option carries no MPPE encryption strength.");
+
+            MppeKeyStrength strength = negotiated.Strength;
+            bool stateless = negotiated.Stateless;
+
+            byte[] masterKey = MsChapV2.DeriveMppeMasterKey(password, ntResponse);
+            byte[] sendStart = MsChapV2.DeriveMppeSendStartKey(masterKey, isServer: true);
+            byte[] receiveStart = MsChapV2.DeriveMppeReceiveStartKey(masterKey, isServer: true);
+
+            var send = new MppeSession(sendStart, strength, stateless);
+            var receive = new MppeSession(receiveStart, strength, stateless);
+            return (send, receive);
+        }
     }
 }

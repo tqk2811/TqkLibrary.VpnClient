@@ -2,9 +2,9 @@
 
 Thư viện **protocol PPTP** (Point-to-Point Tunneling Protocol, RFC 2637; server opensource **poptop**/**accel-ppp**) thuần .NET cho driver **V.6**. Project protocol-level: codec control-connection TCP/1723, state machine control, và **CCP negotiator** ghép option **MPPE** (RFC 3078/3079, đã có ở [Crypto](../TqkLibrary.VpnClient.Crypto)) vào tầng [PPP](../TqkLibrary.VpnClient.Ppp) sẵn có.
 
-> **Trạng thái:** **V6.a — phần OFFLINE xong** (code + test offline). Đã có: (1) **codec control TCP/1723** — `PptpControlCodec` encode/decode đúng wire RFC 2637 cho mọi control message (SCCRQ/SCCRP, OCRQ/OCRP, Echo-Request/Reply, Set-Link-Info, Call-Clear-Request, Call-Disconnect-Notify, Stop-Control-Connection-Request/Reply) + reassembler streaming qua mọi ranh đọc TCP; (2) **state machine control** — `PptpControlConnection` chạy luồng client (PNS): SCCRQ→SCCRP → OCRQ→OCRP → Echo keep-alive → Call-Clear/Stop, trên một [`IByteStreamTransport`](../TqkLibrary.VpnClient.Abstractions/Transport/Interfaces/IByteStreamTransport.cs); (3) **CCP/MPPE negotiator** — `CcpNegotiator` (kế thừa [`PppNegotiator`](../TqkLibrary.VpnClient.Ppp/PppNegotiator.cs#L11) dùng chung) thương lượng option MPPE đơn (RFC 2118/3078), `MppeConfigOption` codec 4-byte supported-bits, `MppeSessionFactory` dựng cặp [`MppeSession`](../TqkLibrary.VpnClient.Crypto/Mppe/MppeSession.cs#L16) từ MS-CHAPv2 + kết quả CCP.
+> **Trạng thái:** **V6.a + V6.b (data plane) — phần OFFLINE xong** (code + test offline). Đã có: (1) **codec control TCP/1723** — `PptpControlCodec` encode/decode đúng wire RFC 2637 cho mọi control message (SCCRQ/SCCRP, OCRQ/OCRP, Echo-Request/Reply, Set-Link-Info, Call-Clear-Request, Call-Disconnect-Notify, Stop-Control-Connection-Request/Reply) + reassembler streaming qua mọi ranh đọc TCP; (2) **state machine control** — `PptpControlConnection` chạy luồng client (PNS): SCCRQ→SCCRP → OCRQ→OCRP → Echo keep-alive → Call-Clear/Stop, trên một [`IByteStreamTransport`](../TqkLibrary.VpnClient.Abstractions/Transport/Interfaces/IByteStreamTransport.cs); (3) **CCP/MPPE negotiator** — `CcpNegotiator` (kế thừa [`PppNegotiator`](../TqkLibrary.VpnClient.Ppp/PppNegotiator.cs#L11) dùng chung) thương lượng option MPPE đơn (RFC 2118/3078), `MppeConfigOption` codec 4-byte supported-bits, `MppeSessionFactory` dựng cặp [`MppeSession`](../TqkLibrary.VpnClient.Crypto/Mppe/MppeSession.cs#L16) từ MS-CHAPv2 + kết quả CCP; (4) **GRE + MPPE data plane** — `PptpGreCodec`/`PptpGrePacket` (Enhanced GRE RFC 2637 §4.1), `PptpGreChannel` (`IPppFrameChannel` trên [`IDatagramTransport`](../TqkLibrary.VpnClient.Abstractions/Transport/Interfaces/IDatagramTransport.cs) proto-47 — seq/ack §4.4, receive-loop), `MppePppFrameChannel` (decorator chạy CCP nội bộ + mã hóa MPPE giữa `PppEngine` ↔ GRE).
 >
-> **KHÔNG làm ở phase này (cần F.9 raw-IP, elevate):** **GRE data plane (IP proto 47)** — vận chuyển gói PPP/MPPE thật cần raw socket IP, là **đường duy nhất** trong userspace để gửi/nhận proto-47. Khi có **F.9 `Transport.RawIp`** mới ráp data plane + driver runtime. Phase này chỉ control + CCP negotiate + ráp PPP, test **offline** toàn bộ.
+> **KHÔNG làm ở phase này (cần F.9 raw-IP, elevate):** **driver runtime** — `PptpGreChannel` cần một `IDatagramTransport` proto-47 thật (raw socket IP, **đường duy nhất** userspace gửi/nhận proto-47). Khi có **F.9 `Transport.RawIp`** mới ráp project driver `Drivers.Pptp` + supervisor/reconnect + `UsePptp`. Phase này codec + channel + decorator test **offline** toàn bộ.
 >
 > **CẢNH BÁO BẢO MẬT:** MS-CHAPv2 + MPPE/RC4 **đã bị phá** (MS-CHAPv2 brute-force DES, MPPE không toàn vẹn) — chỉ dùng để **tương thích** server PPTP cũ, **không** dùng cho dữ liệu nhạy cảm.
 
@@ -16,9 +16,9 @@ Thư viện **protocol PPTP** (Point-to-Point Tunneling Protocol, RFC 2637; serv
 
 | Hướng | Project | Lý do |
 |-------|---------|-------|
-| Dùng | [Abstractions](../TqkLibrary.VpnClient.Abstractions) | [`IByteStreamTransport`](../TqkLibrary.VpnClient.Abstractions/Transport/Interfaces/IByteStreamTransport.cs) (control-connection TCP/1723) |
+| Dùng | [Abstractions](../TqkLibrary.VpnClient.Abstractions) | [`IByteStreamTransport`](../TqkLibrary.VpnClient.Abstractions/Transport/Interfaces/IByteStreamTransport.cs) (control TCP/1723), [`IDatagramTransport`](../TqkLibrary.VpnClient.Abstractions/Transport/Interfaces/IDatagramTransport.cs) (GRE proto-47), `ILogger` (transitive `Microsoft.Extensions.Logging.Abstractions`) |
 | Dùng | [Crypto](../TqkLibrary.VpnClient.Crypto) | MPPE F.5b: [`MsChapV2`](../TqkLibrary.VpnClient.Crypto/MsChapV2.cs) (`DeriveMppe*StartKey`), [`MppeSession`](../TqkLibrary.VpnClient.Crypto/Mppe/MppeSession.cs#L16), [`MppeKeyStrength`](../TqkLibrary.VpnClient.Crypto/Mppe/Enums/MppeKeyStrength.cs) |
-| Dùng | [Ppp](../TqkLibrary.VpnClient.Ppp) | [`PppNegotiator`](../TqkLibrary.VpnClient.Ppp/PppNegotiator.cs#L11) (CCP kế thừa), [`PppControlCodec`](../TqkLibrary.VpnClient.Ppp/PppControlCodec.cs#L9)/[`PppOption`](../TqkLibrary.VpnClient.Ppp/Models/PppOption.cs#L4), `PppProtocol.Ccp`/`Compressed` |
+| Dùng | [Ppp](../TqkLibrary.VpnClient.Ppp) | [`PppNegotiator`](../TqkLibrary.VpnClient.Ppp/PppNegotiator.cs#L11) (CCP kế thừa), [`PppControlCodec`](../TqkLibrary.VpnClient.Ppp/PppControlCodec.cs#L9)/[`PppOption`](../TqkLibrary.VpnClient.Ppp/Models/PppOption.cs#L4), [`IPppFrameChannel`](../TqkLibrary.VpnClient.Ppp/Interfaces/IPppFrameChannel.cs) (GRE + MPPE decorator hiện thực), `PppProtocol.Ccp`/`Compressed`/`Lcp`/`Ip` |
 | Được dùng bởi | *(chưa)* driver `Drivers.Pptp` (V.6 — sau F.9) |
 
 > `System.Buffers.Binary.BinaryPrimitives` (big-endian codec) + `System.Threading.Channels` (test) có cả 2 TFM.
@@ -48,10 +48,15 @@ TqkLibrary.VpnClient.Pptp/
 │  ├─ SetLinkInfo.cs                                                      Set-Link-Info (§2.15)
 │  ├─ CallClearRequest.cs / CallDisconnectNotify.cs                       Call-Clear/CDN (§2.12/§2.13)
 │  └─ StopControlConnectionRequest.cs / StopControlConnectionReply.cs     Stop-CC (§2.3/§2.4)
-└─ Ccp/
-   ├─ MppeConfigOption.cs        Codec option MPPE (4-byte supported-bits ↔ MppeKeyStrength + stateless)
-   ├─ CcpNegotiator.cs           Negotiator CCP (kế thừa PppNegotiator): offer/ack/Nak/reject option MPPE
-   └─ MppeSessionFactory.cs      Dựng cặp MppeSession (send/receive) từ MS-CHAPv2 + kết quả CCP
+├─ Ccp/
+│  ├─ MppeConfigOption.cs        Codec option MPPE (4-byte supported-bits ↔ MppeKeyStrength + stateless)
+│  ├─ CcpNegotiator.cs           Negotiator CCP (kế thừa PppNegotiator): offer/ack/Nak/reject option MPPE
+│  ├─ MppeSessionFactory.cs      Dựng cặp MppeSession (send/receive) từ MS-CHAPv2 + kết quả CCP
+│  └─ MppePppFrameChannel.cs     Decorator IPppFrameChannel: chạy CCP nội bộ + mã hóa/giải mã MPPE (PppEngine ↔ GRE)
+└─ Gre/
+   ├─ PptpGrePacket.cs           Model một gói Enhanced GRE (CallId/Seq/Ack/Payload)
+   ├─ PptpGreCodec.cs            Codec static Encode/TryDecode Enhanced GRE (RFC 2637 §4.1)
+   └─ PptpGreChannel.cs          Kênh data plane IPppFrameChannel trên IDatagramTransport proto-47 (seq/ack §4.4)
 ```
 
 ## Bảng type
@@ -70,6 +75,10 @@ TqkLibrary.VpnClient.Pptp/
 | `MppeConfigOption` | codec option MPPE: `EncodeValue`/`DecodeValue` (4-byte BE) ↔ `Strength` ([`MppeKeyStrength`](../TqkLibrary.VpnClient.Crypto/Mppe/Enums/MppeKeyStrength.cs))/`Stateless`; bit mạnh nhất thắng khi nhiều bit | [Ccp/MppeConfigOption.cs:19](Ccp/MppeConfigOption.cs#L19) |
 | `CcpNegotiator` | negotiator CCP kế thừa [`PppNegotiator`](../TqkLibrary.VpnClient.Ppp/PppNegotiator.cs#L11): offer option MPPE, `OnNak` adopt cường độ server pin, `EvaluatePeerRequest` cap về cường độ tối đa + pin 1 bit, `OnReject` ⇒ `NotSupportedException`; lộ `NegotiatedStrength`/`NegotiatedStateless` sau `Opened` | [Ccp/CcpNegotiator.cs:22](Ccp/CcpNegotiator.cs#L22) |
 | `MppeSessionFactory` | static `CreateClientSessions(password, ntResponse, negotiated)` → cặp [`MppeSession`](../TqkLibrary.VpnClient.Crypto/Mppe/MppeSession.cs#L16) send/receive (RFC 3079 asymmetric start keys) | [Ccp/MppeSessionFactory.cs:20](Ccp/MppeSessionFactory.cs#L20) |
+| `PptpGrePacket` | model 1 gói Enhanced GRE: `ushort CallId`, `uint? SequenceNumber`, `uint? AckNumber`, `ReadOnlyMemory<byte> Payload` (`init`) | [Gre/PptpGrePacket.cs:11](Gre/PptpGrePacket.cs#L11) |
+| `PptpGreCodec` | static `Encode(packet)`/`TryDecode(span, out packet)` Enhanced GRE (RFC 2637 §4.1): K=1, Ver=1, ProtocolType=0x880B, Key high=payload-len + low=Call ID, Seq (S=1)/Ack (A=1) tùy chọn; `TryDecode` reject sai version/proto-type/thiếu Key/truncated | [Gre/PptpGreCodec.cs:21](Gre/PptpGreCodec.cs#L21) |
+| `PptpGreChannel` | `IPppFrameChannel`+`IAsyncDisposable` trên [`IDatagramTransport`](../TqkLibrary.VpnClient.Abstractions/Transport/Interfaces/IDatagramTransport.cs) proto-47: `ctor(transport, localCallId, peerCallId, ILogger?)` · `Start()` chạy receive-loop · gửi strip `FF 03`, seq tăng/ack piggyback (§4.4); nhận lọc theo `localCallId`, re-prepend `FF 03` raise `FrameReceived` | [Gre/PptpGreChannel.cs:21](Gre/PptpGreChannel.cs#L21) |
+| `MppePppFrameChannel` | decorator `IPppFrameChannel` giữa `PppEngine` ↔ GRE: `ctor(inner, keyProvider, preferredStrength=128, stateless=false)` · `StartCcp()` · `CcpOpenedTask`/`CcpOpened`/`IsActive`; LCP plaintext, còn lại mã hóa `MppeSession` → proto 0x00FD khi CCP Opened; nhận CCP (0x80FD) tự xử, Compressed (0x00FD) giải mã, còn lại pass-through | [Ccp/MppePppFrameChannel.cs:23](Ccp/MppePppFrameChannel.cs#L23) |
 
 ## Wire control RFC 2637 (header chung 12-byte)
 
@@ -88,13 +97,28 @@ Length(2 BE) | PPTP-Message-Type(2 BE) | Magic-Cookie(4 = 0x1A2B3C4D) | Control-
 - **Negotiate** (`CcpNegotiator` trên `PppNegotiator`): client offer cường độ ưu tiên (mặc định 128-bit, stateful); server thường **Nak** để pin một cường độ → client `OnNak` adopt; client `EvaluatePeerRequest` cap offer của peer về cường độ tối đa của mình + pin **đúng một bit** (RFC 3078 §3.1). Peer **reject** option MPPE ⇒ `NotSupportedException` (không có gì để mã hóa).
 - **Ráp khóa data plane** (`MppeSessionFactory`): `MasterKey = MsChapV2.DeriveMppeMasterKey(password, ntResponse)` → `Send/ReceiveStartKey` (RFC 3079 §3.3 asymmetric) → cặp `MppeSession` (client encrypt bằng send, decrypt bằng receive). Khóa **đối xứng** với server (receive-start server = send-start client) — phủ test interop encrypt/decrypt 2 chiều cho cả 40/56/128-bit + stateless.
 
+## GRE data plane (RFC 2637 §4 — Enhanced GRE, IP proto 47)
+
+```
+Byte0: C R K S s Recur(3)   → 0x30 khi có payload (K=1,S=1) / 0x20 ack-only (K=1,S=0)
+Byte1: A Flags(4) Ver(3)    → 0x01 (no ack) / 0x81 (A=1); Ver=1 (enhanced)
+Bytes2-3: ProtocolType      = 0x880B
+Bytes4-5: Key high word     = Payload Length
+Bytes6-7: Key low word      = Call ID
+[Seq(4 BE) nếu S=1] [Ack(4 BE) nếu A=1] [Payload]
+```
+
+- **`PptpGreCodec`** (pure static): `Encode` ráp header trên + payload; `TryDecode` validate Ver==1, ProtocolType==0x880B, bit K set, bounds-check → `false` nếu malformed (sai version/proto-type/thiếu Key/truncated).
+- **`PptpGreChannel`** (`IPppFrameChannel` trên `IDatagramTransport`): gửi strip `FF 03` (GRE chở PPP **không** HDLC Address/Control), stamp `peerCallId`, **seq tăng mỗi gói payload**, **ack piggyback** = seq cao nhất nhận được (§4.4); receive-loop kiểu native-ESP (identity-guard + dispose-để-unblock) lọc gói theo `localCallId`, re-prepend `FF 03` rồi raise `FrameReceived`. Gói ack-only (không payload) chỉ cập nhật sổ ack.
+- **`MppePppFrameChannel`** (decorator): chạy CCP **bên trong** (PppEngine không thấy 0x80FD), khi CCP `Opened` thì `keyProvider()` → `MppeSessionFactory.CreateClientSessions` → bật MPPE; gửi LCP plaintext, còn lại `MppeSession.Encrypt` → `[FF 03][00 FD][cipher]`; nhận Compressed → `Decrypt` → raise lên, các proto khác pass-through. Cờ active + sessions khóa bằng `lock`.
+
 ## Luồng nội bộ (control plane, client)
 
 1. **Control connection.** `EstablishControlConnectionAsync` gửi `StartControlConnectionRequest` → đọc `StartControlConnectionReply`; `ResultCode != Successful` ⇒ `InvalidOperationException` (server từ chối) — [PptpControlConnection.cs:68](PptpControlConnection.cs#L68).
 2. **Place call.** `PlaceOutgoingCallAsync(callId)` gửi `OutgoingCallRequest` (CallID = GRE Call-ID ta nhận) → đọc `OutgoingCallReply`; thành công ghi `PeerCallId` = `reply.CallId` (Call-ID ta gắn lên gói GRE gửi đi) — [PptpControlConnection.cs:99](PptpControlConnection.cs#L99).
 3. **Keep-alive & link-info.** `SendEchoRequestAsync` (peer phải Echo-Reply cùng Identifier) + `SendSetLinkInfoAsync` (ACCM) — [PptpControlConnection.cs:131](PptpControlConnection.cs#L131). `ReadMessageAsync` **auto-reply** mọi `Echo-Request` nhận được — [PptpControlConnection.cs:181](PptpControlConnection.cs#L181).
 4. **Teardown.** `ClearCallAsync` (Call-Clear-Request → Call-Disconnect-Notify, về `ControlConnectionEstablished`) rồi `StopControlConnectionAsync` (Stop-Request → Stop-Reply, về `Closed`) — [PptpControlConnection.cs:147](PptpControlConnection.cs#L147).
-5. *(Sau, V.6 + F.9)* PPP (`PppEngine`: LCP/MS-CHAPv2/IPCP) + `CcpNegotiator` chạy **trên kênh GRE** dựng từ `LocalCallId`/`PeerCallId`; `MppeSession` từ `MppeSessionFactory` mã hóa payload PPP. **Chưa làm — cần raw-IP F.9.**
+5. **Data plane (offline xong, V6.b).** `PptpGreChannel` (dựng từ `LocalCallId`/`PeerCallId` trên `IDatagramTransport` proto-47) ↔ `MppePppFrameChannel` ↔ `PppEngine` (LCP/MS-CHAPv2/IPCP **tái dùng nguyên**). Decorator chạy `CcpNegotiator` nội bộ; khi CCP Opened → `MppeSessionFactory` dựng cặp `MppeSession` mã hóa payload PPP thành proto 0x00FD. **Còn lại — cần raw-IP F.9:** một `IDatagramTransport` proto-47 thật + project driver `Drivers.Pptp` (supervisor/reconnect + `UsePptp`) + validate live.
 
 ## Bảng chuẩn / nguồn
 
@@ -104,12 +128,13 @@ Length(2 BE) | PPTP-Message-Type(2 BE) | Magic-Cookie(4 = 0x1A2B3C4D) | Control-
 | **RFC 1962** (CCP) | `CcpNegotiator` | option-negotiation TLV trên PPP 0x80FD |
 | **RFC 2118** (MPPC) / **RFC 3078** (MPPE) | `MppeConfigOption`, `CcpNegotiator` | option type 18, 4-byte supported-bits §3.1 |
 | **RFC 3079** (suy khóa MPPE) | `MppeSessionFactory` | asymmetric Send/Receive start key §3.3 (qua [Crypto](../TqkLibrary.VpnClient.Crypto/MsChapV2.cs)) |
+| **RFC 2637 §4** (Enhanced GRE) | `PptpGreCodec`/`PptpGreChannel` | §4.1 header (K=1/Ver=1/0x880B, Key high=len + low=Call ID), §4.3 PPP không HDLC AC, §4.4 seq/ack |
 | poptop / accel-ppp (behavior) | interop | re-implement từ spec/behavior — **không copy code GPL** |
 
 ## Trạng thái & ghi chú
 
 - **Thuần protocol, thuần client (PNS):** codec không I/O; `PptpControlConnection` chạy I/O **qua seam `IByteStreamTransport`** (socket TCP/1723 do driver cấp), không tự mở socket. Re-implement từ RFC 2637 + behavior poptop/accel-ppp (**không copy GPL source**).
-- **Phạm vi OFFLINE V6.a:** control codec + state machine + CCP/MPPE negotiate + ráp khóa MPPE. **GRE data plane (proto 47)** + driver runtime **chưa làm** — cần **F.9 `Transport.RawIp`** (raw socket, elevate). Khác biệt design ghi ở [`.docs/10`](../../.docs/10-codebase-architecture-and-flow.md).
+- **Phạm vi OFFLINE V6.a + V6.b:** control codec + state machine + CCP/MPPE negotiate + ráp khóa MPPE + **GRE codec/channel + decorator MPPE** (data plane, `IPppFrameChannel` trên `IDatagramTransport`). **Driver runtime** (raw-IP proto-47 thật + `Drivers.Pptp`) **chưa làm** — cần **F.9 `Transport.RawIp`** (raw socket, elevate). Khác biệt design ghi ở [`.docs/10`](../../.docs/10-codebase-architecture-and-flow.md).
 - **Bảo mật:** MS-CHAPv2 + MPPE/RC4 **đã bị phá** — chỉ để tương thích server PPTP cũ.
 - Build xanh cả `netstandard2.0` + `net8.0`. Codec dùng `BinaryPrimitives` + `Span` (cả 2 TFM qua `System.Memory`); reassembly dùng `List<byte>` (zero-alloc là Q.4). `record`/`init` khả dụng cả 2 TFM nhờ polyfill `TqkLibrary.CompilerServices` ở [Directory.Build.props:16-25](../Directory.Build.props#L16-L25).
 - Lộ trình V.6 đầy đủ ở [`.docs/11`](../../.docs/11-todo-roadmap.md) §V.6.

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>PPTP (RFC 2637) VPN protocol driver runtime: TCP/1723 control connection, GRE (proto-47) data plane, MPPE (RFC 3078/3079), PPP/MS-CHAPv2; Echo-Request keepalive, teardown, auto-reconnect. Legacy and cryptographically insecure — interop only; GRE needs a raw-IP transport (elevation).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.Core\TqkLibrary.VpnClient.Drivers.Core.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Ppp\TqkLibrary.VpnClient.Ppp.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Pptp\TqkLibrary.VpnClient.Pptp.csproj" />
+  </ItemGroup>
+
+</Project>

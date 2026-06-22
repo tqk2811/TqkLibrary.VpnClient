@@ -13,6 +13,7 @@
     <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.Sstp\TqkLibrary.VpnClient.Drivers.Sstp.csproj" />
     <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.WireGuard\TqkLibrary.VpnClient.Drivers.WireGuard.csproj" />
     <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.SoftEther\TqkLibrary.VpnClient.Drivers.SoftEther.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.Pptp\TqkLibrary.VpnClient.Drivers.Pptp.csproj" />
   </ItemGroup>
 
 </Project>

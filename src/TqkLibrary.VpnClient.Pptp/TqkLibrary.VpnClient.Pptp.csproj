@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <Description>PPTP (RFC 2637) protocol: TCP/1723 control-connection codec (SCCRQ/SCCRP, OCRQ/OCRP, Echo, Set-Link-Info, Call-Clear/CDN), control-channel state machine, and a CCP negotiator that wires the legacy MPPE option (RFC 3078/3079) into the existing PPP stack. Offline only — the GRE proto-47 data plane needs raw-IP (F.9) and is not built here.</Description>
+    <Description>PPTP (RFC 2637) protocol: TCP/1723 control-connection codec (SCCRQ/SCCRP, OCRQ/OCRP, Echo, Set-Link-Info, Call-Clear/CDN), control-channel state machine, a CCP negotiator that wires the legacy MPPE option (RFC 3078/3079) into the existing PPP stack, and the GRE (proto-47) + MPPE data plane (Enhanced GRE codec/channel + MPPE IPppFrameChannel decorator). Offline only — the live raw-IP proto-47 transport (F.9) and the Drivers.Pptp runtime are not built here.</Description>
   </PropertyGroup>
 
   <ItemGroup>

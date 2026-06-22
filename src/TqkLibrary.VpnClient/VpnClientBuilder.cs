@@ -7,6 +7,7 @@ using TqkLibrary.VpnClient.Drivers.L2tpIpsec;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec.Enums;
 using TqkLibrary.VpnClient.Drivers.OpenConnect;
 using TqkLibrary.VpnClient.Drivers.OpenVpn;
+using TqkLibrary.VpnClient.Drivers.Pptp;
 using TqkLibrary.VpnClient.Drivers.SoftEther;
 using TqkLibrary.VpnClient.Drivers.Sstp;
 using TqkLibrary.VpnClient.Drivers.WireGuard;
@@ -61,6 +62,19 @@ namespace TqkLibrary.VpnClient
             L2tpIpsecNatTraversalMode natTraversalMode = L2tpIpsecNatTraversalMode.HonestFirst,
             L2tpIpsecReconnectOptions? reconnectOptions = null, L2tpIpsecTimeoutOptions? timeoutOptions = null)
             => AddDriver(new L2tpIpsecDriver(reconnectOptions, timeoutOptions, natTraversalMode, rawIpFactory: rawIpFactory));
+
+        /// <summary>
+        /// Registers the PPTP driver (RFC 2637): a TCP/1723 control connection, a GRE (proto-47) data plane, MPPE
+        /// (RFC 3078/3079) and PPP/MS-CHAPv2. The GRE data plane needs <paramref name="rawIpFactory"/> (raw IP
+        /// proto-47 — requires elevation; pass <c>new RawIpTransportFactory()</c> from
+        /// <c>TqkLibrary.VpnClient.Transport.RawIp</c>). <paramref name="reconnectOptions"/> tunes (or disables)
+        /// auto-reconnect; <paramref name="timeoutOptions"/> tunes the handshake timeout and Echo keepalive interval.
+        /// <para><b>PPTP + MS-CHAPv2 + MPPE/RC4 is legacy and cryptographically insecure</b> — interop only; prefer
+        /// L2TP/IPsec, IKEv2, OpenVPN or WireGuard for any new deployment.</para>
+        /// </summary>
+        public VpnClientBuilder UsePptp(IRawIpTransportFactory rawIpFactory,
+            PptpReconnectOptions? reconnectOptions = null, PptpTimeoutOptions? timeoutOptions = null)
+            => AddDriver(new PptpDriver(rawIpFactory, reconnectOptions, timeoutOptions));
 
         /// <summary>Registers the IKEv2-native driver (RFC 7296 PSK + NAT-T, CP virtual IP, ESP tunnel mode) with auto-reconnect enabled by default.</summary>
         public VpnClientBuilder UseIkev2() => AddDriver(new Ikev2Driver());
