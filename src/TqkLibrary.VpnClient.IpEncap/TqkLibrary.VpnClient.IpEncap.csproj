@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Plain (UNENCRYPTED) IP-in-IP encapsulation tunnels carried on a raw-IP datagram transport (F.9): standard GRE (RFC 2784/2890, proto-47 — distinct from PPTP's Enhanced GRE), IPIP (RFC 2003, proto-4), and SIT/6in4 (RFC 4213, proto-41). Each exposes an L3 IPacketChannel: a stateless GRE codec + GreTunnelChannel, and a family-agnostic RawIpPassthroughChannel reused for IPIP and SIT. Offline codecs + channels only — drivers, EtherIP/L2TPv3, and live validation are deferred (roadmap V.8 phase a). No encryption — use only on trusted networks or under IPsec ESP.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

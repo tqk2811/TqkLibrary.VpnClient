@@ -8,5 +8,11 @@ namespace TqkLibrary.VpnClient.Transport.RawIp
 
         /// <summary>Generic Routing Encapsulation (GRE, used by PPTP) — IANA IP protocol 47.</summary>
         public const int Gre = 47;
+
+        /// <summary>IP-in-IP encapsulation (IPv4-in-IPv4, RFC 2003) — IANA IP protocol 4.</summary>
+        public const int IpIp = 4;
+
+        /// <summary>SIT / 6in4 (IPv6-in-IPv4, RFC 4213) — IANA IP protocol 41.</summary>
+        public const int Sit = 41;
     }
 }
