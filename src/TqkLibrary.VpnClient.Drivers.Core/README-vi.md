@@ -31,6 +31,7 @@
 ```
 TqkLibrary.VpnClient.Drivers.Core/
 ├─ ReconnectingVpnConnection.cs     Base abstract: facade + lifetime CTS + state lock + supervisor (OnLinkLost/ReconnectLoopAsync/WithJitter) + SetState/StateChanged + clock đơn điệu + teardown; hook abstract: EstablishAsync/CleanupAttemptResourcesAsync/StopAttemptLoop + 4 state-value + OnReconnected
+├─ TunnelConfigIpv6.cs              Helper static (P1.1): ApplyGlobalIpv6(target, v6) merge fragment IPv6 global (prefix length + DNS v6 + route ::/0) vào TunnelConfig — dùng chung SSTP + L2TP/IPsec
 └─ Models/
    └─ VpnReconnectOptions.cs        Policy chung: Enabled/MaxAttempts/InitialBackoff/MaxBackoff/BackoffMultiplier/JitterFraction + NextBackoff(); driver kế thừa thêm knob riêng (vd SSTP ReadTimeout)
 ```
@@ -41,6 +42,7 @@ TqkLibrary.VpnClient.Drivers.Core/
 |------|---------|--------|
 | `ReconnectingVpnConnection<TState>` | Base abstract (generic theo enum state của driver). Sở hữu: `SwappablePacketChannel Facade`, `LifetimeToken`, lock + cờ `IsRunning`/`IsUserTeardown` + `_supervisorActive`, máy **link-loss → supervisor → reconnect-loop** (backoff mũ + ±jitter), `SetState`/`StateChanged` + log có cấu trúc, clock đơn điệu (`Now()`), teardown (`DisconnectCoreAsync`/`DisposeCoreAsync`). Hook protocol: abstract `EstablishAsync`/`CleanupAttemptResourcesAsync`/`StopAttemptLoop` + 4 thuộc tính state-value + virtual `OnReconnected`. Lifecycle cho subclass gọi: `ConnectCoreAsync`/`MarkRunning`/`MarkConnected`/`OnLinkLost`. Helper khác: `WithJitter`/`NextRandomBytes`. | [ReconnectingVpnConnection.cs:24](ReconnectingVpnConnection.cs#L24) |
 | `VpnReconnectOptions` | Policy reconnect/backoff/jitter chung (class **không** sealed — driver kế thừa). `NextBackoff(current)` = `min(MaxBackoff, current × BackoffMultiplier)`. | [Models/VpnReconnectOptions.cs:14](Models/VpnReconnectOptions.cs#L14) |
+| `TunnelConfigIpv6` | Helper static (**P1.1**): `ApplyGlobalIpv6(target, v6)` merge fragment IPv6 **global** (prefix length + DNS v6 + route `::/0`) mà driver PPP lấy được (SLAAC/DHCPv6) vào `TunnelConfig`; địa chỉ global do caller set, no-op khi chưa có global (chỉ link-local). Dùng chung SSTP + L2TP/IPsec (cả hai chạy PPP + lấy global cùng cách). | [TunnelConfigIpv6.cs:12](TunnelConfigIpv6.cs#L12) |
 
 ## Hợp đồng base ↔ subclass
 
