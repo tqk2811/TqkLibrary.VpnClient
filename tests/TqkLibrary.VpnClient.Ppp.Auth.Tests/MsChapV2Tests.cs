@@ -43,17 +43,20 @@ namespace TqkLibrary.VpnClient.Ppp.Auth.Tests
         }
 
         [Fact]
-        public void DeriveMsk_IsRecvThenSend_PaddedTo64()
+        public void DeriveMsk_IsSendThenRecv_PaddedTo64()
         {
-            // EAP-MSCHAPv2 MSK = MasterReceiveKey || MasterSendKey || zeros(32); HLAK = MasterSendKey || MasterReceiveKey.
-            // Cross-checking against HLAK pins the peer-perspective ordering without an external vector.
+            // EAP-MSCHAPv2 MSK is laid out from the authenticator/server view so peer and server agree; the peer (this
+            // client) therefore emits its own send-key || receive-key (the dual of the server's recv||send). That is the
+            // SAME ordering as the HLAK (MasterSendKey || MasterReceiveKey), so cross-checking against HLAK pins the
+            // ordering without an external vector. (Validated live against strongSwan: the reversed order still passes
+            // EAP but fails the gateway's IKEv2 AUTH-with-MSK check — see lab/ikev2-native.)
             byte[] ntResponse = MsChapV2.GenerateNTResponse(AuthenticatorChallenge, PeerChallenge, UserName, Password);
             byte[] msk = MsChapV2.DeriveMsk(Password, ntResponse);
             byte[] hlak = MsChapV2.DeriveHlak(Password, ntResponse);
 
             Assert.Equal(64, msk.Length);
-            Assert.Equal(hlak[16..32], msk[0..16]);   // MSK receive-key = HLAK's second half
-            Assert.Equal(hlak[0..16], msk[16..32]);   // MSK send-key    = HLAK's first half
+            Assert.Equal(hlak[0..16], msk[0..16]);    // MSK send-key    = HLAK's first half
+            Assert.Equal(hlak[16..32], msk[16..32]);  // MSK receive-key = HLAK's second half
             Assert.All(msk[32..64], b => Assert.Equal(0, b));
         }
     }

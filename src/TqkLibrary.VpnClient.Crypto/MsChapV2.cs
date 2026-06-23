@@ -99,21 +99,26 @@ namespace TqkLibrary.VpnClient.Crypto
 
         /// <summary>
         /// Derives the 64-byte EAP-MSK for EAP-MSCHAPv2 (RFC 3079 / draft-kamath-pppext-eap-mschapv2): the IKEv2
-        /// EAP exchange feeds this key into the AUTH payload (RFC 7296 §2.16). Layout matches strongSwan /
-        /// wpa_supplicant — <c>MasterReceiveKey(16) || MasterSendKey(16) || 32 zero bytes</c>, both keys computed
-        /// from the peer's perspective (IsServer = false).
+        /// EAP exchange feeds this key into the AUTH payload (RFC 7296 §2.16). Both peer and authenticator must reach
+        /// the <em>same</em> MSK, so the layout is fixed from the <b>authenticator/server</b> perspective —
+        /// <c>MasterReceiveKey(server) || MasterSendKey(server) || 32 zero bytes</c> — which the peer computes from its
+        /// own keys via the duality <c>MasterReceiveKey(server) == client-send</c> and <c>MasterSendKey(server) ==
+        /// client-receive</c>. So a peer (this client) lays out its <c>send-key || receive-key</c>, matching
+        /// strongSwan's <c>eap_mschapv2</c> and wpa_supplicant. (Getting the order wrong yields a 64-byte MSK that
+        /// still "succeeds" at EAP but makes the IKEv2 AUTH-with-MSK verification fail on the gateway.)
         /// </summary>
         public static byte[] DeriveMsk(string password, byte[] ntResponse)
         {
             byte[] passwordHash = NtPasswordHash(password);   // MD4(unicode(password))
             byte[] passwordHashHash = Md4.Hash(passwordHash); // MD4 of the NT hash
             byte[] masterKey = GetMasterKey(passwordHashHash, ntResponse);
-            byte[] recvKey = GetAsymmetricStartKey(masterKey, isSend: false); // MasterReceiveKey (peer)
-            byte[] sendKey = GetAsymmetricStartKey(masterKey, isSend: true);  // MasterSendKey (peer)
+            byte[] sendKey = GetAsymmetricStartKey(masterKey, isSend: true);  // client MasterSendKey == server's recv key
+            byte[] recvKey = GetAsymmetricStartKey(masterKey, isSend: false); // client MasterReceiveKey == server's send key
 
+            // MSK is laid out from the server's view (recv||send); the peer supplies its dual (send||recv) so both agree.
             byte[] msk = new byte[64]; // last 32 bytes stay zero (RFC 3079 pads the 32-byte key set to a 64-byte MSK)
-            Buffer.BlockCopy(recvKey, 0, msk, 0, 16);
-            Buffer.BlockCopy(sendKey, 0, msk, 16, 16);
+            Buffer.BlockCopy(sendKey, 0, msk, 0, 16);
+            Buffer.BlockCopy(recvKey, 0, msk, 16, 16);
             return msk;
         }
 
