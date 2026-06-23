@@ -58,6 +58,7 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
         readonly bool _enableIpv6;             // opt-in: also run SLAAC/DHCPv6 + NDISC v6 on the SecureNAT bridge (default IPv4-only)
 
         readonly MacAddress _mac;              // a stable locally-administered MAC kept across reconnects
+        readonly Random _keepAliveRandom = new();   // pads idle keep-alive blocks (non-crypto; just avoids a fixed length)
 
         IPAddress? _assignedAddress;
         IPAddress? _lastAssignedAddress;
@@ -195,24 +196,28 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
 
             Logger.LogHandshake(DriverName, "control handshake (watermark -> hello -> login -> welcome)");
             var handshake = new SoftEtherHandshake(new SoftEtherAuth(new Sha0()), new Random());
-            SoftEtherWelcomeInfo welcome = await handshake
+            (SoftEtherWelcomeInfo welcome, byte[] primaryLeftover) = await handshake
                 .RunAsync(primary, _host, _login, _watermark, cancellationToken).ConfigureAwait(false);
             Logger.LogHandshake(DriverName, "login accepted; switching stream into the Ethernet-over-HTTPS data session");
 
+            // --- the server can coalesce the welcome response and the first data block(s) into one TLS record, so re-inject
+            //     any bytes the handshake reader over-read into the data session (dropping them would desync the block
+            //     reader and surface as a phantom "server closed"). ---
+            IByteStreamTransport primaryData = primaryLeftover.Length == 0
+                ? primary
+                : new PrefixedByteStreamTransport(primary, primaryLeftover);
+
             // --- open the additional connections (up to what we requested AND the server granted), reattaching each by
             //     session key, then aggregate them into one logical data path (1 session owning N sockets) ---
-            var connections = new List<IByteStreamTransport> { primary };
+            var connections = new List<IByteStreamTransport> { primaryData };
             int desired = ResolveConnectionCount(welcome.MaxConnection);
             await OpenAdditionalConnectionsAsync(handshake, welcome, desired, connections, cancellationToken).ConfigureAwait(false);
 
-            // --- use_encrypt: the handshake (HTTP/PACK) ran in TLS plaintext; from here the data session is RC4-encrypted
-            //     below the block framing. Wrap each connection in the per-direction RC4 layer keyed by the session key. ---
-            if (_login.Session.UseEncrypt)
-            {
-                Logger.LogHandshake(DriverName, "use_encrypt: wrapping the data session in the RC4 layer (over TLS)");
-                for (int i = 0; i < connections.Count; i++)
-                    connections[i] = SoftEtherEncryptedTransport.CreateClient(connections[i], welcome.SessionKey);
-            }
+            // --- data-plane encryption: the genuine server keeps the data session inside SSL when use_encrypt is on and
+            //     fast-RC4 is off (UseSSLDataEncryption — Cedar Protocol.c), which is exactly how this driver carries the
+            //     data session (read/write through the same TLS byte stream). With use_encrypt off SoftEther reverts the
+            //     data plane to the RAW TCP socket (Send/Recv secure=false), which this TLS transport cannot express; the
+            //     driver therefore requires use_encrypt=on. fast-RC4 (raw TCP + RC4) is never requested, so no RC4 layer. ---
 
             SoftEtherConnectionDirection[] directions =
                 SoftEtherConnectionDirectionPlanner.Plan(connections.Count, welcome.HalfConnection);
@@ -261,12 +266,13 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
             for (int i = 1; i < desired; i++)
             {
                 IByteStreamTransport extra;
+                byte[] leftover;
                 try
                 {
                     extra = await _transportFactory
                         .ConnectAsync(_host, _port, _addressFamilyPreference, cancellationToken).ConfigureAwait(false);
                     await extra.ConnectAsync(cancellationToken).ConfigureAwait(false);
-                    await handshake.RunAdditionalConnectAsync(extra, _host, welcome.SessionKey, _watermark, cancellationToken)
+                    leftover = await handshake.RunAdditionalConnectAsync(extra, _host, welcome.SessionKey, _watermark, cancellationToken)
                         .ConfigureAwait(false);
                 }
                 catch (Exception ex)
@@ -275,7 +281,8 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
                     Logger.LogHandshake(DriverName, $"additional_connect #{i} failed ({ex.GetType().Name}); continuing with {connections.Count}");
                     break;   // stop adding more; the session runs on what attached
                 }
-                connections.Add(extra);
+                // Re-inject any data-session bytes the server coalesced into the additional_connect ack (same desync fix).
+                connections.Add(leftover.Length == 0 ? extra : new PrefixedByteStreamTransport(extra, leftover));
                 Logger.LogHandshake(DriverName, $"additional_connect #{i} attached to the session");
             }
         }
@@ -490,9 +497,11 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
             if (mux is null) return;
             try
             {
-                byte[] block = SoftEtherDataFrameCodec.EncodeSingle(SoftEtherDataConstants.KeepAliveBytes);
+                // The genuine client sends a keep-alive as a distinct keep-alive block (count = KEEP_ALIVE_MAGIC), not a
+                // framed payload, so the server's switch never treats it as an Ethernet frame. Pad it with a little random.
+                byte[] block = SoftEtherDataFrameCodec.EncodeKeepAlive(_keepAliveRandom.Next(1, 64), _keepAliveRandom);
                 await mux.SendBlockAsync(block).ConfigureAwait(false);
-                Logger.LogKeepalive(DriverName, "sent SoftEther idle keep-alive frame");
+                Logger.LogKeepalive(DriverName, "sent SoftEther idle keep-alive block");
             }
             catch { /* a missed keep-alive is harmless; a receive loop trips link-loss if the peer goes away */ }
         }

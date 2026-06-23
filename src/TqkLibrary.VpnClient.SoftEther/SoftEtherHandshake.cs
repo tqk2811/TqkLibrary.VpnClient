@@ -126,7 +126,7 @@ namespace TqkLibrary.VpnClient.SoftEther
             return new SoftEtherWelcomeInfo
             {
                 SessionKey = sessionKey,
-                SessionKey32 = reply.GetData(SoftEtherProtocol.SessionKey32Name) ?? Array.Empty<byte>(),
+                SessionKey32 = reply.GetInt(SoftEtherProtocol.SessionKey32Name),
                 MaxConnection = maxConnection,
                 HalfConnection = reply.GetBool(SoftEtherProtocol.HalfConnectionName),
             };
@@ -172,9 +172,11 @@ namespace TqkLibrary.VpnClient.SoftEther
         /// <summary>
         /// Runs the full handshake over <paramref name="transport"/> (already connected + TLS-established): writes the
         /// watermark POST, reads the server hello, writes the login PACK, reads the welcome PACK. Returns the
-        /// <see cref="SoftEtherWelcomeInfo"/> on success; throws <see cref="SoftEtherProtocolException"/> on rejection.
+        /// <see cref="SoftEtherWelcomeInfo"/> plus any bytes read past the welcome body (the start of the data session
+        /// the server coalesced into the same TLS record — <see cref="PrefixedByteStreamTransport"/> re-injects them).
+        /// Throws <see cref="SoftEtherProtocolException"/> on rejection.
         /// </summary>
-        public async ValueTask<SoftEtherWelcomeInfo> RunAsync(
+        public async ValueTask<(SoftEtherWelcomeInfo Welcome, byte[] Leftover)> RunAsync(
             IByteStreamTransport transport,
             string host,
             SoftEtherLoginRequest request,
@@ -191,12 +193,13 @@ namespace TqkLibrary.VpnClient.SoftEther
             Pack helloPack = await ReadHttpPackAsync(transport, cancellationToken).ConfigureAwait(false);
             SoftEtherHelloInfo hello = ParseHello(helloPack);
 
-            // 2) Login POST — server replies with the welcome (or an error) PACK.
+            // 2) Login POST — server replies with the welcome (or an error) PACK; capture any data-session leftover.
             Pack loginPack = BuildLoginPack(request, hello.Random);
             await transport.WriteAsync(SoftEtherHttpPackCodec.BuildPostRequest(host, loginPack), cancellationToken)
                 .ConfigureAwait(false);
-            Pack welcomePack = await ReadHttpPackAsync(transport, cancellationToken).ConfigureAwait(false);
-            return ParseWelcome(welcomePack);
+            (Pack welcomePack, byte[] leftover) = await ReadHttpPackWithLeftoverAsync(transport, cancellationToken)
+                .ConfigureAwait(false);
+            return (ParseWelcome(welcomePack), leftover);
         }
 
         /// <summary>
@@ -206,7 +209,7 @@ namespace TqkLibrary.VpnClient.SoftEther
         /// when the server attaches the socket to the existing session; throws <see cref="SoftEtherProtocolException"/>
         /// if it refuses. Mirrors <see cref="RunAsync"/> but reattaches instead of logging in.
         /// </summary>
-        public async ValueTask RunAdditionalConnectAsync(
+        public async ValueTask<byte[]> RunAdditionalConnectAsync(
             IByteStreamTransport transport,
             string host,
             ReadOnlyMemory<byte> sessionKey,
@@ -222,25 +225,37 @@ namespace TqkLibrary.VpnClient.SoftEther
             Pack helloPack = await ReadHttpPackAsync(transport, cancellationToken).ConfigureAwait(false);
             _ = ParseHello(helloPack);
 
-            // 2) additional_connect POST → ack (error == 0 ⇒ joined the session).
+            // 2) additional_connect POST → ack (error == 0 ⇒ joined the session); capture any data-session leftover.
             Pack pack = BuildAdditionalConnectPack(sessionKey.Span);
             await transport.WriteAsync(SoftEtherHttpPackCodec.BuildPostRequest(host, pack), cancellationToken)
                 .ConfigureAwait(false);
-            Pack ackPack = await ReadHttpPackAsync(transport, cancellationToken).ConfigureAwait(false);
+            (Pack ackPack, byte[] leftover) = await ReadHttpPackWithLeftoverAsync(transport, cancellationToken)
+                .ConfigureAwait(false);
             ParseAdditionalConnectReply(ackPack);
+            return leftover;
         }
 
         /// <summary>
-        /// Reads exactly one HTTP message off <paramref name="transport"/> and returns the PACK in its framed body.
-        /// Parses headers up to the blank line, honours <c>Content-Length</c>, then decodes the length-prefixed PACK.
+        /// Reads exactly one HTTP message off <paramref name="transport"/> and returns the PACK in its body. Parses
+        /// headers up to the blank line, honours <c>Content-Length</c>, then decodes the PACK (body = PACK bytes verbatim).
         /// </summary>
         public static async ValueTask<Pack> ReadHttpPackAsync(IByteStreamTransport transport, CancellationToken cancellationToken)
+            => (await ReadHttpPackWithLeftoverAsync(transport, cancellationToken).ConfigureAwait(false)).Pack;
+
+        /// <summary>
+        /// As <see cref="ReadHttpPackAsync"/> but also returns any bytes read <b>past</b> the HTTP body — the start of the
+        /// data session that a server coalesced into the same TLS record as the final control response. The caller
+        /// re-injects them ahead of the data stream (see <see cref="PrefixedByteStreamTransport"/>) so the block reader
+        /// stays byte-aligned.
+        /// </summary>
+        public static async ValueTask<(Pack Pack, byte[] Leftover)> ReadHttpPackWithLeftoverAsync(
+            IByteStreamTransport transport, CancellationToken cancellationToken)
         {
             if (transport is null) throw new ArgumentNullException(nameof(transport));
 
             var reader = new HttpMessageReader(transport);
-            byte[] body = await reader.ReadMessageBodyAsync(cancellationToken).ConfigureAwait(false);
-            return SoftEtherHttpPackCodec.ParseBody(body);
+            (byte[] body, byte[] leftover) = await reader.ReadMessageBodyAsync(cancellationToken).ConfigureAwait(false);
+            return (SoftEtherHttpPackCodec.ParseBody(body), leftover);
         }
 
         /// <summary>
@@ -256,7 +271,13 @@ namespace TqkLibrary.VpnClient.SoftEther
 
             public HttpMessageReader(IByteStreamTransport transport) => _transport = transport;
 
-            public async ValueTask<byte[]> ReadMessageBodyAsync(CancellationToken cancellationToken)
+            /// <summary>
+            /// Reads one HTTP message and returns its body plus any bytes read <b>past</b> the body — the genuine server
+            /// coalesces the final <c>welcome</c> response and the first data block(s) into one TLS record, so the chunk
+            /// reader inevitably over-reads into the data session. Those leftover bytes are handed back so the caller can
+            /// re-inject them ahead of the data stream instead of dropping them (which would desync the block reader).
+            /// </summary>
+            public async ValueTask<(byte[] Body, byte[] Leftover)> ReadMessageBodyAsync(CancellationToken cancellationToken)
             {
                 var buffer = new List<byte>(512);
                 var chunk = new byte[2048];
@@ -290,7 +311,13 @@ namespace TqkLibrary.VpnClient.SoftEther
                         throw new SoftEtherProtocolException("Connection closed before the HTTP body was complete.");
                     filled += read;
                 }
-                return body;
+
+                // Anything in the initial buffer past (bodyStart + contentLength) is the next message / data session.
+                int leftoverStart = bodyStart + contentLength;
+                int leftoverLen = buffer.Count - leftoverStart;
+                byte[] leftover = leftoverLen <= 0 ? Array.Empty<byte>() : new byte[leftoverLen];
+                for (int i = 0; i < leftoverLen; i++) leftover[i] = buffer[leftoverStart + i];
+                return (body, leftover);
             }
 
             static int FindHeaderEnd(List<byte> buffer)

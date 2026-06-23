@@ -16,12 +16,14 @@ namespace TqkLibrary.VpnClient.SoftEther.Models
         public uint MaxConnection { get; init; } = 1;
 
         /// <summary>
-        /// Whether to RC4-encrypt the data payload on top of TLS (<c>use_encrypt</c>). Defaults to <c>false</c> (raw
-        /// payload on TLS): RC4 is broken (RFC 7465) and adds nothing over the TLS the session already runs on, so it is
-        /// opt-in for legacy SoftEther interop only. When on, the driver wraps the data session in
-        /// <c>SoftEtherEncryptedTransport</c>.
+        /// Whether the data session is carried <b>inside SSL</b> (<c>use_encrypt</c>). Defaults to <c>true</c> — and the
+        /// TLS-transport driver requires it: a genuine SoftEther server keeps the data plane in SSL only when
+        /// <c>use_encrypt</c> is on and fast-RC4 is off (<c>UseSSLDataEncryption</c>, Cedar <c>Protocol.c</c>). With
+        /// <c>use_encrypt=false</c> the server reverts the data plane to the <b>raw TCP socket</b> (plaintext, beneath
+        /// TLS), which this byte-stream transport cannot express, so the session would carry no data. (Note: this flag
+        /// does <i>not</i> add RC4 — that is the separate <c>use_fast_rc4</c> raw-TCP mode, which the driver never requests.)
         /// </summary>
-        public bool UseEncrypt { get; init; }
+        public bool UseEncrypt { get; init; } = true;
 
         /// <summary>Whether to deflate-compress the data payload (<c>use_compress</c>).</summary>
         public bool UseCompress { get; init; }

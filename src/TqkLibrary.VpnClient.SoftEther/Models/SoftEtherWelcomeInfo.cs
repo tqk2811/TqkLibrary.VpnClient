@@ -2,17 +2,17 @@ namespace TqkLibrary.VpnClient.SoftEther.Models
 {
     /// <summary>
     /// The parsed contents of a SoftEther server <c>welcome</c> PACK returned after a successful login: the
-    /// <see cref="SessionKey"/> handle (an opaque correlation token, <b>not</b> a crypto key) and the longer
-    /// <see cref="SessionKey32"/>, used to reattach the additional TCP connections of a multi-connection session.
-    /// Produced by <see cref="SoftEtherHandshake.ParseWelcome"/>.
+    /// <see cref="SessionKey"/> handle (an opaque correlation token, <b>not</b> a crypto key) used to reattach the
+    /// additional TCP connections of a multi-connection session, plus the 32-bit fast-session-key
+    /// <see cref="SessionKey32"/>. Produced by <see cref="SoftEtherHandshake.ParseWelcome"/>.
     /// </summary>
     public sealed record SoftEtherWelcomeInfo
     {
-        /// <summary>The 20-byte session-key handle (opaque correlation token).</summary>
+        /// <summary>The 20-byte session-key handle (opaque correlation token; the welcome PACK's DATA <c>session_key</c>).</summary>
         public required byte[] SessionKey { get; init; }
 
-        /// <summary>The longer 32-byte session key, when the server provides one (else empty).</summary>
-        public byte[] SessionKey32 { get; init; } = Array.Empty<byte>();
+        /// <summary>The 32-bit fast session key (the welcome PACK's INT <c>session_key_32</c>); 0 when the server omits it.</summary>
+        public uint SessionKey32 { get; init; }
 
         /// <summary>
         /// The number of parallel TCP connections the server granted for this logical session (<c>max_connection</c> in

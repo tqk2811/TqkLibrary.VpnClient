@@ -121,9 +121,9 @@ namespace TqkLibrary.VpnClient.SoftEther.DataChannel
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { /* teardown */ }
-            catch (Exception)
+            catch (Exception ex)
             {
-                RaiseLinkLost("SoftEther data connection faulted while reading.");
+                RaiseLinkLost($"SoftEther data connection faulted while reading: {ex.GetType().Name}: {ex.Message}");
             }
         }
 

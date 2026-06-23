@@ -49,6 +49,31 @@ namespace TqkLibrary.VpnClient.SoftEther.DataChannel
             => EncodeBlock(new[] { frame });
 
         /// <summary>
+        /// Serializes a keep-alive block: <c>uint32(<see cref="SoftEtherDataConstants.KeepAliveMagic"/>) · uint32(size) ·
+        /// size bytes</c> drawn from <paramref name="random"/>. This is the wire form the genuine client uses for an idle
+        /// keep-alive (a distinct block type, not a framed Ethernet payload), so the server's switch never mistakes it
+        /// for a frame. <paramref name="payloadSize"/> is clamped to <see cref="SoftEtherDataConstants.MaxKeepAliveSize"/>.
+        /// </summary>
+        public static byte[] EncodeKeepAlive(int payloadSize, Random random)
+        {
+            if (random is null) throw new ArgumentNullException(nameof(random));
+            if (payloadSize < 0) payloadSize = 0;
+            if (payloadSize > SoftEtherDataConstants.MaxKeepAliveSize) payloadSize = SoftEtherDataConstants.MaxKeepAliveSize;
+
+            var block = new byte[CountPrefixLength + SizePrefixLength + payloadSize];
+            BinaryPrimitives.WriteUInt32BigEndian(block, SoftEtherDataConstants.KeepAliveMagic);
+            BinaryPrimitives.WriteUInt32BigEndian(block.AsSpan(CountPrefixLength), (uint)payloadSize);
+            if (payloadSize > 0)
+            {
+                // Random.NextBytes(Span<byte>) exists from net6; fill via a temp array on older TFMs (netstandard2.0).
+                var pad = new byte[payloadSize];
+                random.NextBytes(pad);
+                Buffer.BlockCopy(pad, 0, block, CountPrefixLength + SizePrefixLength, payloadSize);
+            }
+            return block;
+        }
+
+        /// <summary>
         /// Parses a complete block (as produced by <see cref="EncodeBlock"/>) into its frames. Throws
         /// <see cref="FormatException"/> on a truncated block or a count/size over the
         /// <see cref="SoftEtherDataConstants.MaxFramesPerBlock"/> / <see cref="SoftEtherDataConstants.MaxFrameSize"/> guards.

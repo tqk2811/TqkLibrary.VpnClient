@@ -20,6 +20,18 @@ namespace TqkLibrary.VpnClient.SoftEther.DataChannel
         public static readonly byte[] KeepAliveBytes = Encoding.ASCII.GetBytes(KeepAliveText);
 
         /// <summary>
+        /// The block-count sentinel (<c>KEEP_ALIVE_MAGIC = 0xFFFFFFFF</c> — Cedar <c>Cedar.h</c>) a SoftEther peer puts
+        /// where a data block's frame count goes to mark the block as a keep-alive. A keep-alive block is therefore
+        /// <c>uint32(0xFFFFFFFF) · uint32(size) · size random bytes</c> (not a framed Ethernet payload); the receiver
+        /// reads and discards it. Sending keep-alives this way (rather than as a 1-frame block) matches the genuine
+        /// client so the server's switch never tries to inject the keep-alive as an Ethernet frame.
+        /// </summary>
+        public const uint KeepAliveMagic = 0xFFFFFFFFu;
+
+        /// <summary>Upper bound (bytes) on a keep-alive block's random padding (<c>MAX_KEEPALIVE_SIZE</c>); a guard on the inbound size.</summary>
+        public const int MaxKeepAliveSize = 512;
+
+        /// <summary>
         /// Upper bound on the number of frames a single data block may declare, guarding against a hostile length prefix
         /// forcing a huge allocation. Generous relative to any real batch (SoftEther sends a handful of frames per block).
         /// </summary>

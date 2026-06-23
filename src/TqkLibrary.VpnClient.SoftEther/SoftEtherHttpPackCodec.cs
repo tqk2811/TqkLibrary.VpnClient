@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Text;
 
 namespace TqkLibrary.VpnClient.SoftEther
@@ -6,9 +5,11 @@ namespace TqkLibrary.VpnClient.SoftEther
     /// <summary>
     /// Pure codec for carrying a <see cref="Pack"/> inside one HTTP message over the SoftEther control channel. After
     /// the watermark POST, SoftEther exchanges every control PACK as the body of an HTTP <c>POST /vpnsvc/vpn.cgi</c>
-    /// (client → server) / <c>200 OK</c> (server → client); the body is the PACK bytes prefixed by a big-endian
-    /// <c>uint32</c> length. Re-implemented from the protocol behavior (spec doc <c>07</c>) — not copied from the GPL
-    /// source. No I/O: this builds/parses byte buffers so it is fully offline-testable; the streaming reader lives in
+    /// (client → server) / <c>200 OK</c> (server → client); the body is <b>exactly the serialized PACK bytes</b> — the
+    /// HTTP <c>Content-Length</c> alone delimits it, there is <b>no</b> extra length prefix (the genuine server's
+    /// <c>HttpClientSend</c>/<c>HttpServerSend</c> POST <c>PackToBuf(p)</c> verbatim — Mayaqua <c>Network.c</c>).
+    /// Re-implemented from the protocol behavior (spec doc <c>07</c>) — not copied from the GPL source. No I/O: this
+    /// builds/parses byte buffers so it is fully offline-testable; the streaming reader lives in
     /// <see cref="SoftEtherHandshake"/>.
     /// </summary>
     public static class SoftEtherHttpPackCodec
@@ -16,29 +17,17 @@ namespace TqkLibrary.VpnClient.SoftEther
         const string ContentType = "application/octet-stream";
 
         /// <summary>
-        /// Frames a PACK as the body: a big-endian <c>uint32</c> length prefix followed by the PACK bytes. This is the
-        /// HTTP entity body for both directions.
+        /// Returns the HTTP entity body for a PACK: the serialized PACK bytes verbatim (no length prefix; the genuine
+        /// server delimits the PACK by <c>Content-Length</c> only). This is the body for both directions.
         /// </summary>
         public static byte[] FrameBody(Pack pack)
         {
             if (pack is null) throw new ArgumentNullException(nameof(pack));
-            byte[] packBytes = pack.ToBytes();
-            var body = new byte[4 + packBytes.Length];
-            BinaryPrimitives.WriteUInt32BigEndian(body, (uint)packBytes.Length);
-            Buffer.BlockCopy(packBytes, 0, body, 4, packBytes.Length);
-            return body;
+            return pack.ToBytes();
         }
 
-        /// <summary>Parses a framed body (<c>uint32</c> length ‖ PACK bytes) back into a <see cref="Pack"/>.</summary>
-        public static Pack ParseBody(ReadOnlySpan<byte> body)
-        {
-            if (body.Length < 4)
-                throw new FormatException("SoftEther HTTP body too short for a length prefix.");
-            uint length = BinaryPrimitives.ReadUInt32BigEndian(body);
-            if (length > body.Length - 4)
-                throw new FormatException($"SoftEther HTTP body declares {length} PACK bytes but only {body.Length - 4} follow.");
-            return Pack.Parse(body.Slice(4, (int)length));
-        }
+        /// <summary>Parses an HTTP body (the serialized PACK bytes, no length prefix) back into a <see cref="Pack"/>.</summary>
+        public static Pack ParseBody(ReadOnlySpan<byte> body) => Pack.Parse(body);
 
         /// <summary>
         /// Builds the bytes of a client <c>POST /vpnsvc/vpn.cgi HTTP/1.1</c> request carrying <paramref name="pack"/> in

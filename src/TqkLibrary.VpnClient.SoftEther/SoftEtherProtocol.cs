@@ -86,10 +86,18 @@ namespace TqkLibrary.VpnClient.SoftEther
 
         // ---- Welcome / error (server → client) -------------------------------------------------------
 
-        /// <summary>DATA element carrying the 20-byte session-key handle in the welcome PACK.</summary>
-        public const string SessionKeyName = "session_name";
+        /// <summary>
+        /// DATA element carrying the 20-byte session-key handle in the welcome PACK — the value an additional
+        /// connection echoes back (<c>additional_connect</c>) so the server's <c>GetSessionFromKey</c> reattaches it.
+        /// (The genuine server adds it as <c>PackAddData(p, "session_key", …, SHA1_SIZE)</c> — Cedar <c>Protocol.c</c>;
+        /// the separate STR <c>session_name</c> is the human-readable session name, not the key.)
+        /// </summary>
+        public const string SessionKeyName = "session_key";
 
-        /// <summary>DATA element carrying the longer (32-byte) session key in the welcome PACK.</summary>
+        /// <summary>STR element carrying the human-readable session name in the welcome PACK (informational, not the key).</summary>
+        public const string SessionNameName = "session_name";
+
+        /// <summary>INT element carrying the 32-bit fast session key in the welcome PACK (<c>session_key_32</c>).</summary>
         public const string SessionKey32Name = "session_key_32";
 
         /// <summary>
