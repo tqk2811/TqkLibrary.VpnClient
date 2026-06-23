@@ -10,27 +10,35 @@ Client = binary demo `.NET` self-contained publish, chạy trong container cùng
 
 ---
 
-## ⚑ Kết quả validate LIVE (2026-06-23)
+## ⚑ Kết quả validate LIVE — FULL END-TO-END (2026-06-23)
 
-**Client ĐÚNG hoàn toàn trên dây** (đã chạy thật lab này):
-- NAT-D detection no-NAT **chính xác byte-perfect**; client mở **raw socket proto-50**, gửi **ESP native proto-50**
-  (tcpdump: `proto 50 > 0`, `udp port 4500 = 0`), **IKE toàn bộ trên UDP/500 không float**; strongSwan **lập CHILD_SA**.
-- Quá trình này **phát hiện + sửa 2 bug client thật**:
+**✅ Tunnel LÊN HẲN — đã chạy thật lab này:** client `--native-esp` (HonestFirst) →
+NAT-D detection no-NAT **chính xác byte-perfect** → mở **raw socket proto-50**, gửi/nhận **ESP native proto-50**
+(tcpdump: `proto 50 > 0`, `udp port 4500 = 0`), **IKE toàn bộ trên UDP/500 không float** → strongSwan cài
+**SA native ESP** (proto-50, **KHÔNG `encap`/espinudp**) → giải mã → L2TP control → **pppd cấp IP `10.31.0.10`**
+(`ppp0: 10.31.0.1 peer 10.31.0.10`) → **ICMP qua tunnel RTT 3ms**. Client in `"tunnel up. assigned IP = 10.31.0.10"`
++ `[✓] IPv4 routing`.
+
+- Quá trình này **phát hiện + sửa 3 bug client + 1 lab-config** (KHÔNG cần redesign `Decide`):
   1. **`.NET raw socket EPROTONOSUPPORT`** — `new Socket(.., Raw, (ProtocolType)50)` fail trên Linux dù kernel cho
      (libc `socket()` chạy OK); fix [`NativeRawSocket`](../../src/TqkLibrary.VpnClient.Transport.RawIp/NativeRawSocket.cs) mở fd qua libc.
   2. **honest-path identity `0.0.0.0`** — Quick Mode ID_ci = `IPAddress.Any` làm strongSwan tưởng NAT; fix dùng `localIp` thật.
+  3. **Quick Mode encapsulation-mode order** — [`IkeV1Proposals.Phase2`](../../src/TqkLibrary.VpnClient.Ipsec/Ike/V1/IkeV1Proposals.cs)
+     trước đây luôn xếp `UDP-Encapsulated-Transport`(4) TRƯỚC `Transport`(2) ⇒ responder strongSwan chọn transform đầu = espinudp
+     → drop native proto-50 **dù KHÔNG NAT** (NAT-D đã khớp byte-perfect). Fix cờ `preferTransport` /
+     [`IkeV1Client.PreferNativeTransport`](../../src/TqkLibrary.VpnClient.Ipsec/Ike/V1/IkeV1Client.cs) — native path đề xuất `Transport` trước
+     (forced path GIỮ UDP-encap trước, không đổi đường live VPN Gate). **Đây là root-cause `espinudp` lần đầu**, KHÔNG phải blocker phía server.
+  4. **lab `options.xl2tpd` có option `lock`** — pppol2tp không nhận ⇒ pppd exit 2; gỡ ở lab.
 
-**🟡 End-to-end CHƯA xong (blocker phía SERVER, không phải client):** strongSwan cài SA với `encap espinudp`
-(chờ ESP-trong-UDP) **chỉ vì đàm phán Vendor-ID NAT-T**, DÙ không phát hiện NAT (không log "behind NAT", không float)
-→ kernel **drop native proto-50** (`XfrmInStateMismatch`). ⇒ L2TP/PPP/IPCP không khởi động → chưa nhận IP. Đây lộ
-**câu hỏi thiết kế**: [`L2tpIpsecNatStrategy.Decide`](../../src/TqkLibrary.VpnClient.Drivers.L2tpIpsec/L2tpIpsecNatStrategy.cs)
-chọn native khi `ServerSentNatD=true` — nhưng gateway loại đó (NAT-T-capable, no-NAT) lại muốn ESP-in-UDP; gateway
-thực sự cần native proto-50 lại tắt NAT-T (`ServerSentNatD=false`). Trigger có thể nhắm **nhầm nhóm gateway** → đang
-lên kế hoạch redesign (chưa sửa code logic).
+**Control-test xác nhận strongSwan ĐÚNG RFC:** một strongSwan **client chuẩn** (no-NAT) nối CÙNG server → cũng nhận
+**native ESP** (SA không `encap`, QM không NAT-OA). Tức no-NAT ⇒ native ESP là hành vi đúng của strongSwan; espinudp
+trước đây hoàn toàn do **client TA đề xuất UDP-encap-first ở Quick Mode** (bug #3), KHÔNG phải strongSwan quirk và
+KHÔNG phải [`L2tpIpsecNatStrategy.Decide`](../../src/TqkLibrary.VpnClient.Drivers.L2tpIpsec/L2tpIpsecNatStrategy.cs) sai —
+`Decide` **đúng nguyên trạng, KHÔNG redesign**.
 
 **Đã bake vào lab để charon chạy được (xác nhận live):** [`Dockerfile`](Dockerfile) gỡ plugin `kernel-libipsec`
 (đòi `/dev/net/tun` không có → charon ABORT khi load); [`strongswan.conf`](strongswan.conf) tắt `bypass-lan`
-(PASS shunt subnet local làm reply server đi **plaintext** thay vì ESP → client không nhận).
+(PASS shunt subnet local làm reply server đi **plaintext** thay vì ESP → client không nhận); [`options.xl2tpd`](options.xl2tpd) gỡ `lock`.
 
 ---
 
