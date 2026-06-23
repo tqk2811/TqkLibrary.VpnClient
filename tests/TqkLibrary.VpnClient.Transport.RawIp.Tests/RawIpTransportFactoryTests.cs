@@ -37,6 +37,28 @@ namespace TqkLibrary.VpnClient.Transport.RawIp.Tests
             Assert.Contains("CAP_NET_RAW", ex.Message);
         }
 
+        /// <summary>
+        /// Regression for the P0.8c live finding: the managed <see cref="System.Net.Sockets.Socket"/> ctor
+        /// <c>new Socket(InterNetwork, Raw, (ProtocolType)50)</c> fails on Linux with
+        /// <see cref="System.Net.Sockets.SocketError.ProtocolNotSupported"/> (errno EPROTONOSUPPORT) <b>even as root</b>,
+        /// although the kernel supports the call — so native ESP never opened a carrier. The factory now goes through
+        /// <c>NativeRawSocket</c> (libc <c>socket()</c> on Unix), so when elevated the ESP raw socket must open. Lives in
+        /// the integration set (needs root / CAP_NET_RAW); skipped otherwise.
+        /// </summary>
+        [Fact]
+        [Trait("Category", "Integration")]
+        public async Task Create_OpensEspRawSocket_WhenElevated()
+        {
+            if (!new RawIpPrivilegeChecker().IsElevated) return; // needs root/admin; cannot exercise the open path otherwise
+
+            var factory = new RawIpTransportFactory();
+            Assert.True(factory.IsAvailable, "elevated ESP raw probe must succeed via the libc path (not ProtocolNotSupported)");
+
+            var transport = factory.Create(IPAddress.Loopback, RawIpProtocols.Esp);
+            Assert.NotNull(transport);
+            await transport.DisposeAsync();
+        }
+
         sealed class FakePrivilegeChecker : IPrivilegeChecker
         {
             public FakePrivilegeChecker(bool isElevated) => IsElevated = isElevated;

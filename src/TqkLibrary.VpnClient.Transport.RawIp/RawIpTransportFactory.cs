@@ -37,7 +37,7 @@ namespace TqkLibrary.VpnClient.Transport.RawIp
             {
                 try
                 {
-                    using var probe = new Socket(AddressFamily.InterNetwork, SocketType.Raw, (ProtocolType)_probeProtocol);
+                    using var probe = NativeRawSocket.Create(AddressFamily.InterNetwork, _probeProtocol);
                     return true;
                 }
                 catch (SocketException) { return false; }
@@ -54,7 +54,7 @@ namespace TqkLibrary.VpnClient.Transport.RawIp
             Socket socket;
             try
             {
-                socket = new Socket(remote.AddressFamily, SocketType.Raw, (ProtocolType)ipProtocol);
+                socket = NativeRawSocket.Create(remote.AddressFamily, ipProtocol);
             }
             catch (Exception ex) when (ex is SocketException or SecurityException or UnauthorizedAccessException)
             {
