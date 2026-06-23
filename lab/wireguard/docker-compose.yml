@@ -1,0 +1,59 @@
+# =====================================================================
+# lab/wireguard — compose RIÊNG cho VALIDATE LIVE driver V.3 WireGuard.
+#
+# 2 container trên CÙNG một Docker bridge tùy biến 'labnet':
+#   - wg-server    : wireguard-go userspace server (`wg`/`wg show` quan sát)
+#   - dotnet-client: binary demo .NET self-contained (--vpn <file>.conf wg-quick)
+#
+# Vì sao AN TOÀN (giống ikev2-native):
+#   - KHÔNG network_mode: host  -> wireguard-go đụng TUN CHỈ trong netns container.
+#   - KHÔNG privileged-trên-host -> server chỉ NET_ADMIN + /dev/net/tun.
+#   - 2 container cùng bridge -> client gửi WireGuard UDP/51820 tới server qua tên service.
+#   - KHÔNG publish cổng ra ngoài: test hoàn toàn nội bộ bridge.
+#
+# Server sinh keypair lúc khởi động + viết /shared/client.conf (volume chung) để
+# demo .NET đọc qua --vpn /shared/client.conf (keys/endpoint/address từ chính file).
+# =====================================================================
+services:
+  wg-server:
+    build:
+      context: .
+    image: lab-wireguard:24.04
+    container_name: lab-wg-server
+    restart: "no"
+    cap_add:
+      - NET_ADMIN          # tạo TUN wg0 + route trong netns container (KHÔNG đụng VM)
+    devices:
+      - /dev/net/tun       # wireguard-go là TUN userspace -> cần /dev/net/tun
+    sysctls:
+      - net.ipv4.ip_forward=1
+    volumes:
+      - wg-shared:/shared  # client.conf sinh runtime cho demo .NET
+    networks:
+      - labnet
+
+  dotnet-client:
+    # runtime-deps đủ chạy binary self-contained publish (linux-x64). KHÔNG cần SDK.
+    image: mcr.microsoft.com/dotnet/runtime-deps:8.0
+    container_name: lab-wg-client
+    restart: "no"
+    # WireGuard chở data trên UDP/51820 ⇒ KHÔNG cần CAP_NET_RAW (transport là UDP socket thường).
+    networks:
+      - labnet
+    volumes:
+      # Binary publish demo (đặt vào ./client-bin trên VM trước) + client.conf server sinh ra.
+      - ./client-bin:/opt/client:ro
+      - wg-shared:/shared:ro
+    working_dir: /opt/client
+    # Container đứng yên: runbook 'docker exec' chạy demo với --vpn /shared/client.conf.
+    entrypoint: ["sleep", "infinity"]
+    depends_on:
+      - wg-server
+
+networks:
+  # bridge tùy biến: client gửi WireGuard UDP tới server qua tên service 'wg-server'.
+  labnet:
+    driver: bridge
+
+volumes:
+  wg-shared:
