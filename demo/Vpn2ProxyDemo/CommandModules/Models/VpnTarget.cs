@@ -7,6 +7,7 @@ namespace Vpn2ProxyDemo.CommandModules.Models
     /// <list type="bullet">
     /// <item>URI <c>scheme://user:pass@host[:port][?psk=...][?hub=...]</c> cho SSTP/L2TP/SoftEther.</item>
     /// <item>Đường dẫn một file <c>.ovpn</c> (kết thúc bằng <c>.ovpn</c>) cho OpenVPN — host/port/proto/chứng chỉ đọc từ chính file.</item>
+    /// <item>Đường dẫn một file <c>.conf</c> wg-quick (kết thúc bằng <c>.conf</c>) cho WireGuard — keys/endpoint/address đọc từ chính file.</item>
     /// </list>
     /// <para>
     /// <c>scheme</c> → <see cref="VpnProtocol"/> (<c>sstp</c>/<c>l2tp</c>/<c>softether</c>|<c>ssl</c>), <c>user:pass</c> →
@@ -69,6 +70,14 @@ namespace Vpn2ProxyDemo.CommandModules.Models
             if (value.Trim().EndsWith(".ovpn", StringComparison.OrdinalIgnoreCase))
             {
                 target = new VpnTarget(VpnProtocol.OpenVpn, host: value.Trim(), port: 0, user: "", pass: "", configPath: value.Trim());
+                return true;
+            }
+
+            // Dạng WireGuard: --vpn trỏ thẳng tới một file .conf wg-quick ([Interface] PrivateKey/Address + [Peer]
+            // PublicKey/Endpoint/AllowedIPs) — keys base64 nên không nhét vừa URI; đọc thẳng từ file (giống .ovpn).
+            if (value.Trim().EndsWith(".conf", StringComparison.OrdinalIgnoreCase))
+            {
+                target = new VpnTarget(VpnProtocol.WireGuard, host: value.Trim(), port: 0, user: "", pass: "", configPath: value.Trim());
                 return true;
             }
 

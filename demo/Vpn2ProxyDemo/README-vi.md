@@ -1,6 +1,6 @@
 # Vpn2ProxyDemo
 
-Demo: kết nối VPN Gate (**MS-SSTP** / **L2TP/IPsec** / **SoftEther SSL-VPN** / **OpenVPN** từ file `.ovpn`) qua một URI (hoặc đường dẫn `.ovpn`) `--vpn`, rồi chạy **một hành động** (subcommand): probe UDP-DNS qua tunnel (`dns`), dựng proxy local giữ tới khi nhấn Enter (`proxy-server`), hoặc GET một URL qua proxy rồi thoát (`http-request`).
+Demo: kết nối VPN Gate (**MS-SSTP** / **L2TP/IPsec** / **IKEv2-native** / **SoftEther SSL-VPN** / **OpenVPN** từ file `.ovpn` / **WireGuard** từ file `.conf` wg-quick) qua một URI (hoặc đường dẫn `.ovpn`/`.conf`) `--vpn`, rồi chạy **một hành động** (subcommand): probe UDP-DNS qua tunnel (`dns`), dựng proxy local giữ tới khi nhấn Enter (`proxy-server`), hoặc GET một URL qua proxy rồi thoát (`http-request`).
 
 Luồng: **vpn → TcpIpStack → panel "VPN hỗ trợ gì" → (dns | proxy-server | http-request)**
 
@@ -39,8 +39,8 @@ Vpn2ProxyDemo/
 ├── OvpnConfigureFiles/              4 file .ovpn mẫu (copy sang output qua csproj) cho --vpn <file>.ovpn
 └── CommandModules/
     ├── Interfaces/ICommandModule.cs          hợp đồng: Command Command { get; }
-    ├── Enums/VpnProtocol.cs                  enum giao thức: Sstp / L2tp / Ikev2 / SoftEther / OpenVpn (map từ scheme của --vpn, hoặc đuôi .ovpn)
-    ├── Models/VpnTarget.cs                   parse --vpn: URI scheme://user:pass@host[:port][?psk=][?hub=] (ssl=alias SoftEther) HOẶC đường dẫn .ovpn -> Protocol/Host/Port/User/Pass/PreSharedKey/HubName/ConfigPath; TryParse + thông báo lỗi
+    ├── Enums/VpnProtocol.cs                  enum giao thức: Sstp / L2tp / Ikev2 / SoftEther / OpenVpn / WireGuard (map từ scheme của --vpn, hoặc đuôi .ovpn/.conf)
+    ├── Models/VpnTarget.cs                   parse --vpn: URI scheme://user:pass@host[:port][?psk=][?hub=] (ssl=alias SoftEther) HOẶC đường dẫn .ovpn (OpenVPN) / .conf wg-quick (WireGuard) -> Protocol/Host/Port/User/Pass/PreSharedKey/HubName/ConfigPath; TryParse + thông báo lỗi
     ├── CommandModuleBase.cs                  base abstract: option chung --vpn + --watermark (chỉ SoftEther) + --ipv6 + --outer-ipv6 + --native-esp (chỉ L2TP/IPsec native ESP proto-50, P0.8c) + --l2tp-extra-sessions (P1.7) + --ikev2-eap (chỉ IKEv2 EAP-MSCHAPv2, V.1); scheme khác ⇒ cảnh báo + bỏ qua; parse target + header (Protocol) + connect VPN (giữ vòng đời) -> PrintCapabilitiesAsync (panel khả năng) -> RunAsync (abstract); ConnectAsync dispatch theo VpnTarget.Protocol (5 nhánh, truyền enableIpv6/useNativeEsp cho L2TP, ikev2Eap cho IKEv2); ValidateOptions (virtual, fail-fast option riêng)
     ├── ProbeUdpDnsCommandModule.cs           subcommand "dns": +--dns-server/--resolve; RunAsync -> ProbeUdpDnsAsync (probe UDP + phân giải domain qua tunnel)
     ├── ProxyServerCommandModule.cs           subcommand "proxy-server" (NOT sealed): +--proxy-host/--proxy-port (ValidateOptions fail-fast); RunAsync dựng ILoggerFactory console + VpnProxySource (supportIpv6: tunnel.AssignedAddressV6 is not null) + ProxyServer (chung factory) rồi OnProxyReadyAsync (virtual, mặc định giữ tới khi nhấn Enter)
@@ -66,6 +66,7 @@ sudo dotnet run --project demo/Vpn2ProxyDemo -- dns --vpn l2tp://vpn:vpn@<IP>?ps
 dotnet run --project demo/Vpn2ProxyDemo -- http-request --vpn sstp://vpn:vpn@public-vpn-226.opengw.net --url https://checkip.amazonaws.com/   # GET qua proxy rồi thoát
 dotnet run --project demo/Vpn2ProxyDemo -- http-request --vpn "softether://vpn:vpn@public-vpn-226.opengw.net?hub=VPNGATE" --watermark wm.bin  # SoftEther SSL-VPN (cần watermark blob THẬT, nếu không server trả 403)
 dotnet run --project demo/Vpn2ProxyDemo -- http-request --vpn OvpnConfigureFiles/vpngate_public-vpn-206.opengw.net_udp_1195.ovpn   # OpenVPN từ file .ovpn (host/port/proto/cert đọc từ file)
+dotnet run --project demo/Vpn2ProxyDemo -- dns --vpn /path/wg.conf --dns-server 10.50.0.1   # WireGuard từ file .conf wg-quick (PrivateKey/Address + [Peer] PublicKey/Endpoint/AllowedIPs); validate live V.3 (lab/wireguard)
 dotnet run --project demo/Vpn2ProxyDemo -- --help                       # liệt kê subcommand
 dotnet run --project demo/Vpn2ProxyDemo -- proxy-server --help          # option của 1 subcommand
 ```

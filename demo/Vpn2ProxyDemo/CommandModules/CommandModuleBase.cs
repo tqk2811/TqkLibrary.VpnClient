@@ -37,7 +37,8 @@ namespace Vpn2ProxyDemo.CommandModules
                 Description = "VPN target. URI scheme://user:pass@host[:port]: scheme = sstp (MS-SSTP/TLS, port 443), "
                     + "l2tp (L2TP/IPsec IKEv1 PSK \"vpn\", NAT-T 500/4500), ikev2 (IKEv2-native RFC 7296, PSK từ ?psk=, "
                     + "ESP tunnel — V.1; thêm --ikev2-eap để EAP-MSCHAPv2 với user:pass), softether|ssl (SoftEther SSL-VPN/TLS 443, "
-                    + "?hub= mặc định VPNGATE). Hoặc trỏ thẳng tới một file .ovpn cho OpenVPN. Thiếu user:pass ⇒ vpn:vpn.",
+                    + "?hub= mặc định VPNGATE). Hoặc trỏ thẳng tới một file .ovpn cho OpenVPN, hoặc một file .conf wg-quick "
+                    + "cho WireGuard (Noise_IKpsk2/UDP — V.3). Thiếu user:pass ⇒ vpn:vpn.",
                 DefaultValueFactory = _ => "sstp://vpn:vpn@public-vpn-226.opengw.net",
             };
             _command.Options.Add(VpnOption);
@@ -230,6 +231,8 @@ namespace Vpn2ProxyDemo.CommandModules
                     ikev2Eap ? target.User : null, ikev2Eap ? target.Pass : null, ct, preferOuterIpv6),
                 VpnProtocol.SoftEther => VpnTunnel.ConnectSoftEtherAsync(target.Host, target.Port, target.User, target.Pass, target.HubName, watermarkPath, ct),
                 VpnProtocol.OpenVpn => VpnTunnel.ConnectOpenVpnAsync(target.ConfigPath!, target.User, target.Pass, ct),
+                // WireGuard (V.3): keys/endpoint/address đọc từ file .conf wg-quick (configPath); driver chạy handshake UDP.
+                VpnProtocol.WireGuard => VpnTunnel.ConnectWireGuardAsync(target.ConfigPath!, ct),
                 _ => throw new ArgumentOutOfRangeException(nameof(target), target.Protocol, "Giao thức VPN không hỗ trợ."),
             };
 

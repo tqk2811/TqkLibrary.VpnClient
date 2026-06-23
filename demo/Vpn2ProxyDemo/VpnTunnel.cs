@@ -12,8 +12,11 @@ using TqkLibrary.VpnClient.Drivers.L2tpIpsec.Enums;
 using TqkLibrary.VpnClient.Drivers.OpenVpn;
 using TqkLibrary.VpnClient.Drivers.SoftEther;
 using TqkLibrary.VpnClient.Drivers.Sstp;
+using TqkLibrary.VpnClient.Drivers.WireGuard;
+using TqkLibrary.VpnClient.Drivers.WireGuard.Transport;
 using TqkLibrary.VpnClient.IpStack;
 using TqkLibrary.VpnClient.OpenVpn.Config;
+using TqkLibrary.VpnClient.WireGuard.Config;
 
 namespace Vpn2ProxyDemo
 {
@@ -26,8 +29,8 @@ namespace Vpn2ProxyDemo
     /// </para>
     /// <para>
     /// Phần connect riêng của từng giao thức là hàm static (<see cref="ConnectSstpAsync"/> / <see cref="ConnectL2tpAsync"/> /
-    /// <see cref="ConnectSoftEtherAsync"/> / <see cref="ConnectOpenVpnAsync"/>): thêm giao thức mới = thêm một hàm static +
-    /// một nhánh dispatch ở <c>CommandModule</c>.
+    /// <see cref="ConnectSoftEtherAsync"/> / <see cref="ConnectOpenVpnAsync"/> / <see cref="ConnectWireGuardAsync"/>): thêm
+    /// giao thức mới = thêm một hàm static + một nhánh dispatch ở <c>CommandModule</c>.
     /// </para>
     /// </summary>
     internal sealed class VpnTunnel : IAsyncDisposable
@@ -304,6 +307,143 @@ namespace Vpn2ProxyDemo
                 loggerFactory.Dispose();
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Connect tới một peer WireGuard (Noise_IKpsk2, UDP) từ một file <paramref name="configPath"/> wg-quick
+        /// (<c>.conf</c>): parse <c>[Interface]</c> (PrivateKey/Address/DNS) + <c>[Peer]</c> (PublicKey/PresharedKey/
+        /// Endpoint/AllowedIPs/PersistentKeepalive) thành <see cref="WireGuardConfig"/>, rồi tái dùng nguyên
+        /// <see cref="WireGuardConnection"/> (driver chạy handshake initiator → data type-4 → <see cref="TcpIpStack"/>
+        /// trực tiếp, KHÔNG PPP/IPCP — V.3). Trả tunnel đã lên (đang sống).
+        /// </summary>
+        public static async Task<VpnTunnel> ConnectWireGuardAsync(string configPath, CancellationToken ct)
+        {
+            Console.WriteLine("=== [WireGuard] ===");
+            string path = ResolveConfigPath(configPath);
+            (WireGuardConfig config, string host, int port) = ParseWireGuardConf(File.ReadAllText(path));
+            ILoggerFactory loggerFactory = CreateDriverLoggerFactory();
+            var factory = new WireGuardSocketTransportFactory();
+            var vpn = new WireGuardConnection(host, port, config, factory, loggerFactory: loggerFactory);
+            try
+            {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                cts.CancelAfter(TimeSpan.FromSeconds(90));
+
+                Console.WriteLine($"[wireguard] connecting to {host}:{port} (UDP, Noise_IKpsk2 initiator) ...");
+                await vpn.ConnectAsync(cts.Token);
+                IPAddress assigned = vpn.AssignedAddress ?? IPAddress.Any;
+                IPAddress? dns = vpn.Config.DnsServers.Count > 0 ? vpn.Config.DnsServers[0] : null;
+                IPAddress? v6 = GlobalV6(vpn.Config.AssignedAddressV6);
+                Console.WriteLine($"[wireguard] tunnel up. assigned IP = {assigned}, ipv6 = {v6?.ToString() ?? "(none)"}, dns = {dns?.ToString() ?? "(none)"}");
+
+                var stack = new TcpIpStack(vpn.PacketChannel, assigned, v6);
+                var driver = new WireGuardDriver(config);
+                return new VpnTunnel(stack, async () => { await vpn.DisposeAsync(); loggerFactory.Dispose(); },
+                    assigned, vpn.PacketChannel.Mtu, driver.Capabilities, driver.Name, dns, v6);
+            }
+            catch
+            {
+                await vpn.DisposeAsync();
+                loggerFactory.Dispose();
+                throw;
+            }
+        }
+
+        // Parse một file wg-quick .conf tối thiểu: [Interface] PrivateKey/Address/DNS + [Peer] PublicKey/PresharedKey/
+        // Endpoint/AllowedIPs/PersistentKeepalive. Endpoint (host:port) ⇒ địa chỉ kết nối tới peer; keys là base64 32-byte.
+        // Đủ cho điểm-điểm full-tunnel (một peer) — đúng những gì WireGuardConfig cần. Pure helper (không I/O).
+        static (WireGuardConfig config, string host, int port) ParseWireGuardConf(string text)
+        {
+            byte[]? privateKey = null, peerPublicKey = null, presharedKey = null;
+            IPAddress? address = null, addressV6 = null;
+            int prefix = 32, prefixV6 = 128;
+            var dnsServers = new List<IPAddress>();
+            var allowedIps = new List<string>();
+            int keepalive = 0;
+            string host = "";
+            int port = 51820; // cổng WireGuard mặc định
+            string section = "";
+
+            foreach (string rawLine in text.Split('\n'))
+            {
+                string line = rawLine.Trim();
+                if (line.Length == 0 || line.StartsWith("#") || line.StartsWith(";")) continue;
+                if (line.StartsWith("[") && line.EndsWith("]")) { section = line.Substring(1, line.Length - 2).Trim().ToLowerInvariant(); continue; }
+                int eq = line.IndexOf('=');
+                if (eq < 0) continue;
+                string key = line.Substring(0, eq).Trim().ToLowerInvariant();
+                string val = line.Substring(eq + 1).Trim();
+
+                if (section == "interface")
+                {
+                    switch (key)
+                    {
+                        case "privatekey": privateKey = Convert.FromBase64String(val); break;
+                        case "address":
+                            foreach (string a in val.Split(','))
+                            {
+                                (IPAddress ip, int p) = ParseCidr(a.Trim());
+                                if (ip.AddressFamily == AddressFamily.InterNetwork) { address = ip; prefix = p; }
+                                else { addressV6 = ip; prefixV6 = p; }
+                            }
+                            break;
+                        case "dns":
+                            foreach (string d in val.Split(','))
+                                if (IPAddress.TryParse(d.Trim(), out IPAddress? ip)) dnsServers.Add(ip);
+                            break;
+                    }
+                }
+                else if (section == "peer")
+                {
+                    switch (key)
+                    {
+                        case "publickey": peerPublicKey = Convert.FromBase64String(val); break;
+                        case "presharedkey": presharedKey = Convert.FromBase64String(val); break;
+                        case "allowedips":
+                            foreach (string a in val.Split(',')) allowedIps.Add(a.Trim());
+                            break;
+                        case "persistentkeepalive": int.TryParse(val, out keepalive); break;
+                        case "endpoint":
+                            int colon = val.LastIndexOf(':');
+                            if (colon > 0) { host = val.Substring(0, colon); int.TryParse(val.Substring(colon + 1), out port); }
+                            else host = val;
+                            break;
+                    }
+                }
+            }
+
+            if (privateKey is null) throw new InvalidOperationException("File .conf WireGuard thiếu [Interface] PrivateKey.");
+            if (peerPublicKey is null) throw new InvalidOperationException("File .conf WireGuard thiếu [Peer] PublicKey.");
+            if (string.IsNullOrEmpty(host)) throw new InvalidOperationException("File .conf WireGuard thiếu [Peer] Endpoint <host>:<port>.");
+
+            var config = new WireGuardConfig
+            {
+                PrivateKey = privateKey,
+                PeerPublicKey = peerPublicKey,
+                PresharedKey = presharedKey,
+                Address = address,
+                PrefixLength = prefix,
+                AddressV6 = addressV6,
+                PrefixLengthV6 = prefixV6,
+                DnsServers = dnsServers,
+                AllowedIps = allowedIps.Count > 0 ? allowedIps : new List<string> { "0.0.0.0/0", "::/0" },
+                PersistentKeepaliveSeconds = keepalive,
+            };
+            return (config, host, port);
+        }
+
+        // Tách "10.50.0.2/24" → (10.50.0.2, 24); thiếu "/" ⇒ /32 (v4) hoặc /128 (v6). Pure helper.
+        static (IPAddress ip, int prefix) ParseCidr(string cidr)
+        {
+            int slash = cidr.IndexOf('/');
+            if (slash < 0)
+            {
+                IPAddress only = IPAddress.Parse(cidr);
+                return (only, only.AddressFamily == AddressFamily.InterNetworkV6 ? 128 : 32);
+            }
+            IPAddress ip = IPAddress.Parse(cidr.Substring(0, slash));
+            int prefix = int.Parse(cidr.Substring(slash + 1));
+            return (ip, prefix);
         }
 
         // Chỉ địa chỉ IPv6 GLOBAL mới định tuyến ra internet — link-local (fe80::/10) thì bỏ qua nên không bật IPv6 egress

@@ -17,5 +17,8 @@ namespace Vpn2ProxyDemo.CommandModules.Enums
 
         /// <summary>OpenVPN (community-server compatible) cấu hình từ một file <c>.ovpn</c> (<c>--vpn</c> trỏ thẳng tới đường dẫn file).</summary>
         OpenVpn,
+
+        /// <summary>WireGuard (Noise_IKpsk2, UDP) cấu hình từ một file <c>.conf</c> wg-quick (<c>--vpn</c> trỏ thẳng tới đường dẫn file).</summary>
+        WireGuard,
     }
 }

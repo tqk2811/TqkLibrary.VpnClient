@@ -9,12 +9,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Driver façades: SstpConnection (MS-SSTP) + L2tpIpsecConnection (L2TP/IPsec) + IKEv2-native + SoftEther SSL-VPN + OpenVPN. -->
+    <!-- Driver façades: SstpConnection (MS-SSTP) + L2tpIpsecConnection (L2TP/IPsec) + IKEv2-native + SoftEther SSL-VPN + OpenVPN + WireGuard. -->
     <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.L2tpIpsec\TqkLibrary.VpnClient.Drivers.L2tpIpsec.csproj" />
     <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.Ikev2\TqkLibrary.VpnClient.Drivers.Ikev2.csproj" />
     <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.Sstp\TqkLibrary.VpnClient.Drivers.Sstp.csproj" />
     <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.SoftEther\TqkLibrary.VpnClient.Drivers.SoftEther.csproj" />
     <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.OpenVpn\TqkLibrary.VpnClient.Drivers.OpenVpn.csproj" />
+    <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.WireGuard\TqkLibrary.VpnClient.Drivers.WireGuard.csproj" />
     <!-- Socket API trên tunnel: VpnTcpClient + TcpIpStack (dùng bởi VpnProxySource cục bộ). -->
     <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Sockets\TqkLibrary.VpnClient.Sockets.csproj" />
     <!-- Raw-IP transport (ESP proto-50 native, no-NAT) cho cờ native-esp (P0.8c) — cần CAP_NET_RAW/Administrator. -->
