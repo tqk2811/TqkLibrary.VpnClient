@@ -1,7 +1,15 @@
-# lab/sstp-pppd — SSTP server bằng pppd CHUẨN + radvd (validate P1.1 IPv6-over-PPP)
+# lab/sstp-pppd — SSTP server bằng pppd CHUẨN + radvd (validate P1.1 IPv6-over-PPP + P1.2 SSTP-over-IPv6)
 
 > ✅ **CHẠY ĐƯỢC — đã validate live P1.1 (2026-06-23).** Client SSTP của repo lấy được địa chỉ
 > **IPv6 GLOBAL** `fd00:dead:beef:0:<IID-IPV6CP>` qua SLAAC trên link PPP.
+>
+> ✅ **P1.2 SSTP-over-IPv6 + AAAA — validate live (2026-06-23)** qua override
+> [`docker-compose.ipv6.yml`](docker-compose.ipv6.yml): bridge dual-stack (ULA `fd20::/64`) + sstpd bind `::`
+> + container `dotnet-client`. Client `--outer-ipv6` resolve **AAAA** của tên service → bắt tay **TLS trên
+> TCP/IPv6** (server log peer `[fd20::3]`) → PPP/IPCP lên (IP `10.30.0.2`). Chạy:
+> `docker compose -f docker-compose.yml -f docker-compose.ipv6.yml up -d --build` rồi
+> `docker exec lab-sstp-client /opt/client/Vpn2ProxyDemo dns --vpn 'sstp://vpn:vpn@sstp-pppd:8443' --outer-ipv6`.
+> (client-bin tái dùng từ `../l2tp-nonat/client-bin` — publish theo lab l2tp-nonat §3.)
 
 ## 1. Vì sao có setup này (tách khỏi `lab/accel-ppp`)
 
@@ -19,6 +27,7 @@ pppd) + **radvd** quảng bá prefix IPv6 → client SLAAC ra địa chỉ globa
 |---|---|
 | [`Dockerfile`](Dockerfile) | Ubuntu 24.04 + `ppp`(pppd) + `radvd` + `openssl` + `tcpdump` + `sstp-server` (pip, venv) |
 | [`docker-compose.yml`](docker-compose.yml) | BRIDGED, `NET_ADMIN`+`NET_RAW`, `/dev/ppp`, publish **8443** (accel-ppp giữ 443) |
+| [`docker-compose.ipv6.yml`](docker-compose.ipv6.yml) | **Override P1.2** (chồng lên base): bridge dual-stack ULA `fd20::/64` + `SSTP_LISTEN=::` (sstpd bind IPv6) + container `dotnet-client` (mount `../l2tp-nonat/client-bin`) — validate SSTP-over-IPv6 + AAAA |
 | [`entrypoint.sh`](entrypoint.sh) | tạo cert self-signed → chạy `sstpd -l 0.0.0.0 -p 8443 --local 10.30.0.1 --remote 10.30.0.0/24` |
 | [`options.sstpd`](options.sstpd) | pppd options: `require-mschap-v2` / `+ipv6` / `ipv6cp-use-ipaddr` / `noccp` / mtu 1400 |
 | [`chap-secrets`](chap-secrets) | `vpn * vpn *` (user `vpn` / pass `vpn`, mọi IP) |

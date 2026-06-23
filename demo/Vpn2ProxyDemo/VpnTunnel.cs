@@ -4,6 +4,7 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
+using TqkLibrary.VpnClient.Abstractions.Net;
 using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec.Enums;
@@ -73,11 +74,13 @@ namespace Vpn2ProxyDemo
         public ValueTask DisposeAsync() => _disposeAsync();
 
         /// <summary>Connect VPN Gate qua MS-SSTP (TLS) bằng host/port/user/pass; trả tunnel đã lên (đang sống).
-        /// <paramref name="enableIpv6"/>: bật IPV6CP + lấy IPv6 global qua SLAAC/DHCPv6 trên link PPP (P1.1, best-effort).</summary>
-        public static async Task<VpnTunnel> ConnectSstpAsync(string host, int port, string user, string pass, CancellationToken ct, bool enableIpv6 = false)
+        /// <paramref name="enableIpv6"/>: bật IPV6CP + lấy IPv6 global qua SLAAC/DHCPv6 trên link PPP (P1.1, best-effort).
+        /// <paramref name="preferOuterIpv6"/>: ưu tiên IPv6 cho transport NGOÀI (resolve AAAA, TLS-over-IPv6) — P1.2; fallback IPv4 nếu host không có AAAA.</summary>
+        public static async Task<VpnTunnel> ConnectSstpAsync(string host, int port, string user, string pass, CancellationToken ct, bool enableIpv6 = false, bool preferOuterIpv6 = false)
         {
             Console.WriteLine("=== [MS-SSTP] ===");
-            var vpn = new SstpConnection(host, port, enableIpv6: enableIpv6);
+            AddressFamilyPreference outerPref = preferOuterIpv6 ? AddressFamilyPreference.IPv6 : AddressFamilyPreference.Auto;
+            var vpn = new SstpConnection(host, port, addressFamilyPreference: outerPref, enableIpv6: enableIpv6);
             try
             {
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -103,8 +106,9 @@ namespace Vpn2ProxyDemo
         /// <summary>Connect VPN Gate qua L2TP/IPsec (IKEv1 PSK, NAT-T) bằng host/user/pass + group PSK; trả tunnel đã lên (đang sống).
         /// <paramref name="enableIpv6"/>: bật IPV6CP + lấy IPv6 global qua SLAAC/DHCPv6 trên link PPP-trong-L2TP (P1.1, best-effort).
         /// <paramref name="useNativeEsp"/>: bật carrier ESP gốc (proto-50) qua raw-IP cho gateway no-NAT dưới chế độ
-        /// <see cref="L2tpIpsecNatTraversalMode.HonestFirst"/> (P0.8c) thay vì float UDP/4500 — cần quyền raw socket (CAP_NET_RAW/Administrator).</summary>
-        public static async Task<VpnTunnel> ConnectL2tpAsync(string host, string user, string pass, string preSharedKey, CancellationToken ct, bool enableIpv6 = false, bool useNativeEsp = false, int extraSessions = 0)
+        /// <see cref="L2tpIpsecNatTraversalMode.HonestFirst"/> (P0.8c) thay vì float UDP/4500 — cần quyền raw socket (CAP_NET_RAW/Administrator).
+        /// <paramref name="preferOuterIpv6"/>: ưu tiên IPv6 cho transport NGOÀI (resolve AAAA, IKE/ESP-in-UDP over IPv6) — P1.2; fallback IPv4 nếu host không có AAAA.</summary>
+        public static async Task<VpnTunnel> ConnectL2tpAsync(string host, string user, string pass, string preSharedKey, CancellationToken ct, bool enableIpv6 = false, bool useNativeEsp = false, int extraSessions = 0, bool preferOuterIpv6 = false)
         {
             Console.WriteLine("=== [L2TP/IPsec] ===");
             // P0.8c: khi bật native-ESP, cấp raw-IP factory (ESP proto-50) + đặt NAT-T mode HonestFirst để chở ESP gốc khi
@@ -120,8 +124,10 @@ namespace Vpn2ProxyDemo
             // PSK do caller cấp (VpnTarget mặc định "vpn" của VPN Gate). Driver không còn nhét PSK mặc định (P0.4).
             // Console logger để thấy trace handshake/keepalive/rekey/reconnect khi chạy live (như SoftEther/OpenVPN).
             ILoggerFactory loggerFactory = CreateDriverLoggerFactory();
+            AddressFamilyPreference outerPref = preferOuterIpv6 ? AddressFamilyPreference.IPv6 : AddressFamilyPreference.Auto;
             var vpn = new L2tpIpsecConnection(host, Encoding.ASCII.GetBytes(preSharedKey),
-                natTraversalMode: natTraversalMode, enableIpv6: enableIpv6, loggerFactory: loggerFactory, rawIpFactory: rawIpFactory);
+                natTraversalMode: natTraversalMode, addressFamilyPreference: outerPref,
+                enableIpv6: enableIpv6, loggerFactory: loggerFactory, rawIpFactory: rawIpFactory);
             try
             {
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);

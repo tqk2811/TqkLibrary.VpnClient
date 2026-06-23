@@ -1,0 +1,41 @@
+# =====================================================================
+# Override IPv6 cho lab sstp-pppd — validate P1.2 (outer IPv6: SSTP/TLS-over-IPv6 + resolve AAAA).
+#
+# Dùng (chồng lên base, KHÔNG sửa base):
+#   docker compose -f docker-compose.yml -f docker-compose.ipv6.yml up -d --build
+#
+# Override làm 3 việc:
+#   1) Mạng 'default' DUAL-STACK (enable_ipv6 + ULA) ⇒ Docker DNS trả AAAA cho tên service.
+#   2) Server sstpd bind '::' (thay 0.0.0.0) ⇒ listen IPv6 (v6only off ⇒ nhận cả v4+v6).
+#   3) Thêm container 'dotnet-client' (cùng binary publish ở ../l2tp-nonat/client-bin) đứng
+#      trên bridge để chạy demo `--outer-ipv6` nối server BẰNG TÊN service (resolve AAAA → TLS6).
+#
+# Test (sau khi up): client nối 'sstp://vpn:vpn@sstp-pppd:8443 --outer-ipv6' → resolve AAAA
+# → bắt tay TLS trên TCP/IPv6 → SSTP/PPP/IPCP lên. (Không cần --ipv6: chỉ test outer-v6.)
+# =====================================================================
+services:
+  sstp-pppd:
+    environment:
+      # Bind '::' để sstpd listen IPv6 (entrypoint mặc định 0.0.0.0 = chỉ v4). v6only off ⇒ cả v4+v6.
+      # Quote BẮT BUỘC: giá trị '::' không quote bị YAML hiểu thành map → lỗi merge compose.
+      - "SSTP_LISTEN=::"
+
+  dotnet-client:
+    image: mcr.microsoft.com/dotnet/runtime-deps:8.0
+    container_name: lab-sstp-client
+    restart: "no"
+    volumes:
+      # Tái dùng đúng binary publish của lab l2tp-nonat (cùng demo Vpn2ProxyDemo).
+      - ../l2tp-nonat/client-bin:/opt/client:ro
+    working_dir: /opt/client
+    entrypoint: ["sleep", "infinity"]
+    depends_on:
+      - sstp-pppd
+
+networks:
+  default:
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.29.0.0/24
+        - subnet: fd20::/64

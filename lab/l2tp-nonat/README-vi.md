@@ -42,6 +42,35 @@ KHÔNG phải [`L2tpIpsecNatStrategy.Decide`](../../src/TqkLibrary.VpnClient.Dri
 
 ---
 
+## ⚑ P1.2 — outer IPv6 (IKE NAT-D + ESP-in-UDP trên IPv6) — validate live (2026-06-23)
+
+Override [`docker-compose.ipv6.yml`](docker-compose.ipv6.yml) làm bridge `labnet` **dual-stack** (ULA `fd10::/64`),
+KHÔNG đụng base (đường v4 native-ESP giữ nguyên). Client `--outer-ipv6` (forced NAT-T, **không** `--native-esp` —
+raw proto-50 mới strip header v4) nối **bằng container name** `lab-l2tp-server` (resolve **AAAA** `fd10::2`):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ipv6.yml up -d --build
+docker exec lab-l2tp-client /opt/client/Vpn2ProxyDemo dns --vpn 'l2tp://vpn:vpn@lab-l2tp-server?psk=vpn' --outer-ipv6
+# quan sát IPsec-over-IPv6 lập SA:
+docker exec lab-l2tp-server ipsec statusall | grep -E 'ESTABLISHED|INSTALLED|bytes_i'
+```
+
+**Kết quả (client P1.2 ĐÚNG):** IKE Main Mode/MM5-6/Quick Mode **trên UDP/IPv6** → strongSwan
+`ESTABLISHED fd10::2…fd10::3` + CHILD SA `INSTALLED, TRANSPORT, ESP in UDP` + **giải mã `bytes_i>0`** gói
+ESP-in-UDP/IPv6 của client (checksum UDP-v6 pseudo-header đúng) ⇒ đường IKE-NAT-D + ESP-encap-trên-IPv6 chuẩn.
+
+> ⚠️ **Giới hạn server-side (KHÔNG phải client):** full L2TP/PPP-over-IPv6 **chưa lên** vì **xl2tpd 1.3.16
+> bind `0.0.0.0:1701` (v4-only)** — `set_ip` từ chối địa chỉ IPv6 (`listen-addr = ::` → *"host 'host '::' not found"*
+> → xl2tpd không start). Vì vậy gói L2TP/1701-trên-IPv6 (inner của ESP transport, dst `fd10::2`) không tới được
+> xl2tpd ⇒ `bytes_o = 0`, client báo *"L2TP no ack after 8 retransmits"*. Cần **LNS hỗ trợ IPv6** (vd accel-ppp)
+> để PPP/IPCP-over-v6 chạy nốt. SSTP-over-IPv6 full tunnel đã validate ở [`../sstp-pppd`](../sstp-pppd/README-vi.md).
+>
+> ⚠️ **Docker DNS quirk:** trên bridge này, embedded DNS resolve được **container name** (`lab-l2tp-server`)
+> nhưng **SERVFAIL service alias** (`l2tp-server`) ⇒ dùng container name khi test v6. (Không liên quan client —
+> `DnsHostResolver` đúng; chỉ là registry alias của Docker DNS lỗi trên network cụ thể này.)
+
+---
+
 ## 1. Topology — vì sao AN TOÀN (khác lab cũ)
 
 ```
@@ -207,6 +236,7 @@ lab/l2tp-nonat/
 ├─ chap-secrets        # user vpn / pass vpn / mọi IP
 ├─ entrypoint.sh       # charon nền + xl2tpd -D foreground
 ├─ docker-compose.yml  # 2 service trên bridge labnet (server + dotnet-client)
+├─ docker-compose.ipv6.yml  # override P1.2: labnet dual-stack (ULA fd10::/64) cho outer-IPv6
 └─ README-vi.md        # file này (runbook)
 ```
 

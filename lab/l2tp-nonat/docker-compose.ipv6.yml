@@ -1,0 +1,24 @@
+# =====================================================================
+# Override IPv6 cho lab l2tp-nonat — làm bridge 'labnet' DUAL-STACK để validate
+# P1.2 (outer IPv6: kết nối tới server qua IPv6).
+#
+# Dùng (chồng lên base, KHÔNG sửa base):
+#   docker compose -f docker-compose.yml -f docker-compose.ipv6.yml up -d --build
+#
+# Base (docker-compose.yml) giữ NGUYÊN — đường native-ESP v4 (P0.8c) không đổi.
+# Override CHỈ thêm IPv6 cho bridge: 2 container nhận thêm địa chỉ ULA v6, Docker DNS
+# trả thêm AAAA cho tên service ⇒ client `--outer-ipv6` resolve AAAA → IKE/ESP-in-UDP
+# trên IPv6 (forced NAT-T). Intra-bridge v6 đi L2 thẳng (KHÔNG NAT) như v4.
+#
+# Lưu ý: native-ESP (raw proto-50) hiện chỉ strip header IPv4 khi nhận (F.9) ⇒ test
+# outer-IPv6 dùng FORCED NAT-T (ESP-in-UDP/4500 over IPv6), KHÔNG --native-esp.
+# =====================================================================
+networks:
+  labnet:
+    enable_ipv6: true
+    ipam:
+      config:
+        # v4 giữ để dual-stack (tránh đụng 172.17-172.20 đã dùng trên VM).
+        - subnet: 172.28.0.0/24
+        # ULA v6 (fc00::/7) — chỉ nội bộ bridge, không route ra ngoài.
+        - subnet: fd10::/64

@@ -20,6 +20,7 @@ namespace Vpn2ProxyDemo.CommandModules
         Option<string> VpnOption { get; }
         Option<string> WatermarkOption { get; }
         Option<bool> Ipv6Option { get; }
+        Option<bool> OuterIpv6Option { get; }
         Option<bool> NativeEspOption { get; }
         Option<int> ExtraSessionsOption { get; }
 
@@ -54,6 +55,15 @@ namespace Vpn2ProxyDemo.CommandModules
                 DefaultValueFactory = _ => false,
             };
             _command.Options.Add(Ipv6Option);
+
+            OuterIpv6Option = new Option<bool>("--outer-ipv6")
+            {
+                Description = "Ưu tiên IPv6 cho transport NGOÀI — kết nối TỚI server qua IPv6 (resolve AAAA; SSTP=TLS/TCP6, "
+                    + "L2TP=IKE/ESP-in-UDP over IPv6) — P1.2. Khác --ipv6 (IPv6 TRONG tunnel). Chỉ SSTP/L2TP; fallback IPv4 nếu "
+                    + "host không có AAAA. Mặc định tắt (Auto = IPv4-first, giữ hành vi cũ).",
+                DefaultValueFactory = _ => false,
+            };
+            _command.Options.Add(OuterIpv6Option);
 
             NativeEspOption = new Option<bool>("--native-esp")
             {
@@ -99,6 +109,7 @@ namespace Vpn2ProxyDemo.CommandModules
 
             string watermarkPath = parseResult.GetValue(WatermarkOption) ?? string.Empty;
             bool enableIpv6 = parseResult.GetValue(Ipv6Option);
+            bool preferOuterIpv6 = parseResult.GetValue(OuterIpv6Option);
             bool useNativeEsp = parseResult.GetValue(NativeEspOption);
             int extraSessions = parseResult.GetValue(ExtraSessionsOption);
 
@@ -114,11 +125,25 @@ namespace Vpn2ProxyDemo.CommandModules
                 Console.WriteLine($"  !! --l2tp-extra-sessions chỉ dùng cho L2TP/IPsec; scheme '{tag}' bỏ qua.");
                 extraSessions = 0;
             }
+            // --outer-ipv6 chỉ wire cho SSTP/L2TP ở demo (P1.2). Scheme khác (SoftEther/OpenVPN) cấu hình IPv6 transport
+            // theo driver riêng ⇒ bỏ qua + cảnh báo.
+            if (preferOuterIpv6 && target!.Protocol != VpnProtocol.Sstp && target.Protocol != VpnProtocol.L2tp)
+            {
+                Console.WriteLine($"  !! --outer-ipv6 chỉ dùng cho SSTP/L2TP; scheme '{tag}' bỏ qua.");
+                preferOuterIpv6 = false;
+            }
+            // native-ESP (raw proto-50) hiện chỉ strip header IPv4 khi nhận (F.9) ⇒ không chạy trên outer-IPv6.
+            // Bật cả hai ⇒ ưu tiên outer-IPv6 (forced NAT-T/UDP), tắt native-ESP + cảnh báo.
+            if (preferOuterIpv6 && useNativeEsp)
+            {
+                Console.WriteLine("  !! --native-esp (raw proto-50) chưa hỗ trợ outer-IPv6; dùng forced NAT-T (UDP) — bỏ --native-esp.");
+                useNativeEsp = false;
+            }
 
             try
             {
                 // Connect VPN theo giao thức đã chọn và trả về tunnel (giữ vòng đời kết nối).
-                await using VpnTunnel tunnel = await ConnectAsync(target, watermarkPath, enableIpv6, useNativeEsp, extraSessions, ct);
+                await using VpnTunnel tunnel = await ConnectAsync(target, watermarkPath, enableIpv6, useNativeEsp, extraSessions, preferOuterIpv6, ct);
 
                 // Panel "VPN này hỗ trợ gì" — probe (UDP/LAN ảo) + suy luận (IPv6/listen-external) ngay sau khi tunnel lên,
                 // TRƯỚC hành động (tự bao timeout, nuốt lỗi nên không làm hỏng lệnh).
@@ -175,13 +200,14 @@ namespace Vpn2ProxyDemo.CommandModules
         protected virtual string? ValidateOptions(ParseResult parseResult) => null;
 
         /// <summary>Dispatch connect theo giao thức đã parse về hàm static tương ứng của <see cref="VpnTunnel"/>.</summary>
-        Task<VpnTunnel> ConnectAsync(VpnTarget target, string watermarkPath, bool enableIpv6, bool useNativeEsp, int extraSessions, CancellationToken ct)
+        Task<VpnTunnel> ConnectAsync(VpnTarget target, string watermarkPath, bool enableIpv6, bool useNativeEsp, int extraSessions, bool preferOuterIpv6, CancellationToken ct)
             => target.Protocol switch
             {
                 // enableIpv6 chỉ áp cho đường PPP (SSTP/L2TP — P1.1); SoftEther/OpenVPN bật IPv6 theo cấu hình driver riêng.
+                // preferOuterIpv6 (P1.2) áp cho SSTP/L2TP (resolve AAAA + transport ngoài qua IPv6).
                 // useNativeEsp + extraSessions chỉ áp cho L2TP/IPsec (P0.8c native ESP / P1.7 multi-session); caller đã chặn scheme khác.
-                VpnProtocol.Sstp => VpnTunnel.ConnectSstpAsync(target.Host, target.Port, target.User, target.Pass, ct, enableIpv6),
-                VpnProtocol.L2tp => VpnTunnel.ConnectL2tpAsync(target.Host, target.User, target.Pass, target.PreSharedKey, ct, enableIpv6, useNativeEsp, extraSessions),
+                VpnProtocol.Sstp => VpnTunnel.ConnectSstpAsync(target.Host, target.Port, target.User, target.Pass, ct, enableIpv6, preferOuterIpv6),
+                VpnProtocol.L2tp => VpnTunnel.ConnectL2tpAsync(target.Host, target.User, target.Pass, target.PreSharedKey, ct, enableIpv6, useNativeEsp, extraSessions, preferOuterIpv6),
                 VpnProtocol.SoftEther => VpnTunnel.ConnectSoftEtherAsync(target.Host, target.Port, target.User, target.Pass, target.HubName, watermarkPath, ct),
                 VpnProtocol.OpenVpn => VpnTunnel.ConnectOpenVpnAsync(target.ConfigPath!, target.User, target.Pass, ct),
                 _ => throw new ArgumentOutOfRangeException(nameof(target), target.Protocol, "Giao thức VPN không hỗ trợ."),
