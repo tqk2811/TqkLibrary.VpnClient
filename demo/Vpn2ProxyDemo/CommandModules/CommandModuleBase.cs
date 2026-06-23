@@ -23,6 +23,7 @@ namespace Vpn2ProxyDemo.CommandModules
         Option<bool> OuterIpv6Option { get; }
         Option<bool> NativeEspOption { get; }
         Option<int> ExtraSessionsOption { get; }
+        Option<bool> Ikev2EapOption { get; }
 
         readonly Command _command;
         public Command Command => _command;
@@ -34,7 +35,8 @@ namespace Vpn2ProxyDemo.CommandModules
             VpnOption = new Option<string>("--vpn")
             {
                 Description = "VPN target. URI scheme://user:pass@host[:port]: scheme = sstp (MS-SSTP/TLS, port 443), "
-                    + "l2tp (L2TP/IPsec IKEv1 PSK \"vpn\", NAT-T 500/4500), softether|ssl (SoftEther SSL-VPN/TLS 443, "
+                    + "l2tp (L2TP/IPsec IKEv1 PSK \"vpn\", NAT-T 500/4500), ikev2 (IKEv2-native RFC 7296, PSK từ ?psk=, "
+                    + "ESP tunnel — V.1; thêm --ikev2-eap để EAP-MSCHAPv2 với user:pass), softether|ssl (SoftEther SSL-VPN/TLS 443, "
                     + "?hub= mặc định VPNGATE). Hoặc trỏ thẳng tới một file .ovpn cho OpenVPN. Thiếu user:pass ⇒ vpn:vpn.",
                 DefaultValueFactory = _ => "sstp://vpn:vpn@public-vpn-226.opengw.net",
             };
@@ -83,6 +85,14 @@ namespace Vpn2ProxyDemo.CommandModules
             };
             _command.Options.Add(ExtraSessionsOption);
 
+            Ikev2EapOption = new Option<bool>("--ikev2-eap")
+            {
+                Description = "(Chỉ IKEv2) dùng EAP-MSCHAPv2 (RFC 7296 §2.16) với user:pass của URI thay cho PSK AUTH (V.1). "
+                    + "Mặc định tắt ⇒ PSK-only (group PSK từ ?psk=, bỏ qua user:pass). Scheme khác IKEv2 ⇒ bỏ qua.",
+                DefaultValueFactory = _ => false,
+            };
+            _command.Options.Add(Ikev2EapOption);
+
             _command.SetAction(InvokeAsync);
         }
 
@@ -112,6 +122,7 @@ namespace Vpn2ProxyDemo.CommandModules
             bool preferOuterIpv6 = parseResult.GetValue(OuterIpv6Option);
             bool useNativeEsp = parseResult.GetValue(NativeEspOption);
             int extraSessions = parseResult.GetValue(ExtraSessionsOption);
+            bool ikev2Eap = parseResult.GetValue(Ikev2EapOption);
 
             // --native-esp chỉ áp cho L2TP/IPsec (P0.8c). Bật với scheme khác ⇒ bỏ qua + cảnh báo rõ (không crash).
             if (useNativeEsp && target!.Protocol != VpnProtocol.L2tp)
@@ -125,11 +136,11 @@ namespace Vpn2ProxyDemo.CommandModules
                 Console.WriteLine($"  !! --l2tp-extra-sessions chỉ dùng cho L2TP/IPsec; scheme '{tag}' bỏ qua.");
                 extraSessions = 0;
             }
-            // --outer-ipv6 chỉ wire cho SSTP/L2TP ở demo (P1.2). Scheme khác (SoftEther/OpenVPN) cấu hình IPv6 transport
+            // --outer-ipv6 wire cho SSTP/L2TP/IKEv2 ở demo (P1.2). Scheme khác (SoftEther/OpenVPN) cấu hình IPv6 transport
             // theo driver riêng ⇒ bỏ qua + cảnh báo.
-            if (preferOuterIpv6 && target!.Protocol != VpnProtocol.Sstp && target.Protocol != VpnProtocol.L2tp)
+            if (preferOuterIpv6 && target!.Protocol != VpnProtocol.Sstp && target.Protocol != VpnProtocol.L2tp && target.Protocol != VpnProtocol.Ikev2)
             {
-                Console.WriteLine($"  !! --outer-ipv6 chỉ dùng cho SSTP/L2TP; scheme '{tag}' bỏ qua.");
+                Console.WriteLine($"  !! --outer-ipv6 chỉ dùng cho SSTP/L2TP/IKEv2; scheme '{tag}' bỏ qua.");
                 preferOuterIpv6 = false;
             }
             // native-ESP (raw proto-50) hiện chỉ strip header IPv4 khi nhận (F.9) ⇒ không chạy trên outer-IPv6.
@@ -139,11 +150,17 @@ namespace Vpn2ProxyDemo.CommandModules
                 Console.WriteLine("  !! --native-esp (raw proto-50) chưa hỗ trợ outer-IPv6; dùng forced NAT-T (UDP) — bỏ --native-esp.");
                 useNativeEsp = false;
             }
+            // --ikev2-eap chỉ áp cho IKEv2 (V.1). Bật với scheme khác ⇒ bỏ qua + cảnh báo.
+            if (ikev2Eap && target!.Protocol != VpnProtocol.Ikev2)
+            {
+                Console.WriteLine($"  !! --ikev2-eap chỉ dùng cho IKEv2; scheme '{tag}' bỏ qua cờ này.");
+                ikev2Eap = false;
+            }
 
             try
             {
                 // Connect VPN theo giao thức đã chọn và trả về tunnel (giữ vòng đời kết nối).
-                await using VpnTunnel tunnel = await ConnectAsync(target, watermarkPath, enableIpv6, useNativeEsp, extraSessions, preferOuterIpv6, ct);
+                await using VpnTunnel tunnel = await ConnectAsync(target, watermarkPath, enableIpv6, useNativeEsp, extraSessions, preferOuterIpv6, ikev2Eap, ct);
 
                 // Panel "VPN này hỗ trợ gì" — probe (UDP/LAN ảo) + suy luận (IPv6/listen-external) ngay sau khi tunnel lên,
                 // TRƯỚC hành động (tự bao timeout, nuốt lỗi nên không làm hỏng lệnh).
@@ -200,14 +217,17 @@ namespace Vpn2ProxyDemo.CommandModules
         protected virtual string? ValidateOptions(ParseResult parseResult) => null;
 
         /// <summary>Dispatch connect theo giao thức đã parse về hàm static tương ứng của <see cref="VpnTunnel"/>.</summary>
-        Task<VpnTunnel> ConnectAsync(VpnTarget target, string watermarkPath, bool enableIpv6, bool useNativeEsp, int extraSessions, bool preferOuterIpv6, CancellationToken ct)
+        Task<VpnTunnel> ConnectAsync(VpnTarget target, string watermarkPath, bool enableIpv6, bool useNativeEsp, int extraSessions, bool preferOuterIpv6, bool ikev2Eap, CancellationToken ct)
             => target.Protocol switch
             {
                 // enableIpv6 chỉ áp cho đường PPP (SSTP/L2TP — P1.1); SoftEther/OpenVPN bật IPv6 theo cấu hình driver riêng.
-                // preferOuterIpv6 (P1.2) áp cho SSTP/L2TP (resolve AAAA + transport ngoài qua IPv6).
+                // preferOuterIpv6 (P1.2) áp cho SSTP/L2TP/IKEv2 (resolve AAAA + transport ngoài qua IPv6).
                 // useNativeEsp + extraSessions chỉ áp cho L2TP/IPsec (P0.8c native ESP / P1.7 multi-session); caller đã chặn scheme khác.
                 VpnProtocol.Sstp => VpnTunnel.ConnectSstpAsync(target.Host, target.Port, target.User, target.Pass, ct, enableIpv6, preferOuterIpv6),
                 VpnProtocol.L2tp => VpnTunnel.ConnectL2tpAsync(target.Host, target.User, target.Pass, target.PreSharedKey, ct, enableIpv6, useNativeEsp, extraSessions, preferOuterIpv6),
+                // IKEv2-native (V.1): PSK group từ ?psk= (như L2TP). --ikev2-eap ⇒ thêm EAP-MSCHAPv2 với user:pass của URI.
+                VpnProtocol.Ikev2 => VpnTunnel.ConnectIkev2Async(target.Host, target.PreSharedKey,
+                    ikev2Eap ? target.User : null, ikev2Eap ? target.Pass : null, ct, preferOuterIpv6),
                 VpnProtocol.SoftEther => VpnTunnel.ConnectSoftEtherAsync(target.Host, target.Port, target.User, target.Pass, target.HubName, watermarkPath, ct),
                 VpnProtocol.OpenVpn => VpnTunnel.ConnectOpenVpnAsync(target.ConfigPath!, target.User, target.Pass, ct),
                 _ => throw new ArgumentOutOfRangeException(nameof(target), target.Protocol, "Giao thức VPN không hỗ trợ."),

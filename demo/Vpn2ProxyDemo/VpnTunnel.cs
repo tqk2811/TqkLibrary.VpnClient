@@ -6,6 +6,7 @@ using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
 using TqkLibrary.VpnClient.Abstractions.Net;
 using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
+using TqkLibrary.VpnClient.Drivers.Ikev2;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec.Enums;
 using TqkLibrary.VpnClient.Drivers.OpenVpn;
@@ -154,6 +155,44 @@ namespace Vpn2ProxyDemo
                 var driver = new L2tpIpsecDriver();
                 return new VpnTunnel(stack, async () => { GC.KeepAlive(extras); await vpn.DisposeAsync(); loggerFactory.Dispose(); },
                     vpn.AssignedAddress, vpn.PacketChannel.Mtu, driver.Capabilities, driver.Name, vpn.AssignedDns, v6);
+            }
+            catch
+            {
+                await vpn.DisposeAsync();
+                loggerFactory.Dispose();
+                throw;
+            }
+        }
+
+        /// <summary>Connect tới gateway IKEv2-native (RFC 7296) bằng host + group PSK; trả tunnel đã lên (đang sống).
+        /// Driver chạy forced NAT-T (UDP 500→4500) → IKE_SA_INIT → IKE_AUTH → Config Payload (virtual IP/DNS) → ESP
+        /// tunnel mode → <see cref="TcpIpStack"/> trực tiếp (KHÔNG PPP, V.1). Khi <paramref name="eapUser"/>/<paramref name="eapPass"/>
+        /// đều khác null thì initiator dùng EAP-MSCHAPv2 (RFC 7296 §2.16) thay cho PSK AUTH; null ⇒ PSK-only.
+        /// <paramref name="preferOuterIpv6"/>: ưu tiên IPv6 cho transport NGOÀI (resolve AAAA, IKE/ESP-in-UDP over IPv6) — P1.2.</summary>
+        public static async Task<VpnTunnel> ConnectIkev2Async(string host, string preSharedKey, string? eapUser, string? eapPass, CancellationToken ct, bool preferOuterIpv6 = false)
+        {
+            Console.WriteLine("=== [IKEv2-native] ===");
+            ILoggerFactory loggerFactory = CreateDriverLoggerFactory();
+            AddressFamilyPreference outerPref = preferOuterIpv6 ? AddressFamilyPreference.IPv6 : AddressFamilyPreference.Auto;
+            var vpn = new Ikev2Connection(host, Encoding.ASCII.GetBytes(preSharedKey),
+                addressFamilyPreference: outerPref,
+                eapUserName: string.IsNullOrEmpty(eapUser) ? null : eapUser,
+                eapPassword: string.IsNullOrEmpty(eapPass) ? null : eapPass,
+                loggerFactory: loggerFactory);
+            try
+            {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                cts.CancelAfter(TimeSpan.FromSeconds(90));
+
+                string auth = string.IsNullOrEmpty(eapUser) ? "PSK" : "EAP-MSCHAPv2";
+                Console.WriteLine($"[ikev2] connecting to {host} (IKEv2 forced NAT-T UDP 500->4500, auth {auth}) ...");
+                await vpn.ConnectAsync(cts.Token);
+                Console.WriteLine($"[ikev2] tunnel up. assigned IP = {vpn.AssignedAddress}, dns = {vpn.AssignedDns?.ToString() ?? "(none)"}");
+
+                var stack = new TcpIpStack(vpn.PacketChannel, vpn.AssignedAddress, null);
+                var driver = new Ikev2Driver();
+                return new VpnTunnel(stack, async () => { await vpn.DisposeAsync(); loggerFactory.Dispose(); },
+                    vpn.AssignedAddress, vpn.PacketChannel.Mtu, driver.Capabilities, driver.Name, vpn.AssignedDns);
             }
             catch
             {

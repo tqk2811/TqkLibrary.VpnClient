@@ -9,8 +9,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Driver façades: SstpConnection (MS-SSTP) + L2tpIpsecConnection (L2TP/IPsec) + SoftEther SSL-VPN + OpenVPN. -->
+    <!-- Driver façades: SstpConnection (MS-SSTP) + L2tpIpsecConnection (L2TP/IPsec) + IKEv2-native + SoftEther SSL-VPN + OpenVPN. -->
     <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.L2tpIpsec\TqkLibrary.VpnClient.Drivers.L2tpIpsec.csproj" />
+    <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.Ikev2\TqkLibrary.VpnClient.Drivers.Ikev2.csproj" />
     <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.Sstp\TqkLibrary.VpnClient.Drivers.Sstp.csproj" />
     <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.SoftEther\TqkLibrary.VpnClient.Drivers.SoftEther.csproj" />
     <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.OpenVpn\TqkLibrary.VpnClient.Drivers.OpenVpn.csproj" />

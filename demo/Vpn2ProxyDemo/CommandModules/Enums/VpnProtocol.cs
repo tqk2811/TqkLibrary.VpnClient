@@ -9,6 +9,9 @@ namespace Vpn2ProxyDemo.CommandModules.Enums
         /// <summary>L2TP/IPsec (IKEv1 PSK "vpn", NAT-T) (scheme <c>l2tp</c>).</summary>
         L2tp,
 
+        /// <summary>IKEv2-native (RFC 7296 PSK/EAP over NAT-T, CP virtual IP, ESP tunnel mode — no PPP) (scheme <c>ikev2</c>).</summary>
+        Ikev2,
+
         /// <summary>SoftEther SSL-VPN (Ethernet-over-TLS, DHCP SecureNAT, auth SHA-0) (scheme <c>softether</c>/<c>ssl</c>).</summary>
         SoftEther,
 
