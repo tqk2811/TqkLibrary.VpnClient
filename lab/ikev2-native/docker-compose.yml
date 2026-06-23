@@ -1,0 +1,51 @@
+# =====================================================================
+# lab/ikev2-native — compose RIÊNG cho VALIDATE LIVE driver V.1 IKEv2-native.
+#
+# 2 container trên CÙNG một Docker bridge tùy biến 'labnet':
+#   - ikev2-server : strongSwan IKEv2 PSK + ESP TUNNEL + Config Payload
+#   - dotnet-client: binary demo .NET self-contained (scheme ikev2://)
+#
+# Vì sao AN TOÀN (giống l2tp-nonat):
+#   - KHÔNG network_mode: host  -> strongSwan đụng XFRM CHỈ trong netns container,
+#     KHÔNG phá mạng VM.
+#   - KHÔNG privileged-trên-host -> server chỉ NET_ADMIN trong netns riêng.
+#   - 2 container cùng bridge -> client float NAT-T sang UDP/4500 (ESP-in-UDP),
+#     KHÔNG cần raw socket / CAP_NET_RAW (khác P0.8c native ESP).
+#   - KHÔNG publish cổng ra ngoài: test hoàn toàn nội bộ bridge.
+# =====================================================================
+services:
+  ikev2-server:
+    build:
+      context: .
+    image: lab-ikev2-native:22.04
+    container_name: lab-ikev2-server
+    restart: "no"
+    cap_add:
+      - NET_ADMIN          # tạo XFRM SA tunnel + virtual-IP route trong netns container (KHÔNG đụng VM)
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv6.conf.all.forwarding=1
+    networks:
+      - labnet
+
+  dotnet-client:
+    # runtime-deps đủ chạy binary self-contained publish (linux-x64). KHÔNG cần SDK.
+    image: mcr.microsoft.com/dotnet/runtime-deps:8.0
+    container_name: lab-ikev2-client
+    restart: "no"
+    # IKEv2-native chở ESP-in-UDP/4500 (forced NAT-T) ⇒ KHÔNG cần CAP_NET_RAW (khác native-ESP P0.8c).
+    networks:
+      - labnet
+    volumes:
+      # Mount thư mục publish của VM (đặt binary demo vào ./client-bin trên VM trước).
+      - ./client-bin:/opt/client:ro
+    working_dir: /opt/client
+    # Container đứng yên: runbook 'docker exec' chạy demo với scheme ikev2:// (dễ chạy lại + đổi tham số).
+    entrypoint: ["sleep", "infinity"]
+    depends_on:
+      - ikev2-server
+
+networks:
+  # bridge tùy biến: client float NAT-T UDP/4500 tới server qua tên service.
+  labnet:
+    driver: bridge
