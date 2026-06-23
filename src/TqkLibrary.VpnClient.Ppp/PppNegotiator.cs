@@ -106,6 +106,10 @@ namespace TqkLibrary.VpnClient.Ppp
                         toSend = BuildRequestLocked();
                         ArmRestartTimerLocked();
                         break;
+                    default:
+                        // Codes outside the Configure-* set (e.g. LCP Echo-Request) — the subclass may answer.
+                        toSend = HandleOtherCode(parsed.Code, parsed.Identifier, parsed.Data);
+                        break;
                 }
             }
             // Emit outside the lock: _send may run inline and the Opened handler may re-enter the engine.
@@ -191,6 +195,10 @@ namespace TqkLibrary.VpnClient.Ppp
 
         /// <summary>Drops options the peer rejected before resending.</summary>
         protected virtual void OnReject(List<PppOption> rejectedOptions) { }
+
+        /// <summary>Responds to a received control code outside the Configure-* set (e.g. LCP Echo-Request, RFC 1661 §5.8).
+        /// Returns a reply packet to transmit, or null to ignore. Invoked under the negotiator lock.</summary>
+        protected virtual byte[]? HandleOtherCode(byte code, byte identifier, byte[] data) => null;
 
         /// <summary>Stops and releases the Restart timer; safe to call more than once.</summary>
         public void Dispose()

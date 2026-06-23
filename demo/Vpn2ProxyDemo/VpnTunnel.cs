@@ -118,8 +118,10 @@ namespace Vpn2ProxyDemo
             if (useNativeEsp)
                 Console.WriteLine("[l2tp] native-ESP BẬT (P0.8c): ESP proto-50 qua raw-IP, NAT-T HonestFirst — cần CAP_NET_RAW/Administrator.");
             // PSK do caller cấp (VpnTarget mặc định "vpn" của VPN Gate). Driver không còn nhét PSK mặc định (P0.4).
+            // Console logger để thấy trace handshake/keepalive/rekey/reconnect khi chạy live (như SoftEther/OpenVPN).
+            ILoggerFactory loggerFactory = CreateDriverLoggerFactory();
             var vpn = new L2tpIpsecConnection(host, Encoding.ASCII.GetBytes(preSharedKey),
-                natTraversalMode: natTraversalMode, enableIpv6: enableIpv6, rawIpFactory: rawIpFactory);
+                natTraversalMode: natTraversalMode, enableIpv6: enableIpv6, loggerFactory: loggerFactory, rawIpFactory: rawIpFactory);
             try
             {
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -132,12 +134,13 @@ namespace Vpn2ProxyDemo
 
                 var stack = new TcpIpStack(vpn.PacketChannel, vpn.AssignedAddress, v6);
                 var driver = new L2tpIpsecDriver();
-                return new VpnTunnel(stack, () => vpn.DisposeAsync(),
+                return new VpnTunnel(stack, async () => { await vpn.DisposeAsync(); loggerFactory.Dispose(); },
                     vpn.AssignedAddress, vpn.PacketChannel.Mtu, driver.Capabilities, driver.Name, vpn.AssignedDns, v6);
             }
             catch
             {
                 await vpn.DisposeAsync();
+                loggerFactory.Dispose();
                 throw;
             }
         }

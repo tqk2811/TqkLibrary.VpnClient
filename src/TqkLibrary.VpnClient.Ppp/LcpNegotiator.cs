@@ -84,6 +84,17 @@ namespace TqkLibrary.VpnClient.Ppp
                     _sendMagic = false;
         }
 
+        /// <inheritdoc/>
+        protected override byte[]? HandleOtherCode(byte code, byte identifier, byte[] data)
+        {
+            // RFC 1661 §5.8: answer the peer's LCP Echo-Request (its link keepalive) with an Echo-Reply carrying our
+            // Magic-Number. A server probing liveness (e.g. pppd lcp-echo-interval/lcp-echo-failure) otherwise sees no
+            // reply and tears the link down after a couple of minutes — surfacing as the gateway dropping the session.
+            if (code != (byte)PppCode.EchoRequest) return null;
+            byte[] magic = { (byte)(_magic >> 24), (byte)(_magic >> 16), (byte)(_magic >> 8), (byte)_magic };
+            return PppControlCodec.Build((byte)PppCode.EchoReply, identifier, magic);
+        }
+
         static bool IsMsChapV2(byte[] data)
             => data.Length >= 3 && data[0] == 0xC2 && data[1] == 0x23 && data[2] == 0x81;
     }
