@@ -1,0 +1,67 @@
+# =====================================================================
+# lab/openvpn — compose RIÊNG cho VALIDATE LIVE driver V.2 OpenVPN.
+#
+# 2 container trên CÙNG một Docker bridge tùy biến 'labnet':
+#   - ovpn-server   : OpenVPN community server tự host (verb 4, log quan sát)
+#   - dotnet-client : binary demo .NET self-contained (--vpn /shared/client.ovpn)
+#
+# Vì sao AN TOÀN (giống lab ikev2-native/wireguard):
+#   - KHÔNG network_mode: host  -> OpenVPN tạo TUN/TAP CHỈ trong netns container.
+#   - KHÔNG privileged-trên-host -> server chỉ NET_ADMIN + /dev/net/tun.
+#   - 2 container cùng bridge -> client gửi gói OpenVPN tới server qua tên service.
+#   - KHÔNG publish cổng ra ngoài: test hoàn toàn nội bộ bridge.
+#
+# Server sinh PKI + viết /shared/client.ovpn (volume chung) lúc khởi động; demo
+# .NET đọc qua --vpn /shared/client.ovpn (cert/key inline). Đổi cipher/proto/mode
+# bằng biến môi trường PROTO/DEV/CIPHER (mặc định udp/tun/AES-256-GCM).
+# =====================================================================
+services:
+  ovpn-server:
+    build:
+      context: .
+    image: lab-openvpn:24.04
+    container_name: lab-ovpn-server
+    restart: "no"
+    cap_add:
+      - NET_ADMIN          # tạo TUN/TAP + route trong netns container (KHÔNG đụng VM)
+    devices:
+      - /dev/net/tun       # OpenVPN cần /dev/net/tun để tạo tun/tap
+    sysctls:
+      - net.ipv4.ip_forward=1
+    environment:
+      # Đổi 3 biến này giữa các lần validate (udp-gcm / tcp / tap):
+      PROTO: "${PROTO:-udp}"          # udp | tcp
+      DEV: "${DEV:-tun}"              # tun | tap
+      CIPHER: "${CIPHER:-AES-256-GCM}"
+      PORT: "${PORT:-1194}"
+      TUNMTU: "${TUNMTU:-}"           # rỗng = mặc định; đặt số để ép tun-mtu
+    volumes:
+      - ovpn-shared:/shared  # client.ovpn sinh runtime cho demo .NET
+    networks:
+      - labnet
+
+  dotnet-client:
+    # runtime-deps đủ chạy binary self-contained publish (linux-x64). KHÔNG cần SDK.
+    image: mcr.microsoft.com/dotnet/runtime-deps:8.0
+    container_name: lab-ovpn-client
+    restart: "no"
+    # OpenVPN chở data trên UDP/TCP socket thường ⇒ KHÔNG cần CAP_NET_RAW.
+    networks:
+      - labnet
+    volumes:
+      # Binary publish demo (đặt vào ./client-bin trên VM trước) + client.ovpn server sinh ra.
+      - ./client-bin:/opt/client:ro
+      - ovpn-shared:/shared:ro
+    working_dir: /opt/client
+    # Container đứng yên: runbook 'docker exec' chạy demo với --vpn /shared/client.ovpn.
+    entrypoint: ["sleep", "infinity"]
+    depends_on:
+      - ovpn-server
+
+networks:
+  # bridge tùy biến: client gửi gói OpenVPN tới server qua tên service 'ovpn-server'.
+  labnet:
+    driver: bridge
+
+volumes:
+  ovpn-shared:
