@@ -1,0 +1,41 @@
+# pppd options cho từng phiên SSTP (sstp-server gọi: pppd ... file /etc/ppp/options.sstpd).
+# KHÔNG ghi local/remote IP ở đây — sstp-server tự truyền qua argv (--local/--remote).
+
+# Tên local dùng để tra chap-secrets.
+name sstpd
+
+# Xác thực: bắt client dùng MS-CHAPv2 (client repo hỗ trợ).
+require-mschap-v2
+auth
+
+# DNS đẩy cho client (IPCP option 129/131).
+ms-dns 1.1.1.1
+ms-dns 8.8.8.8
+
+# Không cướp default route / không tạo proxyarp trên server lab.
+nodefaultroute
+noproxyarp
+
+# Tránh CCP (MPPE compression negotiation) cho đơn giản — SSTP đã có TLS.
+noccp
+# Tắt nén BSD/Deflate/VJ.
+nobsdcomp
+nodeflate
+novj
+novjccomp
+
+# MTU/MRU vừa với SSTP-over-TLS-over-TCP (tránh phân mảnh).
+mtu 1400
+mru 1400
+
+# IPV6CP: bật để client lấy interface-id, sau đó radvd cấp prefix global qua SLAAC.
+# ipv6cp-use-ipaddr: lấy IID từ địa chỉ IPv4 (đủ để IPV6CP hoàn tất link-local fe80).
++ipv6
+ipv6cp-use-ipaddr
+
+# Log chi tiết để soi IPCP/IPV6CP ConfReq/ConfAck.
+debug
+# pppd ghi log ra syslog; sstp-server cũng đọc qua pty. Không dùng logfd để tránh xung đột.
+
+# Không chạy như daemon độc lập — sstp-server quản lý qua pty.
+nodetach

@@ -14,7 +14,7 @@ namespace Vpn2ProxyDemo
     /// Probe + suy luận "VPN này hỗ trợ gì" để in panel ngay sau khi tunnel lên. Phần <b>probe được</b> thì gửi gói thật
     /// qua tunnel (UDP qua DNS-over-UDP — tái dùng <see cref="UdpDnsProbe"/>; LAN ảo qua ICMP ping gateway nội bộ —
     /// <see cref="TqkLibrary.VpnClient.IpStack.TcpIpStack.PingAsync"/>); phần <b>chưa probe được</b> thì suy từ địa chỉ
-    /// được cấp + năng lực driver (<see cref="VpnDriverCapabilities"/>): IPv6 (chưa có IPv6CP), listen-external (NAT).
+    /// được cấp + năng lực driver (<see cref="VpnDriverCapabilities"/>): IPv6 (theo <c>AssignedAddressV6</c> — P1.1), listen-external (NAT).
     /// <para>
     /// Mỗi sub-probe tự bao timeout ngắn và KHÔNG ném khi hết giờ (trả <see cref="CapabilityStatus.Unknown"/>/
     /// <see cref="CapabilityStatus.Unlikely"/>) — chỉ propagate hủy từ <paramref name="cancellationToken"/> của caller.
@@ -52,9 +52,13 @@ namespace Vpn2ProxyDemo
                 // 1) IPv4 routing — đã có IP ảo nên coi như có (toàn bộ demo proxy/HTTP chứng minh).
                 new VpnCapability("IPv4 routing", CapabilityStatus.Yes, $"IP ảo {ip} đã cấp + định tuyến qua tunnel"),
 
-                // 2) IPv6 — PPP chỉ chạy IPCP (IPv4); chưa có IPv6CP ⇒ tunnel không có nguồn địa chỉ IPv6.
-                new VpnCapability("IPv6", CapabilityStatus.No,
-                    "PPP chỉ negotiate IPCP (IPv4); chưa có IPv6CP ⇒ không có địa chỉ IPv6 (thư viện: roadmap P1.1)"),
+                // 2) IPv6 — opt-in --ipv6 (P1.1): IPV6CP link-local + SLAAC/DHCPv6 trên PPP. Có địa chỉ global ⇒ Yes;
+                //    không bật --ipv6 / server không cấp prefix ⇒ chỉ link-local hoặc IPv4-only.
+                tunnel.AssignedAddressV6 is not null
+                    ? new VpnCapability("IPv6", CapabilityStatus.Yes,
+                        $"địa chỉ IPv6 global {tunnel.AssignedAddressV6} (IPV6CP link-local + SLAAC/DHCPv6 trên PPP — P1.1); stack dual-stack")
+                    : new VpnCapability("IPv6", CapabilityStatus.No,
+                        "chưa có địa chỉ IPv6 global (bật --ipv6 để IPV6CP+SLAAC; hoặc server không cấp prefix IPv6 ⇒ giữ IPv4-only — P1.1)"),
 
                 // 3) UDP — probe thật: DNS-over-UDP xuyên tunnel.
                 udp,

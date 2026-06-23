@@ -1,0 +1,32 @@
+# =====================================================================
+# lab/sstp-pppd — compose riêng (KHÔNG đụng container accel-ppp cũ).
+# SSTP server bằng pppd CHUẨN (sorz/sstp-server) + radvd cho IPv6 SLAAC.
+# Validate P1.1: client SSTP repo lấy địa chỉ IPv6 GLOBAL trên link PPP.
+#
+# An toàn TUYỆT ĐỐI: BRIDGED, KHÔNG host-net, KHÔNG privileged, KHÔNG IPsec.
+# Chỉ NET_ADMIN (tạo ppp trong netns container) + NET_RAW (radvd ICMPv6 RA) + /dev/ppp.
+# Port 8443 (accel-ppp cũ giữ 443) — client trỏ sstp://vpn:vpn@<VM_IP>:8443.
+# =====================================================================
+services:
+  sstp-pppd:
+    build:
+      context: .
+    image: lab-sstp-pppd:24.04
+    container_name: lab-sstp-pppd
+    restart: "no"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/ppp:/dev/ppp
+    # radvd cần ghi /proc/sys/net/ipv6/conf/<iface>/forwarding ⇒ sysctl trong netns container.
+    sysctls:
+      - net.ipv6.conf.all.forwarding=1
+      - net.ipv4.ip_forward=1
+    ports:
+      - "8443:8443"      # SSTP (TLS) — port riêng, tránh accel-ppp 443
+    environment:
+      - SSTP_PORT=8443
+      - SSTP_LOCAL=10.30.0.1
+      - SSTP_REMOTE=10.30.0.0/24
+      - SSTP_LOGLEVEL=5

@@ -1,0 +1,25 @@
+# Template radvd cho interface ppp động. Hook ipv6-up thay @IFACE@ = tên ppp (ppp0/ppp1...).
+# Quảng bá prefix ULA GLOBAL fd00:dead:beef::/64 qua Router Advertisement ⇒ client SLAAC
+# tạo địa chỉ fd00:dead:beef::<IID> (global-scope, KHÔNG phải fe80 link-local) = P1.1 PASS.
+interface @IFACE@
+{
+    AdvSendAdvert on;
+    # Gửi RA nhanh để client (gửi RS) nhận RA sớm, không phải chờ interval mặc định.
+    MinRtrAdvInterval 3;
+    MaxRtrAdvInterval 5;
+    # ppp là link point-to-point — không có L2 multicast thật, nhưng radvd vẫn unicast/all-nodes được.
+    AdvManagedFlag off;     # SLAAC (không DHCPv6 stateful)
+    AdvOtherConfigFlag off;
+
+    prefix fd00:dead:beef::/64
+    {
+        AdvOnLink on;
+        AdvAutonomous on;       # cho phép SLAAC tự sinh địa chỉ
+        AdvRouterAddr on;
+    };
+
+    RDNSS 2606:4700:4700::1111
+    {
+        AdvRDNSSLifetime 30;
+    };
+};

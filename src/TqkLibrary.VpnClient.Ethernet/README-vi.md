@@ -41,7 +41,7 @@ TqkLibrary.VpnClient.Ethernet/
 ├── ArpPacket.cs             # static codec gói ARP IPv4-over-Ethernet 28 byte (RFC 826): BuildRequest/BuildReply + readers + IsIpv4OverEthernet
 ├── ArpResolver.cs           # INeighborResolver IPv4 (: IAsyncDisposable): cache IP→MAC + request/reply RFC 826; HandleInboundFrame nối seam VirtualHost
 ├── ArpResolverOptions.cs    # tunable: CacheTtl / RequestTimeout / MaxAttempts (plain class, không record/init)
-├── Icmpv6Ndisc.cs           # static codec ICMPv6 NDISC (RFC 4861): build/parse NS/NA/RS/RA + option Source/Target-LLA + Prefix-Info; solicited-node multicast + MAC 33:33; checksum pseudo-header RFC 8200 §8.1
+├── Icmpv6Ndisc.cs           # static codec ICMPv6 NDISC (RFC 4861): build/parse NS/NA/RS/RA + option Source/Target-LLA + Prefix-Info; solicited-node multicast + MAC 33:33; checksum pseudo-header RFC 8200 §8.1. (Options của RA bắt đầu **byte 16** — OptionsOffsetFor(RA)+BuildRouterAdvertisement sửa từ 20 sai cũ; nếu lệch thì TryGetPrefixInformation fail trên RA thật của radvd/Linux ⇒ SLAAC không cấp địa chỉ. Validated live vs radvd 2026-06-23 — xem .docs/10 §9 "Global IPv6 over PPP")
 ├── NdiscResolver.cs         # INeighborResolver IPv6 (: IAsyncDisposable): cache IPv6→MAC + NS/NA RFC 4861 + DAD + parse RA→gateway/prefix; HandleInboundFrame nối seam VirtualHost (IP + non-IP)
 ├── NdiscResolverOptions.cs  # tunable: CacheTtl / RequestTimeout / MaxAttempts / DadTimeout / DadTransmits (plain class)
 ├── DhcpV4Options.cs         # static codec option DHCP (RFC 2131/2132): magic-cookie 0x63825363 + TLV 53/50/54/51/1/3/6/55/61; Write*/Read*/TryGetOption

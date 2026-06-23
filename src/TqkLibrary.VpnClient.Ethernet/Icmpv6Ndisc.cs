@@ -170,9 +170,10 @@ namespace TqkLibrary.VpnClient.Ethernet
         /// </summary>
         public static byte[] BuildRouterAdvertisement(IPAddress source, IPAddress destination, MacAddress routerMac, byte curHopLimit, ushort routerLifetimeSeconds, IPAddress prefix, byte prefixLength, byte prefixFlags, uint validLifetime, uint preferredLifetime)
         {
-            // RA fixed body (RFC 4861 §4.2): curHopLimit(1)+flags(1)+routerLifetime(2)+reachable(4)+retrans(4) after the
-            // 4-byte ICMPv6 header word, then options: Source LLA (8) + Prefix Information (32).
-            const int raBodyAfterHeader = 12;       // bytes 4..16 of the message
+            // RA fixed body (RFC 4861 §4.2): curHopLimit(1)+flags(1)+routerLifetime(2) — the 4-byte word counted in
+            // Icmpv6HeaderSize(8) — then reachable(4)+retrans(4), then options: Source LLA (8) + Prefix Information (32).
+            // Options begin at byte 16 (must match OptionsOffsetFor(RA) and real-host RAs from radvd/Linux).
+            const int raBodyAfterHeader = 8;        // ReachableTime(4) + RetransTimer(4): bytes 8..16
             byte[] msg = new byte[Icmpv6HeaderSize + raBodyAfterHeader + 8 + 32];
             msg[0] = TypeRouterAdvertisement;
             msg[4] = curHopLimit;
@@ -300,7 +301,9 @@ namespace TqkLibrary.VpnClient.Ethernet
                 case TypeRouterSolicitation:
                     return Icmpv6HeaderSize;            // 4-byte header word + 4-byte reserved
                 case TypeRouterAdvertisement:
-                    return Icmpv6HeaderSize + 12;       // 4-byte header word + curHopLimit/flags/lifetime/reachable/retrans
+                    // RA header is 16 bytes before options (RFC 4861 §4.2): 4-byte ICMPv6 header + CurHopLimit/flags/
+                    // RouterLifetime (the 4-byte word counted in Icmpv6HeaderSize=8) + ReachableTime(4) + RetransTimer(4).
+                    return Icmpv6HeaderSize + 8;
                 default:
                     return Icmpv6HeaderSize;
             }

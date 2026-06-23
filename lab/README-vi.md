@@ -1,9 +1,15 @@
 # lab Q.1 — Docker server VPN để VALIDATE LIVE driver TqkLibrary.VpnClient
 
-> ⚠️ **BẢN NHÁP — chưa chạy thử lần nào.** Đây là khung lab để bring-up & **tinh chỉnh
-> live**. Lần đầu `docker compose up` gần như chắc chắn phải sửa vài chỗ config (version
-> accel-ppp, tên option IPv6 ND, image/cú pháp strongSwan). Mọi chỗ nghi ngờ đã đánh dấu
-> `# CHECK:` trong file config + liệt kê ở mục [§8 Điểm cần tinh chỉnh live](#8-điểm-không-chắc-cần-tinh-chỉnh-live).
+> ✅ **P1.1 (IPv6-over-PPP/SLAAC) đã VALIDATE LIVE** qua setup riêng [`sstp-pppd/`](sstp-pppd/README-vi.md)
+> (sstp-server + **pppd CHUẨN** + radvd) — KHÔNG phải `accel-ppp/` (accel-ppp hỏng PPP
+> network-phase trong VM này). SSTP client lấy địa chỉ IPv6 **global** `fd00:dead:beef:0:...` qua
+> SLAAC. Xem [`sstp-pppd/README-vi.md`](sstp-pppd/README-vi.md).
+
+> ⚠️ **`accel-ppp/` + `strongswan/` vẫn là BẢN NHÁP.** Khung lab để bring-up & **tinh chỉnh
+> live**. `accel-ppp` HỎNG PPP network-phase (không gửi IPCP ConfReq — lỗi FSM userspace, đã
+> loại trừ netns/iprange/IP-pool/mppe); dùng [`sstp-pppd/`](sstp-pppd/README-vi.md) thay thế cho
+> mọi việc cần PPP network-phase (IPCP/IPV6CP). Mọi chỗ nghi ngờ đánh dấu `# CHECK:` + liệt kê ở
+> [§8 Điểm cần tinh chỉnh live](#8-điểm-không-chắc-cần-tinh-chỉnh-live).
 
 Mục tiêu: thay server công khai (VPN Gate flaky) bằng server VPN chạy **trong VM Ubuntu
 Server 24.04 (VMware)**, để validate LIVE các mục **P1.1 / P1.2 / P1.3 / P1.7 / P0.8c** của
