@@ -254,9 +254,20 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
             _channel?.SetPeerChannel(peer.Index, channel);
         }
 
-        // Put a handshake datagram (initiation / resend) on this peer's own transport — its own endpoint.
-        Task SendToPeerAsync(Peer peer, ReadOnlyMemory<byte> wire)
-            => peer.Transport.SendAsync(wire).AsTask();
+        // Put a handshake datagram (initiation / resend) on this peer's own transport — its own endpoint. The send is
+        // fire-and-forget (a missed initiation is resent by the timer loop), so a transport fault would otherwise be
+        // swallowed unobserved: log it so a broken UDP path (e.g. a refused/unreachable endpoint) is visible in traces.
+        async Task SendToPeerAsync(Peer peer, ReadOnlyMemory<byte> wire)
+        {
+            try
+            {
+                await peer.Transport.SendAsync(wire).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogPacketDropped(DriverName, VpnDropReason.Unexpected, $"failed to send handshake datagram to peer {peer.Index}: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
 
         // ---- inbound demux: route by message type (response / cookie-reply / transport-data) ----
 
