@@ -271,6 +271,8 @@ namespace Vpn2ProxyDemo.CommandModules
                 VpnProtocol.N2n => VpnTunnel.ConnectN2nAsync(target.ConfigPath!, ct),
                 // ZeroTier (V.7.3): identity ta + node/controller + endpoint + network id + overlay đọc từ file .zerotier; VL1 HELLO/OK + NETWORK_CONFIG + VL2 EXT_FRAME L2.
                 VpnProtocol.ZeroTier => VpnTunnel.ConnectZeroTierAsync(target.ConfigPath!, ct),
+                // vtun (V.11): TCP challenge-response (MD5+Blowfish) → length-prefix frame → bare IP (type tun). Host-config name = HubName, password = Pass, IP tĩnh từ ?addr/?peer.
+                VpnProtocol.Vtun => VpnTunnel.ConnectVtunAsync(target.Host, target.Port, target.HubName, target.Pass, target.TunnelAddress!, target.TunnelPeerAddress, ct),
                 _ => throw new ArgumentOutOfRangeException(nameof(target), target.Protocol, "Giao thức VPN không hỗ trợ."),
             };
 

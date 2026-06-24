@@ -44,5 +44,8 @@ namespace Vpn2ProxyDemo.CommandModules.Enums
 
         /// <summary>ZeroTier (VL1 Curve25519/Salsa20-12/Poly1305 + VL2 EXT_FRAME L2-over-UDP) cấu hình từ một file <c>.zerotier</c> (ini trỏ tới identity.secret ta + identity.public của node/controller + endpoint + network id + overlay); HELLO ⇄ OK + NETWORK_CONFIG_REQUEST (<c>--vpn</c> trỏ thẳng tới file) (V.7.3).</summary>
         ZeroTier,
+
+        /// <summary>vtun (legacy tunnel daemon): TCP control+data, challenge-response (MD5+Blowfish-ECB) → length-prefix frame → bare IP (type tun, encrypt no, compress no). Scheme <c>vtun://pass@host[:port]/hostName?addr=&lt;ip&gt;/&lt;prefix&gt;&amp;peer=&lt;ip&gt;</c> (V.11).</summary>
+        Vtun,
     }
 }

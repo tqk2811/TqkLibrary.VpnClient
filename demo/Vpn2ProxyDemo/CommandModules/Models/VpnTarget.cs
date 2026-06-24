@@ -155,6 +155,9 @@ namespace Vpn2ProxyDemo.CommandModules.Models
             { protocol = VpnProtocol.IpEncap; ipEncapKind = IpEncapKind.IpIp; isIpEncap = true; }
             else if (string.Equals(uri.Scheme, "sit", StringComparison.OrdinalIgnoreCase))
             { protocol = VpnProtocol.IpEncap; ipEncapKind = IpEncapKind.Sit; isIpEncap = true; }
+            // "vtun" → vtun legacy daemon (V.11): pass@host:port/hostName?addr=<ip>/<prefix>&peer=<ip>.
+            else if (string.Equals(uri.Scheme, "vtun", StringComparison.OrdinalIgnoreCase))
+                protocol = VpnProtocol.Vtun;
             else if (!Enum.TryParse(uri.Scheme, ignoreCase: true, out protocol) || protocol == VpnProtocol.OpenVpn || protocol == VpnProtocol.WireGuard || protocol == VpnProtocol.IpEncap)
             {
                 error = $"--vpn scheme '{uri.Scheme}' không hỗ trợ. Dùng 'sstp', 'l2tp', 'ikev2', 'cisco' (Cisco IPsec/EzVPN V.12), 'softether'/'ssl', 'openconnect'/'anyconnect', 'pptp', "
@@ -211,9 +214,30 @@ namespace Vpn2ProxyDemo.CommandModules.Models
                 }
             }
 
+            // vtun (V.11): host-config name = URI path (vd /test), password = userinfo (vtun://pass@host/test),
+            // địa chỉ tunnel tĩnh ?addr/?peer (vtund không thương lượng địa chỉ in-tunnel; up/down script đặt server tun).
+            string vtunHostName = "default";
+            if (protocol == VpnProtocol.Vtun)
+            {
+                vtunHostName = uri.AbsolutePath.Trim('/');
+                if (string.IsNullOrEmpty(vtunHostName)) vtunHostName = "default";
+                // vtun có 1 secret duy nhất (password). userinfo 'pass@' (không có ':') ⇒ password; 'x:pass@' ⇒ phần sau ':'.
+                if (!string.IsNullOrEmpty(uri.UserInfo) && uri.UserInfo.IndexOf(':') < 0)
+                    pass = Uri.UnescapeDataString(uri.UserInfo);
+                tunnelAddr = TryGetQueryValue(uri.Query, "addr");
+                tunnelPeer = TryGetQueryValue(uri.Query, "peer");
+                if (port < 0) port = 5000;
+                if (string.IsNullOrEmpty(tunnelAddr))
+                {
+                    error = "--vpn scheme 'vtun' cần địa chỉ tunnel tĩnh: thêm '?addr=<ipv4>/<prefix>&peer=<ipv4>' "
+                        + "(vtund không thương lượng địa chỉ in-tunnel — phải cấp out-of-band).";
+                    return false;
+                }
+            }
+
             target = new VpnTarget(protocol, uri.Host, port, user, pass,
                 preSharedKey: string.IsNullOrEmpty(psk) ? "vpn" : psk!,
-                hubName: string.IsNullOrEmpty(hub) ? "VPNGATE" : hub!,
+                hubName: protocol == VpnProtocol.Vtun ? vtunHostName : (string.IsNullOrEmpty(hub) ? "VPNGATE" : hub!),
                 ipEncapKind: ipEncapKind,
                 tunnelAddress: tunnelAddr,
                 tunnelPeerAddress: tunnelPeer,

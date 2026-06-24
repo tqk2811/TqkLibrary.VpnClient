@@ -23,6 +23,7 @@
     <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.Nebula\TqkLibrary.VpnClient.Drivers.Nebula.csproj" />
     <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.Tinc\TqkLibrary.VpnClient.Drivers.Tinc.csproj" />
     <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.N2n\TqkLibrary.VpnClient.Drivers.N2n.csproj" />
+    <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.Vtun\TqkLibrary.VpnClient.Drivers.Vtun.csproj" />
     <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.ZeroTier\TqkLibrary.VpnClient.Drivers.ZeroTier.csproj" />
     <!-- Socket API trên tunnel: VpnTcpClient + TcpIpStack (dùng bởi VpnProxySource cục bộ). -->
     <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Sockets\TqkLibrary.VpnClient.Sockets.csproj" />

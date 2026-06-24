@@ -14,6 +14,9 @@ using TqkLibrary.VpnClient.Drivers.L2tpIpsec;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec.Enums;
 using TqkLibrary.VpnClient.Drivers.N2n;
 using TqkLibrary.VpnClient.Drivers.N2n.Config;
+using TqkLibrary.VpnClient.Drivers.Vtun;
+using TqkLibrary.VpnClient.Drivers.Vtun.Config;
+using TqkLibrary.VpnClient.Drivers.Vtun.Transport;
 using TqkLibrary.VpnClient.Drivers.ZeroTier;
 using TqkLibrary.VpnClient.Drivers.ZeroTier.Config;
 using TqkLibrary.VpnClient.Drivers.Nebula;
@@ -652,6 +655,59 @@ namespace Vpn2ProxyDemo
 
                 var stack = new TcpIpStack(vpn.PacketChannel, assigned, null);
                 var driver = new N2nDriver(config);
+                return new VpnTunnel(stack, async () => { await vpn.DisposeAsync(); loggerFactory.Dispose(); },
+                    assigned, vpn.PacketChannel.Mtu, driver.Capabilities, driver.Name, dns);
+            }
+            catch
+            {
+                await vpn.DisposeAsync();
+                loggerFactory.Dispose();
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Kết nối vtun (legacy tunnel daemon) tới một vtund host qua TCP. Bắt tay challenge-response (MD5 + Blowfish-ECB)
+        /// → kiểm cờ server (type tun / proto tcp / encrypt no / compress no) → data plane length-prefix mang gói IP trần
+        /// (<see cref="VtunPacketChannel"/>) → <see cref="TcpIpStack"/>. vtund không thương lượng địa chỉ in-tunnel nên IP
+        /// tunnel cấp tĩnh từ <paramref name="tunnelAddress"/> (<c>?addr=</c>) + <paramref name="peerAddress"/>
+        /// (<c>?peer=</c>). Tái dùng nguyên <see cref="VtunConnection"/>.
+        /// </summary>
+        public static async Task<VpnTunnel> ConnectVtunAsync(string host, int port, string hostName, string password,
+            string tunnelAddress, string? peerAddress, CancellationToken ct)
+        {
+            Console.WriteLine("=== [vtun] ===");
+            if (port <= 0) port = 5000;
+            string[] addrParts = tunnelAddress.Split('/');
+            IPAddress tunnelAddr = IPAddress.Parse(addrParts[0]);
+            int prefix = addrParts.Length > 1 ? int.Parse(addrParts[1]) : 24;
+            IPAddress? peerAddr = string.IsNullOrEmpty(peerAddress) ? null : IPAddress.Parse(peerAddress);
+
+            var config = new VtunConfig
+            {
+                HostName = hostName,
+                Password = password,
+                TunnelAddress = tunnelAddr,
+                PrefixLength = prefix,
+                PeerAddress = peerAddr,
+                Mtu = 1450,
+            };
+            ILoggerFactory loggerFactory = CreateDriverLoggerFactory();
+            var factory = new VtunSocketTransportFactory();
+            var vpn = new VtunConnection(host, port, config, factory, loggerFactory: loggerFactory);
+            try
+            {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                cts.CancelAfter(TimeSpan.FromSeconds(90));
+
+                Console.WriteLine($"[vtun] connecting to {host}:{port} host='{hostName}' (TCP, challenge-response MD5+Blowfish) ...");
+                await vpn.ConnectAsync(cts.Token);
+                IPAddress assigned = vpn.AssignedAddress ?? IPAddress.Any;
+                IPAddress? dns = vpn.Config.DnsServers.Count > 0 ? vpn.Config.DnsServers[0] : null;
+                Console.WriteLine($"[vtun] tunnel up. server flags = {vpn.ServerFlags}, tunnel IP = {assigned}, peer = {peerAddr?.ToString() ?? "(none)"}, mtu = {vpn.PacketChannel.Mtu}");
+
+                var stack = new TcpIpStack(vpn.PacketChannel, assigned, null);
+                var driver = new VtunDriver(config);
                 return new VpnTunnel(stack, async () => { await vpn.DisposeAsync(); loggerFactory.Dispose(); },
                     assigned, vpn.PacketChannel.Mtu, driver.Capabilities, driver.Name, dns);
             }
