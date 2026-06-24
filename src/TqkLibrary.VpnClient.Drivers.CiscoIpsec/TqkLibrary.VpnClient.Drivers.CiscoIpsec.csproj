@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Cisco IPsec / EzVPN remote-access VPN protocol driver: IKEv1 Aggressive Mode (group PSK) + XAUTH (user/password) + Mode-Config (pull virtual IP/DNS) over NAT-T, ESP tunnel mode straight to an IP channel (no PPP/L2TP); DPD keepalive, Phase 2 rekey, Delete teardown, auto-reconnect. Interops with strongSwan / vpnc Cisco-compatible gateways.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.Core\TqkLibrary.VpnClient.Drivers.Core.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Ipsec\TqkLibrary.VpnClient.Ipsec.csproj" />
+  </ItemGroup>
+
+</Project>

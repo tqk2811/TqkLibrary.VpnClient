@@ -8,6 +8,7 @@
     <ProjectReference Include="..\TqkLibrary.VpnClient.Sockets\TqkLibrary.VpnClient.Sockets.csproj" />
     <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.L2tpIpsec\TqkLibrary.VpnClient.Drivers.L2tpIpsec.csproj" />
     <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.Ikev2\TqkLibrary.VpnClient.Drivers.Ikev2.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.CiscoIpsec\TqkLibrary.VpnClient.Drivers.CiscoIpsec.csproj" />
     <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.OpenConnect\TqkLibrary.VpnClient.Drivers.OpenConnect.csproj" />
     <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.OpenVpn\TqkLibrary.VpnClient.Drivers.OpenVpn.csproj" />
     <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.Sstp\TqkLibrary.VpnClient.Drivers.Sstp.csproj" />

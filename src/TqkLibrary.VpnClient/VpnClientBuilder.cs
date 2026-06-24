@@ -2,6 +2,7 @@ using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
+using TqkLibrary.VpnClient.Drivers.CiscoIpsec;
 using TqkLibrary.VpnClient.Drivers.Ikev2;
 using TqkLibrary.VpnClient.Drivers.IpEncap;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec;
@@ -110,6 +111,18 @@ namespace TqkLibrary.VpnClient
         public VpnClientBuilder UseIkev2(Ipsec.Ike.V2.Models.IkeCertificateTrust responderTrust,
             Ikev2ReconnectOptions? reconnectOptions = null)
             => AddDriver(new Ikev2Driver(reconnectOptions, responderTrust: responderTrust));
+
+        /// <summary>
+        /// Registers the Cisco IPsec / EzVPN remote-access driver for the Aggressive Mode group <paramref name="groupName"/>:
+        /// IKEv1 Aggressive Mode (group PSK from <c>VpnCredentials.PreSharedKey</c>) + XAUTH (<c>Username</c>/<c>Password</c>)
+        /// + Mode-Config (pulls the virtual IP/DNS) over forced NAT-T, then an ESP tunnel-mode CHILD SA straight to the IP
+        /// channel — no PPP/L2TP. Auto-reconnect is enabled by default unless <paramref name="reconnectOptions"/> disables it.
+        /// <para><b>Security:</b> Aggressive Mode + group PSK is cryptographically weak (offline dictionary attack on the
+        /// group PSK from the responder's HASH_R) — interop with legacy Cisco-compatible gateways only; prefer IKEv2 or
+        /// L2TP/IPsec Main Mode where available.</para>
+        /// </summary>
+        public VpnClientBuilder UseCiscoIpsec(string groupName, CiscoIpsecReconnectOptions? reconnectOptions = null)
+            => AddDriver(new CiscoIpsecDriver(groupName, reconnectOptions));
 
         /// <summary>Registers the OpenVPN driver (community-server compatible: UDP/TCP, tun-mode, NCP AEAD) from a parsed profile.</summary>
         public VpnClientBuilder UseOpenVpn(OpenVpnProfile profile) => AddDriver(new OpenVpnDriver(profile));
