@@ -600,7 +600,8 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
             reply.Attributes.Add(IsakmpAttribute.Tlv(IkeV1Constants.XAuthAttribute.UserName, System.Text.Encoding.UTF8.GetBytes(userName)));
             reply.Attributes.Add(IsakmpAttribute.Tlv(IkeV1Constants.XAuthAttribute.UserPassword, System.Text.Encoding.UTF8.GetBytes(password)));
             _logger.LogProtocolStep(Layer, "XAUTH: CFG_REQUEST received, sending CFG_REPLY (user name + password)");
-            return BuildTransaction(reply);
+            // Echo the request's Message ID — XAUTH is a Transaction exchange; the reply shares the request's M-ID.
+            return BuildTransaction(reply, IsakmpMessage.ReadHeader(wire, out _).MessageId);
         }
 
         /// <summary>
@@ -620,7 +621,8 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
             _logger.LogProtocolStep(Layer, success
                 ? "XAUTH: CFG_SET status OK — sending CFG_ACK (extended authentication succeeded)"
                 : "XAUTH: CFG_SET status FAIL — sending CFG_ACK (extended authentication failed)");
-            return BuildTransaction(ack);
+            // Echo the SET's Message ID — the ACK answers the server-initiated SET on the same Transaction exchange.
+            return BuildTransaction(ack, IsakmpMessage.ReadHeader(wire, out _).MessageId);
         }
 
         /// <summary>
@@ -692,15 +694,24 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
             var ack = new IsakmpConfigPayload { CfgType = IsakmpCfgType.Ack, Identifier = set.Identifier };
             foreach (IsakmpAttribute attribute in set.Attributes)
                 ack.Attributes.Add(IsakmpAttribute.Tlv(attribute.Type, Array.Empty<byte>()));
-            return BuildTransaction(ack);
+            // Echo the SET's Message ID — the ACK answers the server-initiated SET on the same Transaction exchange.
+            return BuildTransaction(ack, IsakmpMessage.ReadHeader(wire, out _).MessageId);
         }
 
         // Wraps a configuration payload in a HASH(1)-prefixed Transaction exchange under a fresh non-zero Message ID
         // (the same construction Quick Mode / Informational use): HASH = prf(SKEYID_a, M-ID | <Attribute payload>),
-        // encrypted with the derived-IV cipher for that message id.
-        byte[] BuildTransaction(IsakmpConfigPayload config)
+        // encrypted with the derived-IV cipher for that message id. Use only for a client-INITIATED Transaction
+        // (Mode-Config CFG_REQUEST); a reply/ack to a server-initiated Transaction must echo the server's Message ID
+        // (RFC 2408 §4.6 / §5.5 — a Transaction is a single exchange whose request and response share one M-ID), so use
+        // the <see cref="BuildTransaction(IsakmpConfigPayload, uint)"/> overload there.
+        byte[] BuildTransaction(IsakmpConfigPayload config) => BuildTransaction(config, RandomNonZeroUInt32());
+
+        // Builds a HASH(1)-prefixed Transaction exchange under the given Message ID. The XAUTH CFG_REPLY/ACK and the
+        // Mode-Config CFG_ACK MUST reuse the Message ID of the server-initiated request/set they answer — otherwise the
+        // gateway treats the reply as a brand-new Transaction request (strongSwan: "queueing TRANSACTION request as
+        // tasks still active" → "ignoring TRANSACTION request, queue full") and the XAUTH never completes.
+        byte[] BuildTransaction(IsakmpConfigPayload config, uint messageId)
         {
-            uint messageId = RandomNonZeroUInt32();
             var afterHash = new List<IsakmpPayload> { config };
             var afterHashBytes = new List<byte>();
             IsakmpMessage.EncodePayloadChain(afterHashBytes, afterHash);
@@ -708,7 +719,12 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
 
             var inner = new List<IsakmpPayload> { new IsakmpRawPayload(IsakmpPayloadType.Hash, hash) };
             inner.AddRange(afterHash);
-            return EncodeEncrypted(NewDerivedIvCipher(messageId), IsakmpExchangeType.Transaction, messageId, inner);
+            // Reuse the cipher cached for this Transaction's Message ID so the CBC IV chains across the exchange
+            // (RFC 2409 §5.5): a server-initiated XAUTH CFG_REQUEST advanced the IV when we decrypted it, so the
+            // CFG_REPLY must encrypt from that advanced IV — NOT a freshly derived one — or the gateway fails to
+            // decrypt it ("invalid HASH_V1 payload length, decryption failed?"). The first message under a new M-ID
+            // (a client-initiated Mode-Config CFG_REQUEST) gets a freshly derived IV.
+            return EncodeEncrypted(TransactionCipher(messageId), IsakmpExchangeType.Transaction, messageId, inner);
         }
 
         // Decrypts a Transaction message and returns its Attribute payload only if it matches the expected CfgType.
@@ -719,14 +735,16 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
         }
 
         // Decrypts a Transaction message (or any encrypted exchange carrying an Attribute payload) and returns its
-        // first Attribute payload, or null if it is not a decodable Transaction with one.
+        // first Attribute payload, or null if it is not a decodable Transaction with one. Uses the cipher cached for
+        // the message's M-ID so the IV chains across the exchange (the cached cipher then carries the advanced IV for
+        // the reply built under the same M-ID).
         IsakmpConfigPayload? TryDecryptConfig(byte[] wire)
         {
             try
             {
                 IsakmpMessage header = IsakmpMessage.ReadHeader(wire, out _);
                 if (header.ExchangeType != IsakmpExchangeType.Transaction) return null;
-                List<IsakmpPayload> payloads = DecryptWith(NewDerivedIvCipher(header.MessageId), wire, out _);
+                List<IsakmpPayload> payloads = DecryptWith(TransactionCipher(header.MessageId), wire, out _);
                 return payloads.OfType<IsakmpConfigPayload>().FirstOrDefault();
             }
             catch { return null; }
@@ -935,6 +953,24 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
                 _quickModeCipherId = messageId;
             }
             return _quickModeCipher;
+        }
+
+        IkeV1Cipher? _transactionCipher;
+        uint _transactionCipherId;
+
+        // Returns the CBC cipher for a Transaction (XAUTH / Mode-Config) Message ID, caching one instance per M-ID so
+        // its IV chains across the request→reply→… messages of that exchange (RFC 2409 §5.5). The first time an M-ID is
+        // seen the IV is freshly derived from the last Phase 1 IV; every later message under the same M-ID reuses the
+        // advanced IV. A new M-ID (the next XAUTH round or the Mode-Config request) re-derives a fresh IV.
+        IkeV1Cipher TransactionCipher(uint messageId)
+        {
+            if (_transactionCipher is null || _transactionCipherId != messageId)
+            {
+                byte[] iv = IkeV1Cipher.QuickModeIv(_hash, _phase1LastIv, messageId);
+                _transactionCipher = new IkeV1Cipher(_keys!.CipherKey, iv);
+                _transactionCipherId = messageId;
+            }
+            return _transactionCipher;
         }
 
         List<IsakmpPayload> DecryptMessage(byte[] wire, out IsakmpMessage header, out byte[] plaintext)

@@ -365,7 +365,11 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.Tests
             IsakmpConfigPayload Config(byte[] wire)
             {
                 uint messageId = IsakmpMessage.Decode(wire).MessageId;
-                List<IsakmpPayload> payloads = DecryptChain(NewQuickModeCipher(messageId), wire);
+                // Chain the IV across the Transaction exchange the way a real gateway (strongSwan) does: the cipher this
+                // M-ID is cached under already advanced its IV when this side encrypted the CFG_REQUEST/SET, so the reply
+                // decrypts from that advanced IV — re-deriving the IV here is what the old self-pair test got wrong and
+                // the live strongSwan run exposed ("invalid HASH_V1 payload length, decryption failed?").
+                List<IsakmpPayload> payloads = DecryptChain(TransactionCipher(messageId), wire);
                 return payloads.OfType<IsakmpConfigPayload>().First();
             }
 
@@ -376,11 +380,24 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.Tests
                 byte[] hash = IkeV1QuickMode.ComputeHash1(_prf, _keys!.SkeyidA, messageId, EncodeChain(afterHash));
                 var inner = new List<IsakmpPayload> { new IsakmpRawPayload(IsakmpPayloadType.Hash, hash) };
                 inner.AddRange(afterHash);
-                return EncodeEncrypted(NewQuickModeCipher(messageId), IsakmpExchangeType.Transaction, messageId, inner);
+                return EncodeEncrypted(TransactionCipher(messageId), IsakmpExchangeType.Transaction, messageId, inner);
             }
 
             IkeV1Cipher NewQuickModeCipher(uint messageId)
                 => new IkeV1Cipher(_keys!.CipherKey, IkeV1Cipher.QuickModeIv(_hash, _phase1LastIv, messageId));
+
+            // One cipher per Transaction M-ID, cached so the CBC IV chains across the request→reply messages of the
+            // exchange (RFC 2409 §5.5) — the first message under an M-ID derives a fresh IV, later ones reuse it.
+            readonly Dictionary<uint, IkeV1Cipher> _transactionCiphers = new();
+            IkeV1Cipher TransactionCipher(uint messageId)
+            {
+                if (!_transactionCiphers.TryGetValue(messageId, out IkeV1Cipher? cipher))
+                {
+                    cipher = new IkeV1Cipher(_keys!.CipherKey, IkeV1Cipher.QuickModeIv(_hash, _phase1LastIv, messageId));
+                    _transactionCiphers[messageId] = cipher;
+                }
+                return cipher;
+            }
 
             byte[] EncodeClear(IsakmpExchangeType exchange, uint messageId, List<IsakmpPayload> payloads)
                 => Frame(exchange, IsakmpFlags.None, messageId, payloads[0].Type, EncodeChain(payloads));
