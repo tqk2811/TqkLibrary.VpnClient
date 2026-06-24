@@ -60,6 +60,7 @@ TqkLibrary.VpnClient.ZeroTier/
    ├─ Vl2ExtFrameCodec.cs            codec EXT_FRAME (networkId‖flags‖[COM]‖dstMac‖srcMac‖etherType‖frame)
    ├─ ZeroTierDictionary.cs          dict key=value text escape (=\e/NUL\0/CR\r/LF\n/\\) — container network config + COM
    ├─ NetworkConfigCodec.cs          NETWORK_CONFIG_REQUEST body + decode config dict (assigned IP I/v4s + routes RT + COM C/com + mtu)
+   ├─ NetworkCredentialsCodec.cs     NETWORK_CREDENTIALS body (push certificate of membership tới peer)
    └─ Models/
       ├─ NetworkId.cs                network-id 64-bit (controller-address 40-bit ‖ index 24-bit)
       ├─ Vl2Frame.cs                 POCO khung VL2 (network/etherType/frameData + src/dst node address)
@@ -104,7 +105,8 @@ TqkLibrary.VpnClient.ZeroTier/
 | VL2 FRAME body | `networkId(8) ‖ etherType(2 BE) ‖ frameData` (**KHÔNG flags byte** — verified live); src/dst node address từ VL1 header |
 | VL2 EXT_FRAME body | `networkId(8) ‖ flags(1) ‖ [COM nếu flags&0x01] ‖ dstMac(6) ‖ srcMac(6) ‖ etherType(2 BE) ‖ frameData` (MAC tường minh + COM tùy chọn) |
 | VL2 network config | `OK(NETWORK_CONFIG_REQUEST)`/`NETWORK_CONFIG`: `networkId(8) ‖ dictLen(2 BE) ‖ dict` (dict key=value text: assigned IP `I`/`v4s`, COM `C`/`com`, routes `RT`, mtu) |
-| VL2 MAC | `DeriveMac` clean-room: low 40-bit = node address, top octet seed từ network-id. **LƯU Ý**: node thật dùng **random per-node tap MAC** (KHÔNG khớp DeriveMac) ⇒ data plane cần học MAC qua MULTICAST_FRAME/ARP |
+| VL2 MAC | `DeriveMac` = clean-room **`MAC::fromAddress`**: first octet = `(nwid & 0xfe) \| 0x02` (LAA-unicast; `0x52`→`0x32`), 40-bit node address ở bit thấp, rồi **XOR-fold byte nwid[8..40] vào MAC byte 1..5**. **KAT byte-exact vs 2 member zerotier-one 1.4.6 thật** (`7bfd7adbee`→`fe:5c:53:94:00:94`, `e3595d21fa`→`fe:c4:f7:b3:fa:80`) |
+| VL2 credentials | `NETWORK_CREDENTIALS` (0x0a) body = `COMs… ‖ 0x00 (end COM array) ‖ caps(2 BE) ‖ tags(2 BE) ‖ revocations(2 BE) ‖ coo(2 BE)`; client push COM-only để chứng minh membership với peer (đáp ERROR `NEED_MEMBERSHIP_CERTIFICATE`) |
 
 ## Luồng seal/open VL1 (mangle key + Salsa20/12 + Poly1305)
 
@@ -127,7 +129,10 @@ TqkLibrary.VpnClient.ZeroTier/
   block0; decrypt cipher-1 ra rác dù MAC pass; KAT HELLO cipher-0 không bắt), **(2)** OK(HELLO) reply path (controller chờ
   OK(HELLO) của ta mới xử lý request), **(3)** dict parse (assigned IP key text `v4s` không phải binary `I`; value chứa raw
   NUL không được coi là terminator; OK in-re gap 2B). **FRAME body bỏ flags byte** (design ngầm có flags — SAI).
-- **CÒN LẠI — data plane VL2 ICMP live**: node thật dùng **random per-node tap MAC** (KHÔNG derivable từ ZT address) ⇒
-  cần **MULTICAST_FRAME (verb 0x0e)** cho broadcast/ARP học MAC peer. EXT_FRAME egress 2-way proven offline. Driver runtime
-  = [`Drivers.ZeroTier`](../TqkLibrary.VpnClient.Drivers.ZeroTier) (XONG — VL1 OK peering + network join live).
+- **DeriveMac byte-exact** (phase b cont): reimplement đúng `MAC::fromAddress` (first octet nwid LAA-unicast ‖ 40-bit
+  address **+ XOR-fold byte nwid vào MAC[1..5]**) — **KAT byte-exact vs 2 member zerotier-one 1.4.6 thật**. + thêm
+  `NetworkCredentialsCodec` để push COM. **CÒN LẠI — data plane VL2 ICMP live**: MAC đúng ⇒ controller **nhận** EXT_FRAME
+  (đáp ERROR `NEED_MEMBERSHIP_CERTIFICATE`), nhưng COM trích từ dict `C` controller 1.4.6 **chưa được chấp nhận** khi push
+  (serialize COM 1.4.6 khác docs `dev` — qualifier lệch). **2 member zerotier-one thật ping nhau OK** ⇒ residual ở **COM
+  exchange phía client**. Driver runtime = [`Drivers.ZeroTier`](../TqkLibrary.VpnClient.Drivers.ZeroTier) (VL1 OK peering + network join live).
 - **Cert/identity P384 (ZeroTier 2.x)** KHÔNG hiện thực — mới làm V1 x25519 (Curve25519/Ed25519/Salsa20) như roadmap.
