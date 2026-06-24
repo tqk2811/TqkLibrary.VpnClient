@@ -1,0 +1,51 @@
+# =====================================================================
+# lab/cisco-ipsec — compose RIENG cho VALIDATE LIVE driver V.12 Cisco IPsec/EzVPN.
+#
+# 2 container tren CUNG mot Docker bridge tuy bien 'labnet':
+#   - cisco-server : strongSwan IKEv1 Aggressive + XAUTH + Mode-Config + ESP TUNNEL
+#   - dotnet-client: binary demo .NET self-contained (scheme cisco://)
+#
+# Vi sao AN TOAN (giong ikev2-native):
+#   - KHONG network_mode: host  -> strongSwan dung XFRM CHI trong netns container,
+#     KHONG pha mang VM.
+#   - KHONG privileged-tren-host -> server chi NET_ADMIN trong netns rieng.
+#   - 2 container cung bridge -> client float NAT-T sang UDP/4500 (ESP-in-UDP),
+#     KHONG can raw socket / CAP_NET_RAW.
+#   - KHONG publish cong ra ngoai: test hoan toan noi bo bridge.
+# =====================================================================
+services:
+  cisco-server:
+    build:
+      context: .
+    image: lab-cisco-ipsec:22.04
+    container_name: lab-cisco-server
+    restart: "no"
+    cap_add:
+      - NET_ADMIN          # tao XFRM SA tunnel + virtual-IP route trong netns container (KHONG dung VM)
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv6.conf.all.forwarding=1
+    networks:
+      - labnet
+
+  dotnet-client:
+    # runtime-deps du chay binary self-contained publish (linux-x64). KHONG can SDK.
+    image: mcr.microsoft.com/dotnet/runtime-deps:8.0
+    container_name: lab-cisco-client
+    restart: "no"
+    # Cisco IPsec cho ESP-in-UDP/4500 (forced NAT-T) => KHONG can CAP_NET_RAW.
+    networks:
+      - labnet
+    volumes:
+      # Mount thu muc publish cua VM (dat binary demo vao ./client-bin tren VM truoc).
+      - ./client-bin:/opt/client:ro
+    working_dir: /opt/client
+    # Container dung yen: runbook 'docker exec' chay demo voi scheme cisco:// (de chay lai + doi tham so).
+    entrypoint: ["sleep", "infinity"]
+    depends_on:
+      - cisco-server
+
+networks:
+  # bridge tuy bien: client float NAT-T UDP/4500 toi server qua ten service.
+  labnet:
+    driver: bridge
