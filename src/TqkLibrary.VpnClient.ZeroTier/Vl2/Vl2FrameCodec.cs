@@ -50,16 +50,30 @@ namespace TqkLibrary.VpnClient.ZeroTier.Vl2
         /// </summary>
         public byte[] DeriveMac(ZeroTierAddress address, NetworkId network)
         {
-            // Mix the network id's bytes into a seed for the first octet (clean-room of ZeroTier's MAC::fromAddress).
+            // Clean-room of ZeroTier's MAC::fromAddress(ztaddr, nwid) — verified byte-exact against a real node's per-
+            // network tap MAC (V.7.3 phase b live lab). The 48-bit MAC is the 40-bit node address placed in the low 40
+            // bits, with a first octet seeded from the network id (forced locally-administered + unicast), then the
+            // network id's bytes XOR-folded into MAC bytes 1..5 so the MAC is unique per-network yet deterministic — both
+            // ends derive it without an ARP exchange.
             ulong nwid = network.Value;
-            byte first = (byte)(((byte)(nwid >> 56)) ^ ((byte)(nwid >> 48)) ^ ((byte)(nwid >> 40)) ^ ((byte)(nwid >> 32))
-                              ^ ((byte)(nwid >> 24)) ^ ((byte)(nwid >> 16)) ^ ((byte)(nwid >> 8)) ^ (byte)nwid);
-            first = (byte)((first & 0xFE) | 0x02); // unicast (clear I/G bit 0), locally administered (set U/L bit 1)
-            if (first == 0x52) first = 0x32;        // avoid the common 52:.. prefix collision, per ZeroTier
+
+            byte first = (byte)((nwid & 0xFE) | 0x02); // bit0=0 unicast, bit1=1 locally administered
+            if (first == 0x52) first = 0x32;            // avoid the 52:.. prefix collision, per ZeroTier
+
+            ulong m = ((ulong)first << 40) | (address.Value & 0xFF_FFFF_FFFFUL);
+            m ^= ((nwid >> 8) & 0xFF) << 32;
+            m ^= ((nwid >> 16) & 0xFF) << 24;
+            m ^= ((nwid >> 24) & 0xFF) << 16;
+            m ^= ((nwid >> 32) & 0xFF) << 8;
+            m ^= (nwid >> 40) & 0xFF;
 
             byte[] mac = new byte[6];
-            mac[0] = first;
-            address.Write(mac.AsSpan(1, ZeroTierAddress.SizeInBytes)); // low 40 bits = node address
+            mac[0] = (byte)(m >> 40);
+            mac[1] = (byte)(m >> 32);
+            mac[2] = (byte)(m >> 24);
+            mac[3] = (byte)(m >> 16);
+            mac[4] = (byte)(m >> 8);
+            mac[5] = (byte)m;
             return mac;
         }
     }
