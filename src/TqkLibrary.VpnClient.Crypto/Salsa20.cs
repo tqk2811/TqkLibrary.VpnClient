@@ -68,5 +68,41 @@ namespace TqkLibrary.VpnClient.Crypto
             byte[] zeros = new byte[output.Length];
             Transform(key, nonce, zeros, output);
         }
+
+        /// <summary>
+        /// Opens a <see cref="Stream"/> that keeps the Salsa20 keystream position across multiple
+        /// <see cref="Stream.Process"/> calls (the counter advances; it is <b>not</b> reset per call). This is what a
+        /// CBC-like sequential keystream needs — e.g. ZeroTier's memory-hard address hash encrypts a 2 MB buffer in
+        /// 64-byte blocks and then re-encrypts the running digest, all on one continuous stream.
+        /// </summary>
+        public Stream CreateStream(ReadOnlySpan<byte> key, ReadOnlySpan<byte> nonce)
+        {
+            if (key.Length != KeyBytes) throw new ArgumentException($"Salsa20 key must be {KeyBytes} bytes.", nameof(key));
+            if (nonce.Length != NonceBytes) throw new ArgumentException($"Salsa20 nonce must be {NonceBytes} bytes.", nameof(nonce));
+
+            var engine = new Salsa20Engine(_rounds);
+            engine.Init(true, new ParametersWithIV(new KeyParameter(key.ToArray()), nonce.ToArray()));
+            return new Stream(engine);
+        }
+
+        /// <summary>
+        /// A stateful Salsa20 keystream whose counter is preserved across calls. Created by
+        /// <see cref="Salsa20.CreateStream"/>; each <see cref="Process"/> continues the same keystream.
+        /// </summary>
+        public sealed class Stream
+        {
+            readonly Salsa20Engine _engine;
+
+            internal Stream(Salsa20Engine engine) => _engine = engine;
+
+            /// <summary>XORs <paramref name="data"/> in place with the next keystream bytes, advancing the counter.</summary>
+            public void Process(Span<byte> data)
+            {
+                byte[] buf = data.ToArray();
+                byte[] outBuf = new byte[buf.Length];
+                _engine.ProcessBytes(buf, 0, buf.Length, outBuf, 0);
+                outBuf.AsSpan(0, data.Length).CopyTo(data);
+            }
+        }
     }
 }
