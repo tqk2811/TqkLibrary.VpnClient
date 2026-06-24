@@ -1,0 +1,14 @@
+# n2n v3.1.1 (ntop) built from source — Ubuntu apt ships only the legacy 1.3.1, so we compile v3 to get the v3 wire
+# format (24-byte common header, REGISTER_SUPER auth, AES/ChaCha20 transforms). Provides `supernode` and `edge`.
+FROM ubuntu:24.04
+
+RUN apt-get update \
+ && apt-get install -y git build-essential autoconf libssl-dev zlib1g-dev iproute2 iputils-ping net-tools \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 --branch 3.1.1 https://github.com/ntop/n2n.git /n2n
+WORKDIR /n2n
+RUN ./autogen.sh && ./configure && make -j2 && make install
+
+# Sanity: print the built version.
+RUN supernode -h 2>&1 | head -3 || true

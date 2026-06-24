@@ -1,0 +1,6 @@
+# .NET self-contained publish of the interop harness (linux-x64 binaries) — rebuilt on demand, do not commit.
+harness/publish/
+harness/bin/
+harness/obj/
+*.tar.gz
+*.pcap

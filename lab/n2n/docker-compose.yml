@@ -1,0 +1,40 @@
+# V.7.4 n2n live-validation lab — a real n2n v3.1.1 supernode + edge to prove this project's codec interoperates.
+#
+# Build the image (compiles n2n v3 from source — apt only has the legacy 1.3.1):
+#   docker compose -f lab/n2n/docker-compose.yml build
+#
+# Bring up the supernode (community is per-edge; the supernode accepts any community by default):
+#   docker compose -f lab/n2n/docker-compose.yml up -d supernode
+#
+# Run a REAL edge (community labnet, transform NULL via -A1, NO header encryption — no -H) to confirm the lab works:
+#   docker compose -f lab/n2n/docker-compose.yml run --rm edge \
+#     edge -c labnet -l supernode:7654 -A1 -r -f -vv
+#   -> supernode log shows "new community: labnet" + "Rx REGISTER_SUPER" + "Tx REGISTER_SUPER_ACK".
+#
+# Run the .NET REGISTER_SUPER interop harness (publish self-contained linux-x64 first, then mount it):
+#   dotnet publish lab/n2n/harness -c Release -o lab/n2n/harness/publish
+#   docker compose -f lab/n2n/docker-compose.yml run --rm --entrypoint sh edge -c \
+#     "cp -r /harness /w && chmod +x /w/n2n-register-harness && /w/n2n-register-harness labnet supernode 7654"
+#   -> "REGISTER_SUPER INTEROP SUCCESS (supernode accepted our registration, cookie echoed)".
+services:
+  supernode:
+    build:
+      context: .
+      dockerfile: Dockerfile.n2n
+    image: n2n-v3:lab
+    command: ["supernode", "-f", "-vvv"]
+    ports:
+      - "7654:7654/udp"
+
+  edge:
+    image: n2n-v3:lab
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    volumes:
+      - ./harness/publish:/harness:ro
+    # default command is overridden per the comments above; keep the container alive if run bare.
+    command: ["edge", "-c", "labnet", "-l", "supernode:7654", "-A1", "-r", "-f", "-vv"]
+    depends_on:
+      - supernode
