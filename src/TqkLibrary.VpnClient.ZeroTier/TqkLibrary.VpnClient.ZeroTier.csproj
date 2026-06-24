@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>ZeroTier protocol layer (V1, x25519): VL1 transport — node identity (Curve25519 + Ed25519, memory-hard 40-bit address derivation), the encrypted/authenticated VL1 packet codec (Salsa20/12 + Poly1305) and HELLO verb — plus the VL2 virtual-L2 Ethernet frame / 64-bit network-id codecs. Protocol/codec only; UDP transport, root discovery and the network controller are the driver's job.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Crypto\TqkLibrary.VpnClient.Crypto.csproj" />
+  </ItemGroup>
+
+</Project>
