@@ -48,6 +48,10 @@ namespace TqkLibrary.VpnClient.Drivers.N2n
         readonly IN2nTransform _transform;
         readonly MacAddress _mac;
         readonly TimeSpan _handshakeTimeout;
+        // The supernode pins the auth token from the first REGISTER_SUPER and rejects (REGISTER_SUPER_NAK,
+        // "authentication failed") any keepalive that carries a different one — so the token is generated ONCE per
+        // connection and reused for the initial registration and every keepalive re-register.
+        readonly N2nAuth _auth = N2nAuth.SimpleIdRandom();
 
         IDatagramTransport? _transport;
         CancellationTokenSource? _loopCts;
@@ -173,9 +177,9 @@ namespace TqkLibrary.VpnClient.Drivers.N2n
                 Cookie = _registerCookie,
                 EdgeMac = _mac.ToArray(),
                 Sock = null,                       // header N2N_FLAGS_SOCKET off: let the supernode observe our public socket
-                DevAddr = N2nIpSubnet.Unset,       // edge sets its own address; supernode need not assign one
+                DevAddr = BuildDevAddr(),          // advertise our static -a overlay address (what a real n2n edge with -a does)
                 DevDesc = "tqkvpn",
-                Auth = N2nAuth.SimpleIdRandom(),
+                Auth = _auth,
                 KeyTime = 0,
             };
             byte[] datagram = _codec.EncodeRegisterSuper(_config.Community, body);
@@ -306,9 +310,9 @@ namespace TqkLibrary.VpnClient.Drivers.N2n
                 Cookie = NextCookie(),
                 EdgeMac = _mac.ToArray(),
                 Sock = null,
-                DevAddr = N2nIpSubnet.Unset,
+                DevAddr = BuildDevAddr(),
                 DevDesc = "tqkvpn",
-                Auth = N2nAuth.SimpleIdRandom(),
+                Auth = _auth,
                 KeyTime = 0,
             };
             byte[] datagram = _codec.EncodeRegisterSuper(_config.Community, body);
@@ -407,6 +411,17 @@ namespace TqkLibrary.VpnClient.Drivers.N2n
             NextRandomBytes(b);
             uint v = ((uint)b[0] << 24) | ((uint)b[1] << 16) | ((uint)b[2] << 8) | b[3];
             return v == 0 ? 1u : v;
+        }
+
+        // The edge's static -a address as an n2n dev_addr subnet (net_addr host-order, net_bitlen = prefix). A real n2n
+        // edge with -a advertises this in REGISTER_SUPER; the supernode then keeps the same dev_addr for the edge, so the
+        // keepalive re-register stays the "known" edge and its auth token matches (advertising 0.0.0.0/0 made the
+        // supernode hand out a dynamic address and reject the keepalive as a fresh, mismatched registration).
+        N2nIpSubnet BuildDevAddr()
+        {
+            byte[] b = _config.OverlayAddress.GetAddressBytes();
+            uint netAddr = ((uint)b[0] << 24) | ((uint)b[1] << 16) | ((uint)b[2] << 8) | b[3];
+            return new N2nIpSubnet(netAddr, (byte)_config.PrefixLength);
         }
 
         // n2n's net_addr is a host-order uint32 (high byte = first octet); render it dotted-quad for logging.
