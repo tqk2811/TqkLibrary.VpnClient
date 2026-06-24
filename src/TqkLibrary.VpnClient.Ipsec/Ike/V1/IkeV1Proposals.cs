@@ -21,20 +21,36 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
             var sa = new IsakmpSaPayload();
             var proposal = new IsakmpProposal { Number = 1, ProtocolId = IkeV1Constants.Protocol.Isakmp };
             byte n = 1;
-            proposal.Transforms.Add(Phase1Transform(n++, 256, IkeV1Constants.Group.Modp2048));
-            proposal.Transforms.Add(Phase1Transform(n++, 256, IkeV1Constants.Group.Modp1024));
-            proposal.Transforms.Add(Phase1Transform(n++, 128, IkeV1Constants.Group.Modp2048));
-            proposal.Transforms.Add(Phase1Transform(n, 128, IkeV1Constants.Group.Modp1024));
+            proposal.Transforms.Add(Phase1Transform(n++, 256, IkeV1Constants.Group.Modp2048, IkeV1Constants.AuthMethod.PreSharedKey));
+            proposal.Transforms.Add(Phase1Transform(n++, 256, IkeV1Constants.Group.Modp1024, IkeV1Constants.AuthMethod.PreSharedKey));
+            proposal.Transforms.Add(Phase1Transform(n++, 128, IkeV1Constants.Group.Modp2048, IkeV1Constants.AuthMethod.PreSharedKey));
+            proposal.Transforms.Add(Phase1Transform(n, 128, IkeV1Constants.Group.Modp1024, IkeV1Constants.AuthMethod.PreSharedKey));
             sa.Proposals.Add(proposal);
             return sa;
         }
 
-        static IsakmpTransform Phase1Transform(byte number, ushort keyBits, ushort group)
+        /// <summary>
+        /// Builds the Aggressive Mode Phase 1 SA for Cisco IPsec / EzVPN: the same AES-CBC/SHA1 transforms but with the
+        /// XAUTHInitPreShared authentication method, so the gateway knows an XAUTH exchange follows the PSK hash. A
+        /// single MODP group is offered because Aggressive Mode message 1 already carries one KE value for that group.
+        /// </summary>
+        public static IsakmpSaPayload Phase1Aggressive(ushort group = IkeV1Constants.Group.Modp1024)
+        {
+            var sa = new IsakmpSaPayload();
+            var proposal = new IsakmpProposal { Number = 1, ProtocolId = IkeV1Constants.Protocol.Isakmp };
+            byte n = 1;
+            proposal.Transforms.Add(Phase1Transform(n++, 256, group, IkeV1Constants.AuthMethod.XAuthInitPreShared));
+            proposal.Transforms.Add(Phase1Transform(n, 128, group, IkeV1Constants.AuthMethod.XAuthInitPreShared));
+            sa.Proposals.Add(proposal);
+            return sa;
+        }
+
+        static IsakmpTransform Phase1Transform(byte number, ushort keyBits, ushort group, ushort authMethod)
             => new IsakmpTransform(number, IkeV1Constants.TransformKeyIke)
                 .With(IsakmpAttribute.Tv(IkeV1Constants.Phase1Attribute.Encryption, IkeV1Constants.Phase1Encryption.AesCbc))
                 .With(IsakmpAttribute.Tv(IkeV1Constants.Phase1Attribute.KeyLength, keyBits))
                 .With(IsakmpAttribute.Tv(IkeV1Constants.Phase1Attribute.Hash, IkeV1Constants.HashAlgorithm.Sha1))
-                .With(IsakmpAttribute.Tv(IkeV1Constants.Phase1Attribute.AuthMethod, IkeV1Constants.AuthMethod.PreSharedKey))
+                .With(IsakmpAttribute.Tv(IkeV1Constants.Phase1Attribute.AuthMethod, authMethod))
                 .With(IsakmpAttribute.Tv(IkeV1Constants.Phase1Attribute.Group, group))
                 .With(IsakmpAttribute.Tv(IkeV1Constants.Phase1Attribute.LifeType, IkeV1Constants.LifeType.Seconds))
                 .With(IsakmpAttribute.Tlv32(IkeV1Constants.Phase1Attribute.LifeDuration, Phase1Lifetime));
@@ -58,6 +74,25 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
             proposal.Transforms.Add(CbcTransform(n++, second));
             proposal.Transforms.Add(GcmTransform(n++, first));
             proposal.Transforms.Add(GcmTransform(n, second));
+            sa.Proposals.Add(proposal);
+            return sa;
+        }
+
+        /// <summary>
+        /// Builds the Phase 2 (ESP) SA payload for an IKEv1 remote-access tunnel (Cisco IPsec / EzVPN): AES-CBC-256 +
+        /// HMAC-SHA1 then AES-GCM-256, each in tunnel mode — UDP-Encapsulated-Tunnel first for forced NAT-T (the live
+        /// remote-access path), then plain Tunnel. Tunnel mode (not transport) means the gateway de-encapsulates a whole
+        /// inner IP packet, which the <see cref="Esp.EspTunnelChannel"/> data plane carries straight to the IP stack.
+        /// </summary>
+        public static IsakmpSaPayload Phase2Tunnel(byte[] spi)
+        {
+            var sa = new IsakmpSaPayload();
+            var proposal = new IsakmpProposal { Number = 1, ProtocolId = IkeV1Constants.Protocol.Esp, Spi = spi };
+            byte n = 1;
+            proposal.Transforms.Add(CbcTransform(n++, IkeV1Constants.EncapsulationMode.UdpTunnel));
+            proposal.Transforms.Add(CbcTransform(n++, IkeV1Constants.EncapsulationMode.Tunnel));
+            proposal.Transforms.Add(GcmTransform(n++, IkeV1Constants.EncapsulationMode.UdpTunnel));
+            proposal.Transforms.Add(GcmTransform(n, IkeV1Constants.EncapsulationMode.Tunnel));
             sa.Proposals.Add(proposal);
             return sa;
         }

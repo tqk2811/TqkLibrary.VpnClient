@@ -45,6 +45,13 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
         IkeV1KeyMaterial? _keys;
         IkeV1Cipher? _phase1Cipher;
         byte[] _phase1LastIv = Array.Empty<byte>();
+
+        // Aggressive Mode state: the group identity asserted in message 1 (cleartext) and the responder identity read
+        // from message 2. Both feed HASH_I / HASH_R the same way Main Mode's IDi / IDr do.
+        byte _aggressiveIdType = IdTypeIpv4;
+        byte[] _aggressiveIdBody = Array.Empty<byte>();
+        byte[] _idResponderBody = Array.Empty<byte>();
+
         uint _quickModeId;
         byte[] _quickModeNonce;
         byte[] _quickModeMessageAfterHash = Array.Empty<byte>();
@@ -105,6 +112,117 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
         /// carries ESP natively (honest-first with no NAT); left false for forced NAT-T (ESP over UDP/4500).
         /// </summary>
         public bool PreferNativeTransport { get; set; }
+
+        /// <summary>
+        /// When set, Quick Mode offers ESP <b>tunnel</b> mode (UDP-Encapsulated-Tunnel + plain Tunnel) instead of the
+        /// transport-mode proposal L2TP/IPsec uses. The Cisco IPsec / EzVPN driver sets it so the gateway installs a
+        /// tunnel-mode CHILD SA whose decapsulated inner IP packets ride the <see cref="Esp.EspTunnelChannel"/> straight
+        /// to the IP stack (no L2TP/PPP). Left false for L2TP/IPsec (transport mode).
+        /// </summary>
+        public bool PreferTunnelMode { get; set; }
+
+        /// <summary>
+        /// Sets the identity asserted in Aggressive Mode message 1 (the group identity for Cisco IPsec / EzVPN). The
+        /// gateway selects the group PSK by this value, so it must match the gateway's configured group name.
+        /// <paramref name="idType"/> is the ISAKMP ID type (e.g. <c>11</c> = KEY_ID, <c>2</c> = FQDN, <c>1</c> = IPv4).
+        /// </summary>
+        public void SetAggressiveIdentity(byte idType, byte[] idData)
+        {
+            _aggressiveIdType = idType;
+            _aggressiveIdBody = IdBody(idType, 0, 0, idData);
+        }
+
+        // ---- Aggressive Mode (Cisco IPsec / EzVPN Phase 1: three messages with the group identity in the clear) ----
+
+        /// <summary>
+        /// AG1: the cleartext Aggressive Mode message 1 (RFC 2409 §5.4) — SA + KE + Ni + IDii. The group identity is
+        /// sent in the clear (the cost of Aggressive Mode), so the gateway can pick the group PSK before deriving keys.
+        /// <para><b>Security note:</b> Aggressive Mode + group PSK is known weak — the responder's HASH_R is computable
+        /// offline from a captured exchange, exposing the group PSK to an offline dictionary attack. It exists only for
+        /// interop with legacy Cisco-compatible gateways; never use it where Main Mode (or IKEv2) is available.</para>
+        /// </summary>
+        public byte[] BuildAggressive1()
+        {
+            IsakmpSaPayload sa = IkeV1Proposals.Phase1Aggressive(IkeV1Constants.Group.Modp1024);
+            _saInitiatorBody = sa.BodyBytes();
+            _dhGroup = ModpDhGroup.Group2(); // the single group offered in AG1
+            _privateKey = _dhGroup.GeneratePrivateKey();
+            _keInitiator = _dhGroup.DerivePublicValue(_privateKey);
+            if (_aggressiveIdBody.Length == 0)
+                _aggressiveIdBody = IdBody(_aggressiveIdType, 0, 0, _localIdentity.GetAddressBytes());
+
+            var message = NewMessage(IsakmpExchangeType.Aggressive);
+            message.Payloads.Add(sa);
+            message.Payloads.Add(new IsakmpRawPayload(IsakmpPayloadType.KeyExchange, _keInitiator));
+            message.Payloads.Add(new IsakmpRawPayload(IsakmpPayloadType.Nonce, _nonceInitiator));
+            message.Payloads.Add(new IsakmpRawPayload(IsakmpPayloadType.Identification, _aggressiveIdBody));
+            // The two NAT-T Vendor IDs let the gateway float us to UDP/4500 (forced NAT-T) just as Main Mode does.
+            message.Payloads.Add(new IsakmpRawPayload(IsakmpPayloadType.VendorId, IkeV1NatDetection.VendorIdRfc3947));
+            message.Payloads.Add(new IsakmpRawPayload(IsakmpPayloadType.VendorId, IkeV1NatDetection.VendorIdDraft02));
+            // XAUTH Vendor ID (RFC draft) so the gateway knows the client speaks XAUTH.
+            message.Payloads.Add(new IsakmpRawPayload(IsakmpPayloadType.VendorId, IkeV1NatDetection.VendorIdXAuth));
+            return message.Encode();
+        }
+
+        /// <summary>
+        /// AG2: read the responder cookie, the chosen transform, KEr, Nr and IDir, derive the key set, and verify the
+        /// responder's HASH_R (RFC 2409 §5.4). Returns false on a HASH_R mismatch (wrong group PSK / tampered reply).
+        /// </summary>
+        public bool ProcessAggressive2(byte[] wire)
+        {
+            IsakmpMessage message = IsakmpMessage.Decode(wire);
+            ResponderCookie = message.ResponderCookie;
+
+            IsakmpTransform chosen = message.Find<IsakmpSaPayload>()!.Proposals[0].Transforms[0];
+            ushort keyBits = (ushort)AttributeOr(chosen, IkeV1Constants.Phase1Attribute.KeyLength, 256);
+            ushort hashId = (ushort)AttributeOr(chosen, IkeV1Constants.Phase1Attribute.Hash, IkeV1Constants.HashAlgorithm.Sha1);
+            _cipherKeyLength = keyBits / 8;
+            _hash = hashId == IkeV1Constants.HashAlgorithm.Sha2_256 ? HashAlgorithmName.SHA256 : HashAlgorithmName.SHA1;
+            _prf = new HmacPrf(_hash);
+
+            foreach (IsakmpRawPayload vid in message.Payloads.OfType<IsakmpRawPayload>().Where(p => p.Type == IsakmpPayloadType.VendorId))
+            {
+                if (Equal(vid.Body, IkeV1NatDetection.VendorIdDraft02) || Equal(vid.Body, IkeV1NatDetection.VendorIdDraft03))
+                    NatDiscoveryType = (IsakmpPayloadType)130;
+            }
+
+            _keResponder = message.FindRaw(IsakmpPayloadType.KeyExchange)!.Body;
+            _nonceResponder = message.FindRaw(IsakmpPayloadType.Nonce)!.Body;
+            _idResponderBody = message.FindRaw(IsakmpPayloadType.Identification)!.Body;
+            _responderNatD = message.Payloads.OfType<IsakmpRawPayload>()
+                .Where(p => p.Type == NatDiscoveryType).Select(p => p.Body).ToArray();
+
+            byte[] shared = _dhGroup.DeriveSharedSecret(_privateKey, _keResponder);
+            _keys = IkeV1KeyMaterial.DeriveMainMode(
+                _hash, _preSharedKey, _nonceInitiator, _nonceResponder, shared,
+                InitiatorCookie, ResponderCookie, _keInitiator, _keResponder, _cipherKeyLength, blockSize: 16);
+            _phase1Cipher = new IkeV1Cipher(_keys.CipherKey, _keys.InitialIv);
+
+            byte[] expected = IkeV1Auth.ComputeHashR(_prf, _keys.Skeyid, _keInitiator, _keResponder,
+                InitiatorCookie, ResponderCookie, _saInitiatorBody, _idResponderBody);
+            byte[] hashR = message.FindRaw(IsakmpPayloadType.Hash)?.Body ?? Array.Empty<byte>();
+            bool ok = hashR.Length > 0 && FixedTimeEquals(expected, hashR);
+            _logger.LogProtocolStep(Layer, ok
+                ? "AG2: SKEYID* derived, responder HASH_R verified — Aggressive Mode Phase 1 established"
+                : "AG2: responder HASH_R mismatch (wrong group PSK or tampered reply)");
+            return ok;
+        }
+
+        /// <summary>
+        /// AG3: the encrypted Aggressive Mode message 3 — HASH_I authenticating the exchange (RFC 2409 §5.4). After this
+        /// message the Phase 1 SA is established and the cipher's last IV seeds every later derived-IV exchange
+        /// (Transaction / Quick Mode / Informational).
+        /// </summary>
+        public byte[] BuildAggressive3()
+        {
+            byte[] hashI = IkeV1Auth.ComputeHashI(_prf, _keys!.Skeyid, _keInitiator, _keResponder,
+                InitiatorCookie, ResponderCookie, _saInitiatorBody, _aggressiveIdBody);
+            var inner = new List<IsakmpPayload> { new IsakmpRawPayload(IsakmpPayloadType.Hash, hashI) };
+            byte[] wire = EncryptMessage(IsakmpExchangeType.Aggressive, 0, inner);
+            _phase1LastIv = _phase1Cipher!.CurrentIv; // seeds the Transaction / Quick Mode / Informational derived IVs
+            _logger.LogProtocolStep(Layer, "AG3: HASH_I sent — Phase 1 (Aggressive Mode) complete");
+            return wire;
+        }
 
         // ---- Main Mode ----
 
@@ -259,10 +377,10 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
             _quickModeId = RandomNonZeroUInt32();
             var afterHash = new List<IsakmpPayload>
             {
-                IkeV1Proposals.Phase2(ChildInboundSpi, PreferNativeTransport),
+                PreferTunnelMode ? IkeV1Proposals.Phase2Tunnel(ChildInboundSpi) : IkeV1Proposals.Phase2(ChildInboundSpi, PreferNativeTransport),
                 new IsakmpRawPayload(IsakmpPayloadType.Nonce, _quickModeNonce),
-                new IsakmpRawPayload(IsakmpPayloadType.Identification, IdBody(IdTypeIpv4, 17, 1701, _localIdentity.GetAddressBytes())),
-                new IsakmpRawPayload(IsakmpPayloadType.Identification, IdBody(IdTypeIpv4, 17, 1701, _remoteIdentity.GetAddressBytes())),
+                QuickModeIdentity(local: true),
+                QuickModeIdentity(local: false),
             };
             var afterHashBytes = new List<byte>();
             IsakmpMessage.EncodePayloadChain(afterHashBytes, afterHash);
@@ -429,6 +547,189 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
             for (int i = 0; i < InitiatorCookie.Length; i++)
                 if (wire[i] != InitiatorCookie[i]) return false;
             return true;
+        }
+
+        // The Quick Mode IDci/IDcr traffic selectors. For tunnel-mode remote access (Cisco IPsec / EzVPN) the client
+        // proposes its assigned virtual IP as IDci (a /32 host) and a match-all 0.0.0.0/0 as IDcr, so the gateway
+        // installs a tunnel-all CHILD SA. For transport mode (L2TP/IPsec) the original UDP/1701 endpoint identities
+        // are used, exactly as before.
+        IsakmpPayload QuickModeIdentity(bool local)
+        {
+            if (PreferTunnelMode)
+            {
+                return local
+                    ? new IsakmpRawPayload(IsakmpPayloadType.Identification,
+                        IdBody(IdTypeIpv4, 0, 0, (_modeConfigAddress ?? _localIdentity).GetAddressBytes()))
+                    : new IsakmpRawPayload(IsakmpPayloadType.Identification,
+                        IdBodySubnet(IPAddress.Any, IPAddress.Any)); // ID_IPV4_ADDR_SUBNET 0.0.0.0/0 = tunnel-all
+            }
+            IPAddress address = local ? _localIdentity : _remoteIdentity;
+            return new IsakmpRawPayload(IsakmpPayloadType.Identification, IdBody(IdTypeIpv4, 17, 1701, address.GetAddressBytes()));
+        }
+
+        // ---- Transaction exchange: XAUTH (extended user authentication) + Mode-Config (pull virtual IP/DNS) ----
+
+        IPAddress? _modeConfigAddress;
+        IPAddress? _modeConfigNetmask;
+        readonly List<IPAddress> _modeConfigDns = new();
+
+        /// <summary>The virtual IP the gateway assigned via Mode-Config (INTERNAL_IP4_ADDRESS), or null until then.</summary>
+        public IPAddress? AssignedAddress => _modeConfigAddress;
+
+        /// <summary>The netmask the gateway pushed (INTERNAL_IP4_NETMASK), or null.</summary>
+        public IPAddress? AssignedNetmask => _modeConfigNetmask;
+
+        /// <summary>The DNS servers the gateway pushed (INTERNAL_IP4_DNS), in order.</summary>
+        public IReadOnlyList<IPAddress> AssignedDns => _modeConfigDns;
+
+        /// <summary>
+        /// Parses the gateway's XAUTH CFG_REQUEST (a Transaction exchange asking for credentials) and builds the
+        /// encrypted CFG_REPLY carrying the user name + password (RFC draft XAUTH §4). The CFG_REQUEST's identifier is
+        /// echoed back so the gateway pairs request and reply; the XAUTH-TYPE (if present) is echoed unchanged. Throws
+        /// <see cref="VpnServerRejectedException"/> if <paramref name="wire"/> is not an XAUTH CFG_REQUEST.
+        /// </summary>
+        public byte[] BuildXAuthReply(byte[] wire, string userName, string password)
+        {
+            IsakmpConfigPayload request = DecryptConfig(wire, expected: IsakmpCfgType.Request)
+                ?? throw new VpnServerRejectedException("Expected an XAUTH CFG_REQUEST from the gateway.");
+
+            var reply = new IsakmpConfigPayload { CfgType = IsakmpCfgType.Reply, Identifier = request.Identifier };
+            // Echo the XAUTH-TYPE the gateway asked for (default Generic), then answer with the credentials.
+            ushort xauthType = (ushort)(request.Find(IkeV1Constants.XAuthAttribute.Type)?.NumericValue ?? IkeV1Constants.XAuthType.Generic);
+            reply.Attributes.Add(IsakmpAttribute.Tv(IkeV1Constants.XAuthAttribute.Type, xauthType));
+            reply.Attributes.Add(IsakmpAttribute.Tlv(IkeV1Constants.XAuthAttribute.UserName, System.Text.Encoding.UTF8.GetBytes(userName)));
+            reply.Attributes.Add(IsakmpAttribute.Tlv(IkeV1Constants.XAuthAttribute.UserPassword, System.Text.Encoding.UTF8.GetBytes(password)));
+            _logger.LogProtocolStep(Layer, "XAUTH: CFG_REQUEST received, sending CFG_REPLY (user name + password)");
+            return BuildTransaction(reply);
+        }
+
+        /// <summary>
+        /// Reads the gateway's XAUTH CFG_SET carrying the XAUTH-STATUS result and builds the CFG_ACK answering it. Sets
+        /// <paramref name="success"/> to whether XAUTH succeeded (XAUTH-STATUS = OK). A SET whose identifier is echoed
+        /// in the ACK so the gateway pairs them. Throws if <paramref name="wire"/> is not an XAUTH CFG_SET.
+        /// </summary>
+        public byte[] BuildXAuthAck(byte[] wire, out bool success)
+        {
+            IsakmpConfigPayload set = DecryptConfig(wire, expected: IsakmpCfgType.Set)
+                ?? throw new VpnServerRejectedException("Expected an XAUTH CFG_SET (status) from the gateway.");
+            success = (set.Find(IkeV1Constants.XAuthAttribute.Status)?.NumericValue ?? IkeV1Constants.XAuthStatus.Fail) == IkeV1Constants.XAuthStatus.Ok;
+
+            var ack = new IsakmpConfigPayload { CfgType = IsakmpCfgType.Ack, Identifier = set.Identifier };
+            ack.Attributes.Add(IsakmpAttribute.Tv(IkeV1Constants.XAuthAttribute.Status,
+                success ? IkeV1Constants.XAuthStatus.Ok : IkeV1Constants.XAuthStatus.Fail));
+            _logger.LogProtocolStep(Layer, success
+                ? "XAUTH: CFG_SET status OK — sending CFG_ACK (extended authentication succeeded)"
+                : "XAUTH: CFG_SET status FAIL — sending CFG_ACK (extended authentication failed)");
+            return BuildTransaction(ack);
+        }
+
+        /// <summary>
+        /// True if <paramref name="wire"/> is an XAUTH CFG_SET (the status round), false for the Mode-Config CFG_REPLY.
+        /// Lets the driver distinguish a gateway that interleaves XAUTH status with Mode-Config on the same channel.
+        /// </summary>
+        public bool IsXAuthSet(byte[] wire)
+        {
+            IsakmpConfigPayload? config = TryDecryptConfig(wire);
+            return config is { CfgType: IsakmpCfgType.Set } && config.Has(IkeV1Constants.XAuthAttribute.Status);
+        }
+
+        /// <summary>
+        /// Builds the Mode-Config CFG_REQUEST that pulls the virtual IP/DNS (draft-ietf-ipsec-isakmp-mode-cfg-04):
+        /// empty INTERNAL_IP4_ADDRESS / NETMASK / DNS / NBNS attributes the gateway fills in its CFG_REPLY.
+        /// </summary>
+        public byte[] BuildModeConfigRequest()
+        {
+            var request = new IsakmpConfigPayload { CfgType = IsakmpCfgType.Request, Identifier = (ushort)RandomNonZeroUInt32() };
+            request.Attributes.Add(IsakmpAttribute.Tlv(IkeV1Constants.ConfigAttribute.InternalIp4Address, Array.Empty<byte>()));
+            request.Attributes.Add(IsakmpAttribute.Tlv(IkeV1Constants.ConfigAttribute.InternalIp4Netmask, Array.Empty<byte>()));
+            request.Attributes.Add(IsakmpAttribute.Tlv(IkeV1Constants.ConfigAttribute.InternalIp4Dns, Array.Empty<byte>()));
+            request.Attributes.Add(IsakmpAttribute.Tlv(IkeV1Constants.ConfigAttribute.InternalIp4Nbns, Array.Empty<byte>()));
+            _logger.LogProtocolStep(Layer, "Mode-Config: sending CFG_REQUEST (pull virtual IP/netmask/DNS)");
+            return BuildTransaction(request);
+        }
+
+        /// <summary>
+        /// Parses the gateway's Mode-Config CFG_REPLY and captures the virtual IP (<see cref="AssignedAddress"/>),
+        /// netmask and DNS (<see cref="AssignedDns"/>). Returns true if an INTERNAL_IP4_ADDRESS was assigned. Some
+        /// gateways push the address in a server-initiated CFG_SET instead — that is accepted here too.
+        /// </summary>
+        public bool ProcessModeConfigReply(byte[] wire)
+        {
+            IsakmpConfigPayload? config = TryDecryptConfig(wire);
+            if (config is null || (config.CfgType != IsakmpCfgType.Reply && config.CfgType != IsakmpCfgType.Set))
+                return false;
+
+            foreach (IsakmpAttribute attribute in config.Attributes)
+            {
+                switch (attribute.Type)
+                {
+                    case IkeV1Constants.ConfigAttribute.InternalIp4Address when attribute.LongValue.Length == 4:
+                        _modeConfigAddress = new IPAddress(attribute.LongValue);
+                        break;
+                    case IkeV1Constants.ConfigAttribute.InternalIp4Netmask when attribute.LongValue.Length == 4:
+                        _modeConfigNetmask = new IPAddress(attribute.LongValue);
+                        break;
+                    case IkeV1Constants.ConfigAttribute.InternalIp4Dns when attribute.LongValue.Length == 4:
+                        _modeConfigDns.Add(new IPAddress(attribute.LongValue));
+                        break;
+                }
+            }
+            if (_modeConfigAddress != null && _logger.IsEnabled(LogLevel.Trace))
+                _logger.LogProtocolStep(Layer,
+                    $"Mode-Config: CFG_{config.CfgType} assigned virtual IP {_modeConfigAddress}" +
+                    (_modeConfigDns.Count > 0 ? $", DNS {_modeConfigDns[0]}" : string.Empty));
+            return _modeConfigAddress != null;
+        }
+
+        /// <summary>
+        /// Builds the CFG_ACK answering a server-initiated Mode-Config CFG_SET (push model). Echoes the SET's
+        /// identifier and the attribute types it carried (acknowledging the pushed configuration).
+        /// </summary>
+        public byte[] BuildModeConfigAck(byte[] wire)
+        {
+            IsakmpConfigPayload set = DecryptConfig(wire, expected: IsakmpCfgType.Set)
+                ?? throw new VpnServerRejectedException("Expected a Mode-Config CFG_SET from the gateway.");
+            var ack = new IsakmpConfigPayload { CfgType = IsakmpCfgType.Ack, Identifier = set.Identifier };
+            foreach (IsakmpAttribute attribute in set.Attributes)
+                ack.Attributes.Add(IsakmpAttribute.Tlv(attribute.Type, Array.Empty<byte>()));
+            return BuildTransaction(ack);
+        }
+
+        // Wraps a configuration payload in a HASH(1)-prefixed Transaction exchange under a fresh non-zero Message ID
+        // (the same construction Quick Mode / Informational use): HASH = prf(SKEYID_a, M-ID | <Attribute payload>),
+        // encrypted with the derived-IV cipher for that message id.
+        byte[] BuildTransaction(IsakmpConfigPayload config)
+        {
+            uint messageId = RandomNonZeroUInt32();
+            var afterHash = new List<IsakmpPayload> { config };
+            var afterHashBytes = new List<byte>();
+            IsakmpMessage.EncodePayloadChain(afterHashBytes, afterHash);
+            byte[] hash = IkeV1QuickMode.ComputeHash1(_prf, _keys!.SkeyidA, messageId, afterHashBytes.ToArray());
+
+            var inner = new List<IsakmpPayload> { new IsakmpRawPayload(IsakmpPayloadType.Hash, hash) };
+            inner.AddRange(afterHash);
+            return EncodeEncrypted(NewDerivedIvCipher(messageId), IsakmpExchangeType.Transaction, messageId, inner);
+        }
+
+        // Decrypts a Transaction message and returns its Attribute payload only if it matches the expected CfgType.
+        IsakmpConfigPayload? DecryptConfig(byte[] wire, IsakmpCfgType expected)
+        {
+            IsakmpConfigPayload? config = TryDecryptConfig(wire);
+            return config?.CfgType == expected ? config : null;
+        }
+
+        // Decrypts a Transaction message (or any encrypted exchange carrying an Attribute payload) and returns its
+        // first Attribute payload, or null if it is not a decodable Transaction with one.
+        IsakmpConfigPayload? TryDecryptConfig(byte[] wire)
+        {
+            try
+            {
+                IsakmpMessage header = IsakmpMessage.ReadHeader(wire, out _);
+                if (header.ExchangeType != IsakmpExchangeType.Transaction) return null;
+                List<IsakmpPayload> payloads = DecryptWith(NewDerivedIvCipher(header.MessageId), wire, out _);
+                return payloads.OfType<IsakmpConfigPayload>().FirstOrDefault();
+            }
+            catch { return null; }
         }
 
         // ---- Teardown: Delete payloads ----
@@ -697,6 +998,20 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
             body[2] = (byte)(port >> 8);
             body[3] = (byte)port;
             Buffer.BlockCopy(address, 0, body, 4, address.Length);
+            return body;
+        }
+
+        const byte IdTypeIpv4Subnet = 4; // ID_IPV4_ADDR_SUBNET (RFC 2407 §4.6.2.1)
+
+        // ID_IPV4_ADDR_SUBNET body: type/protocol/port header then address (4) + mask (4). 0.0.0.0/0.0.0.0 = tunnel-all.
+        static byte[] IdBodySubnet(IPAddress address, IPAddress mask)
+        {
+            byte[] addressBytes = address.GetAddressBytes();
+            byte[] maskBytes = mask.GetAddressBytes();
+            byte[] body = new byte[4 + addressBytes.Length + maskBytes.Length];
+            body[0] = IdTypeIpv4Subnet;
+            Buffer.BlockCopy(addressBytes, 0, body, 4, addressBytes.Length);
+            Buffer.BlockCopy(maskBytes, 0, body, 4 + addressBytes.Length, maskBytes.Length);
             return body;
         }
 

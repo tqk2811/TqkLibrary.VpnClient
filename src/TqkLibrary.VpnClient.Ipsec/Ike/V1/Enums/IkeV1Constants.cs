@@ -99,6 +99,12 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1.Enums
         {
             /// <summary>Pre-shared key.</summary>
             public const ushort PreSharedKey = 1;
+
+            /// <summary>
+            /// Hybrid XAUTH: PSK + XAUTH (draft-beaulieu-ike-xauth-02 §4 / Cisco EzVPN). The Phase 1 hashes are computed
+            /// exactly as for a plain PSK; this value only signals to the gateway that an XAUTH exchange will follow.
+            /// </summary>
+            public const ushort XAuthInitPreShared = 65001;
         }
 
         /// <summary>Diffie-Hellman group values (match the MODP group numbers).</summary>
@@ -154,6 +160,82 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1.Enums
             public const ushort HmacSha1 = 2;
             /// <summary>HMAC-SHA2-256-128.</summary>
             public const ushort HmacSha2_256 = 5;
+        }
+
+        /// <summary>
+        /// XAUTH data-attribute type values (draft-beaulieu-ike-xauth-02 §7, IANA "Internet Key Exchange (IKE)
+        /// Attributes"). The string attributes (user name, password, message…) are Type/Length/Value; XAUTH_TYPE and
+        /// XAUTH_STATUS are Type/Value (a 2-byte value).
+        /// </summary>
+        public static class XAuthAttribute
+        {
+            /// <summary>XAUTH-TYPE (Generic / RADIUS-CHAP / OTP / S-KEY) — Type/Value.</summary>
+            public const ushort Type = 16520;
+            /// <summary>XAUTH-USER-NAME — Type/Length/Value (ASCII, not NUL-terminated).</summary>
+            public const ushort UserName = 16521;
+            /// <summary>XAUTH-USER-PASSWORD — Type/Length/Value.</summary>
+            public const ushort UserPassword = 16522;
+            /// <summary>XAUTH-PASSCODE — Type/Length/Value.</summary>
+            public const ushort Passcode = 16523;
+            /// <summary>XAUTH-MESSAGE — Type/Length/Value (a human-readable prompt the gateway may send).</summary>
+            public const ushort Message = 16524;
+            /// <summary>XAUTH-CHALLENGE — Type/Length/Value.</summary>
+            public const ushort Challenge = 16525;
+            /// <summary>XAUTH-DOMAIN — Type/Length/Value.</summary>
+            public const ushort Domain = 16526;
+            /// <summary>XAUTH-STATUS (FAIL=0 / OK=1) — Type/Value.</summary>
+            public const ushort Status = 16527;
+            /// <summary>XAUTH-NEXT-PIN — Type/Length/Value.</summary>
+            public const ushort NextPin = 16528;
+            /// <summary>XAUTH-ANSWER — Type/Length/Value.</summary>
+            public const ushort Answer = 16529;
+        }
+
+        /// <summary>XAUTH-TYPE values (draft-beaulieu-ike-xauth-02 §7.1).</summary>
+        public static class XAuthType
+        {
+            /// <summary>Generic (a simple user name + password challenge).</summary>
+            public const ushort Generic = 0;
+            /// <summary>RADIUS-CHAP.</summary>
+            public const ushort RadiusChap = 1;
+            /// <summary>One-time password.</summary>
+            public const ushort Otp = 2;
+            /// <summary>S/KEY.</summary>
+            public const ushort SKey = 3;
+        }
+
+        /// <summary>XAUTH-STATUS values (draft-beaulieu-ike-xauth-02 §7.4).</summary>
+        public static class XAuthStatus
+        {
+            /// <summary>Authentication failed.</summary>
+            public const ushort Fail = 0;
+            /// <summary>Authentication succeeded.</summary>
+            public const ushort Ok = 1;
+        }
+
+        /// <summary>
+        /// Mode-Config (ISAKMP Configuration Method) data-attribute type values
+        /// (draft-ietf-ipsec-isakmp-mode-cfg-04 §5, IANA "IKEv2 Configuration Payload Attribute Types" — IKEv1 shares
+        /// the numbers). A pull request lists these with empty values; the REPLY fills them in (IPv4 fields are 4 bytes).
+        /// </summary>
+        public static class ConfigAttribute
+        {
+            /// <summary>INTERNAL_IP4_ADDRESS — the virtual IP the gateway assigns (4 bytes).</summary>
+            public const ushort InternalIp4Address = 1;
+            /// <summary>INTERNAL_IP4_NETMASK (4 bytes).</summary>
+            public const ushort InternalIp4Netmask = 2;
+            /// <summary>INTERNAL_IP4_DNS — a DNS server (4 bytes; may appear more than once).</summary>
+            public const ushort InternalIp4Dns = 3;
+            /// <summary>INTERNAL_IP4_NBNS — a WINS server (4 bytes).</summary>
+            public const ushort InternalIp4Nbns = 4;
+            /// <summary>INTERNAL_ADDRESS_EXPIRY (4 bytes, seconds).</summary>
+            public const ushort InternalAddressExpiry = 5;
+            /// <summary>INTERNAL_IP4_DHCP (4 bytes).</summary>
+            public const ushort InternalIp4Dhcp = 6;
+            /// <summary>APPLICATION_VERSION (a vendor version string).</summary>
+            public const ushort ApplicationVersion = 7;
+            /// <summary>INTERNAL_IP4_SUBNET — a protected subnet (8 bytes: address + mask).</summary>
+            public const ushort InternalIp4Subnet = 13;
         }
     }
 }

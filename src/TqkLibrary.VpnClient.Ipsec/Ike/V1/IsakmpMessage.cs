@@ -120,9 +120,12 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
                 int length = (body[offset + 2] << 8) | body[offset + 3];
                 if (length < 4 || offset + length > body.Length) break;
                 ReadOnlySpan<byte> payloadBody = body.Slice(offset + 4, length - 4);
-                into.Add(current == IsakmpPayloadType.SecurityAssociation
-                    ? IsakmpSaPayload.Parse(payloadBody)
-                    : new IsakmpRawPayload(current, payloadBody.ToArray()));
+                into.Add(current switch
+                {
+                    IsakmpPayloadType.SecurityAssociation => IsakmpSaPayload.Parse(payloadBody),
+                    IsakmpPayloadType.Attribute => IsakmpConfigPayload.Parse(payloadBody),
+                    _ => new IsakmpRawPayload(current, payloadBody.ToArray()),
+                });
                 offset += length;
                 current = next;
             }

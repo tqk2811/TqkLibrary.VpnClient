@@ -21,6 +21,12 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
         /// <summary>Vendor ID for draft-ietf-ipsec-nat-t-ike-03.</summary>
         public static byte[] VendorIdDraft03 { get; } = FromHex("7d9419a65310ca6f2c179d9215529d56");
 
+        /// <summary>
+        /// Vendor ID advertising XAUTH support (draft-ietf-ipsec-isakmp-xauth-06) — the well-known 8-byte
+        /// <c>09002689dfd6b712</c> Cisco/strongSwan use to signal that the peer speaks Extended Authentication.
+        /// </summary>
+        public static byte[] VendorIdXAuth { get; } = FromHex("09002689dfd6b712");
+
         /// <summary>Computes a NAT-D hash over the cookies and an IP endpoint using the negotiated Phase 1 hash.</summary>
         public static byte[] ComputeHash(HashAlgorithmName hash, byte[] cookieInitiator, byte[] cookieResponder, IPAddress ip, ushort port)
         {

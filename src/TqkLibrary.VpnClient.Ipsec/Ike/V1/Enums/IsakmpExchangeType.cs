@@ -18,6 +18,13 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1.Enums
         /// <summary>Informational.</summary>
         Informational = 5,
 
+        /// <summary>
+        /// Transaction (ISAKMP Configuration Method) — carries the Attribute payload for XAUTH and Mode-Config
+        /// (draft-ietf-ipsec-isakmp-mode-cfg-04 §3.2). Protected like Quick Mode: HASH then the Attribute payload,
+        /// each exchange under its own random non-zero Message ID with the derived Quick Mode IV.
+        /// </summary>
+        Transaction = 6,
+
         /// <summary>Quick Mode (Phase 2).</summary>
         QuickMode = 32,
 

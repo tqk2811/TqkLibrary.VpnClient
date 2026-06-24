@@ -45,6 +45,12 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1.Enums
         /// <summary>Vendor ID.</summary>
         VendorId = 13,
 
+        /// <summary>
+        /// Attribute / ISAKMP Configuration payload (draft-ietf-ipsec-isakmp-mode-cfg-04 §4) — the payload that carries
+        /// the configuration method (CfgType + Identifier + data attributes) for XAUTH and Mode-Config.
+        /// </summary>
+        Attribute = 14,
+
         /// <summary>NAT-Discovery hash (RFC 3947).</summary>
         NatDiscovery = 20,
 
