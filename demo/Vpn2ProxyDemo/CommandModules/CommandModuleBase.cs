@@ -39,8 +39,10 @@ namespace Vpn2ProxyDemo.CommandModules
                     + "l2tp (L2TP/IPsec IKEv1 PSK \"vpn\", NAT-T 500/4500), ikev2 (IKEv2-native RFC 7296, PSK từ ?psk=, "
                     + "ESP tunnel — V.1; thêm --ikev2-eap để EAP-MSCHAPv2 với user:pass), softether|ssl (SoftEther SSL-VPN/TLS 443, "
                     + "?hub= mặc định VPNGATE), pptp (PPTP RFC 2637, control TCP/1723 + GRE proto-47 raw socket, PPP MS-CHAPv2/MPPE — "
-                    + "cần CAP_NET_RAW/Administrator — V.6). Hoặc trỏ thẳng tới một file .ovpn cho OpenVPN, hoặc một file .conf wg-quick "
-                    + "cho WireGuard (Noise_IKpsk2/UDP — V.3). Thiếu user:pass ⇒ vpn:vpn.",
+                    + "cần CAP_NET_RAW/Administrator — V.6), gre|ipip|sit (plain IP-encap V.8: GRE proto-47 / IPIP proto-4 / "
+                    + "SIT proto-41 trên raw IP socket — connectionless, IP tĩnh ?addr=<v4>/<prefix>&peer=<v4> hoặc "
+                    + "?addr6=<v6>/<prefix>&peer6=<v6> cho SIT — cần CAP_NET_RAW). Hoặc trỏ thẳng tới một file .ovpn cho OpenVPN, "
+                    + "hoặc một file .conf wg-quick cho WireGuard (Noise_IKpsk2/UDP — V.3). Thiếu user:pass ⇒ vpn:vpn.",
                 DefaultValueFactory = _ => "sstp://vpn:vpn@public-vpn-226.opengw.net",
             };
             _command.Options.Add(VpnOption);
@@ -255,6 +257,8 @@ namespace Vpn2ProxyDemo.CommandModules
                 VpnProtocol.OpenConnect => VpnTunnel.ConnectOpenConnectAsync(target.Host, target.Port, target.User, target.Pass, openConnectDtls, ct),
                 // PPTP (V.6): control TCP/1723 → GRE proto-47 (raw socket, cần CAP_NET_RAW) → PPP MS-CHAPv2 → CCP/MPPE → IPCP.
                 VpnProtocol.Pptp => VpnTunnel.ConnectPptpAsync(target.Host, target.User, target.Pass, ct),
+                // IP-encap (V.8): plain GRE-47/IPIP-4/SIT-41 trên raw IP socket (cần CAP_NET_RAW) — connectionless, IP tĩnh từ ?addr/?peer.
+                VpnProtocol.IpEncap => VpnTunnel.ConnectIpEncapAsync(target.Host, target.IpEncapKind, target.TunnelAddress!, target.TunnelPeerAddress, ct),
                 _ => throw new ArgumentOutOfRangeException(nameof(target), target.Protocol, "Giao thức VPN không hỗ trợ."),
             };
 

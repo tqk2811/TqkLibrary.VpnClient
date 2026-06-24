@@ -1,3 +1,4 @@
+using TqkLibrary.VpnClient.Drivers.IpEncap.Enums;
 using Vpn2ProxyDemo.CommandModules.Enums;
 
 namespace Vpn2ProxyDemo.CommandModules.Models
@@ -19,7 +20,8 @@ namespace Vpn2ProxyDemo.CommandModules.Models
     internal sealed class VpnTarget
     {
         public VpnTarget(VpnProtocol protocol, string host, int port, string user, string pass,
-            string preSharedKey = "vpn", string hubName = "VPNGATE", string? configPath = null)
+            string preSharedKey = "vpn", string hubName = "VPNGATE", string? configPath = null,
+            IpEncapKind ipEncapKind = IpEncapKind.Gre, string? tunnelAddress = null, string? tunnelPeerAddress = null)
         {
             Protocol = protocol;
             Host = host;
@@ -29,6 +31,9 @@ namespace Vpn2ProxyDemo.CommandModules.Models
             PreSharedKey = preSharedKey;
             HubName = hubName;
             ConfigPath = configPath;
+            IpEncapKind = ipEncapKind;
+            TunnelAddress = tunnelAddress;
+            TunnelPeerAddress = tunnelPeerAddress;
         }
 
         public VpnProtocol Protocol { get; }
@@ -47,6 +52,18 @@ namespace Vpn2ProxyDemo.CommandModules.Models
 
         /// <summary>Đường dẫn file <c>.ovpn</c>. Chỉ OpenVPN dùng (host/port/proto/chứng chỉ đọc từ file); null với giao thức khác.</summary>
         public string? ConfigPath { get; }
+
+        /// <summary>Kiểu IP-encap (GRE proto-47 / IPIP proto-4 / SIT proto-41). Chỉ <see cref="VpnProtocol.IpEncap"/> dùng — chọn từ scheme <c>gre</c>/<c>ipip</c>/<c>sit</c> (V.8).</summary>
+        public IpEncapKind IpEncapKind { get; }
+
+        /// <summary>
+        /// Địa chỉ tunnel CỤC BỘ gán tĩnh cho stack (<c>?addr=10.80.0.2/24</c> cho GRE/IPIP, <c>?addr6=fd00::2/64</c> cho SIT).
+        /// Chỉ <see cref="VpnProtocol.IpEncap"/> dùng — connectionless nên KHÔNG có IPCP/DHCP, địa chỉ phải cấp out-of-band.
+        /// </summary>
+        public string? TunnelAddress { get; }
+
+        /// <summary>Địa chỉ tunnel của PEER (gateway bên trong tunnel) — <c>?peer=10.80.0.1</c> hoặc <c>?peer6=fd00::1</c>. Đích mặc định cho probe ICMP/UDP. Chỉ <see cref="VpnProtocol.IpEncap"/> dùng.</summary>
+        public string? TunnelPeerAddress { get; }
 
         /// <summary>
         /// Parse <c>--vpn</c>: một đường dẫn <c>.ovpn</c> (OpenVPN) hoặc URI <c>scheme://user:pass@host[:port][?psk=][?hub=]</c>.
@@ -87,16 +104,24 @@ namespace Vpn2ProxyDemo.CommandModules.Models
                 return false;
             }
             // scheme → giao thức. "ssl" là alias của SoftEther (VPN Gate gọi giao thức SoftEther là "SSL-VPN");
-            // "anyconnect" là alias của OpenConnect (Cisco AnyConnect/ocserv).
+            // "anyconnect" là alias của OpenConnect (Cisco AnyConnect/ocserv). "gre"/"ipip"/"sit" → IpEncap (V.8).
             VpnProtocol protocol;
+            IpEncapKind ipEncapKind = IpEncapKind.Gre;
+            bool isIpEncap = false;
             if (string.Equals(uri.Scheme, "ssl", StringComparison.OrdinalIgnoreCase))
                 protocol = VpnProtocol.SoftEther;
             else if (string.Equals(uri.Scheme, "anyconnect", StringComparison.OrdinalIgnoreCase))
                 protocol = VpnProtocol.OpenConnect;
-            else if (!Enum.TryParse(uri.Scheme, ignoreCase: true, out protocol) || protocol == VpnProtocol.OpenVpn || protocol == VpnProtocol.WireGuard)
+            else if (string.Equals(uri.Scheme, "gre", StringComparison.OrdinalIgnoreCase))
+            { protocol = VpnProtocol.IpEncap; ipEncapKind = IpEncapKind.Gre; isIpEncap = true; }
+            else if (string.Equals(uri.Scheme, "ipip", StringComparison.OrdinalIgnoreCase))
+            { protocol = VpnProtocol.IpEncap; ipEncapKind = IpEncapKind.IpIp; isIpEncap = true; }
+            else if (string.Equals(uri.Scheme, "sit", StringComparison.OrdinalIgnoreCase))
+            { protocol = VpnProtocol.IpEncap; ipEncapKind = IpEncapKind.Sit; isIpEncap = true; }
+            else if (!Enum.TryParse(uri.Scheme, ignoreCase: true, out protocol) || protocol == VpnProtocol.OpenVpn || protocol == VpnProtocol.WireGuard || protocol == VpnProtocol.IpEncap)
             {
                 error = $"--vpn scheme '{uri.Scheme}' không hỗ trợ. Dùng 'sstp', 'l2tp', 'ikev2', 'softether'/'ssl', 'openconnect'/'anyconnect', 'pptp', "
-                    + "hoặc trỏ tới một file .ovpn (OpenVPN) / .conf (WireGuard).";
+                    + "'gre'/'ipip'/'sit' (IP-encap V.8), hoặc trỏ tới một file .ovpn (OpenVPN) / .conf (WireGuard).";
                 return false;
             }
             if (string.IsNullOrEmpty(uri.Host))
@@ -130,9 +155,29 @@ namespace Vpn2ProxyDemo.CommandModules.Models
             // PSK từ ?psk=... (L2TP) + Hub từ ?hub=... (SoftEther) — percent-decoded; thiếu ⇒ áp default trong ctor.
             string? psk = TryGetQueryValue(uri.Query, "psk");
             string? hub = TryGetQueryValue(uri.Query, "hub");
+
+            // IpEncap (V.8): địa chỉ tunnel tĩnh từ ?addr/?peer (GRE/IPIP) hoặc ?addr6/?peer6 (SIT) — connectionless không có IPCP.
+            string? tunnelAddr = null, tunnelPeer = null;
+            if (isIpEncap)
+            {
+                bool isSit = ipEncapKind == IpEncapKind.Sit;
+                tunnelAddr = TryGetQueryValue(uri.Query, isSit ? "addr6" : "addr");
+                tunnelPeer = TryGetQueryValue(uri.Query, isSit ? "peer6" : "peer");
+                if (string.IsNullOrEmpty(tunnelAddr))
+                {
+                    error = $"--vpn scheme '{uri.Scheme}' (IP-encap) cần địa chỉ tunnel tĩnh: thêm "
+                        + (isSit ? "'?addr6=<ipv6>/<prefix>&peer6=<ipv6>'" : "'?addr=<ipv4>/<prefix>&peer=<ipv4>'")
+                        + " (connectionless không có IPCP/DHCP nên phải cấp out-of-band).";
+                    return false;
+                }
+            }
+
             target = new VpnTarget(protocol, uri.Host, port, user, pass,
                 preSharedKey: string.IsNullOrEmpty(psk) ? "vpn" : psk!,
-                hubName: string.IsNullOrEmpty(hub) ? "VPNGATE" : hub!);
+                hubName: string.IsNullOrEmpty(hub) ? "VPNGATE" : hub!,
+                ipEncapKind: ipEncapKind,
+                tunnelAddress: tunnelAddr,
+                tunnelPeerAddress: tunnelPeer);
             return true;
         }
 

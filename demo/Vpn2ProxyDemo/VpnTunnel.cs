@@ -7,6 +7,8 @@ using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
 using TqkLibrary.VpnClient.Abstractions.Net;
 using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Drivers.Ikev2;
+using TqkLibrary.VpnClient.Drivers.IpEncap;
+using TqkLibrary.VpnClient.Drivers.IpEncap.Enums;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec.Enums;
 using TqkLibrary.VpnClient.Drivers.OpenConnect;
@@ -429,6 +431,65 @@ namespace Vpn2ProxyDemo
                 var driver = new PptpDriver(rawIpFactory);
                 return new VpnTunnel(stack, async () => { await vpn.DisposeAsync(); loggerFactory.Dispose(); },
                     vpn.AssignedAddress, vpn.PacketChannel.Mtu, driver.Capabilities, driver.Name, vpn.AssignedDns);
+            }
+            catch
+            {
+                await vpn.DisposeAsync();
+                loggerFactory.Dispose();
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Connect qua plain IP-encap (V.8): GRE proto-47 / IPIP proto-4 / SIT proto-41 trên một <b>raw IP socket</b>
+        /// (cần CAP_NET_RAW/Administrator). KHÔNG control plane — connectionless, không handshake/auth/keepalive — nên địa
+        /// chỉ tunnel phải cấp TĨNH out-of-band: <paramref name="tunnelAddressCidr"/> (vd <c>10.80.0.2/24</c> cho GRE/IPIP,
+        /// <c>fd00::2/64</c> cho SIT) gán cho stack, <paramref name="tunnelPeer"/> là gateway bên trong tunnel (đích probe).
+        /// Driver mở <see cref="GreTunnelChannel"/> (GRE) hoặc <see cref="RawIpPassthroughChannel"/> (IPIP/SIT) rồi gói IP
+        /// thẳng vào <see cref="TcpIpStack"/>. ⚠️ GRE/IPIP/SIT KHÔNG mã hóa — chỉ dùng trên đường tin cậy hoặc dưới IPsec.
+        /// </summary>
+        public static async Task<VpnTunnel> ConnectIpEncapAsync(string host, IpEncapKind kind, string tunnelAddressCidr, string? tunnelPeer, CancellationToken ct)
+        {
+            Console.WriteLine("=== [IP-encap] ===");
+            (IPAddress local, _) = ParseCidr(tunnelAddressCidr);
+            IPAddress? peer = string.IsNullOrEmpty(tunnelPeer) ? null : IPAddress.Parse(tunnelPeer!);
+            bool isV6 = kind == IpEncapKind.Sit;
+            if (isV6 && local.AddressFamily != AddressFamily.InterNetworkV6)
+                throw new InvalidOperationException("SIT (proto-41) cần địa chỉ IPv6 — dùng ?addr6=<ipv6>/<prefix>.");
+            if (!isV6 && local.AddressFamily != AddressFamily.InterNetwork)
+                throw new InvalidOperationException($"{kind} cần địa chỉ IPv4 — dùng ?addr=<ipv4>/<prefix>.");
+
+            ILoggerFactory loggerFactory = CreateDriverLoggerFactory();
+            // Raw IP socket trên protocol number của kind (GRE-47/IPIP-4/SIT-41). probeProtocol khớp kind để IsAvailable đúng.
+            int probeProtocol = kind switch
+            {
+                IpEncapKind.Gre => TqkLibrary.VpnClient.Transport.RawIp.RawIpProtocols.Gre,
+                IpEncapKind.IpIp => TqkLibrary.VpnClient.Transport.RawIp.RawIpProtocols.IpIp,
+                IpEncapKind.Sit => TqkLibrary.VpnClient.Transport.RawIp.RawIpProtocols.Sit,
+                _ => TqkLibrary.VpnClient.Transport.RawIp.RawIpProtocols.Gre,
+            };
+            var rawIpFactory = new TqkLibrary.VpnClient.Transport.RawIp.RawIpTransportFactory(probeProtocol: probeProtocol);
+            var options = new IpEncapOptions { Kind = kind };
+            var vpn = new IpEncapConnection(host, rawIpFactory, options, loggerFactory: loggerFactory);
+            try
+            {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                cts.CancelAfter(TimeSpan.FromSeconds(30));
+
+                Console.WriteLine($"[ipencap] connecting to {host} (raw-IP {kind}, proto-{probeProtocol}) ...");
+                await vpn.ConnectAsync(cts.Token);
+                Console.WriteLine($"[ipencap] tunnel up (connectionless). local tunnel IP = {local}, peer = {peer?.ToString() ?? "(none)"}, mtu = {vpn.PacketChannel.Mtu}");
+
+                // Connectionless: KHÔNG IPCP/DHCP → gán IP tĩnh. SIT chỉ IPv6, GRE/IPIP chỉ IPv4. Peer làm "DNS"/gateway
+                // mặc định để panel khả năng probe ICMP/UDP nhắm vào peer (peer lab có thể chạy responder).
+                var stack = isV6
+                    ? new TcpIpStack(vpn.PacketChannel, null, local)
+                    : new TcpIpStack(vpn.PacketChannel, local, null);
+                IPAddress assignedV4 = isV6 ? IPAddress.Any : local;
+                IPAddress? assignedV6 = isV6 ? local : null;
+                var driver = new IpEncapDriver(rawIpFactory, options);
+                return new VpnTunnel(stack, async () => { await vpn.DisposeAsync(); loggerFactory.Dispose(); },
+                    assignedV4, vpn.PacketChannel.Mtu, driver.Capabilities, driver.Name, peer, assignedV6);
             }
             catch
             {

@@ -26,5 +26,8 @@ namespace Vpn2ProxyDemo.CommandModules.Enums
 
         /// <summary>PPTP (RFC 2637): control TCP/1723 + GRE proto-47 (raw socket) carrying PPP/MS-CHAPv2/MPPE (scheme <c>pptp</c>) — needs CAP_NET_RAW/Administrator (V.6).</summary>
         Pptp,
+
+        /// <summary>Plain IP-in-IP / GRE encapsulation (no control plane): standard GRE proto-47 (scheme <c>gre</c>), IPIP proto-4 (scheme <c>ipip</c>) or SIT/6in4 proto-41 (scheme <c>sit</c>) over a raw IP socket — needs CAP_NET_RAW/Administrator; the tunnel address is static (?addr=/?peer=) since there is no IPCP/DHCP (V.8).</summary>
+        IpEncap,
     }
 }
