@@ -1,0 +1,35 @@
+# Lab V.11: vtund 3.0.4 (apt) server + .NET vtun driver client on one bridge labnet.
+# Server: host 'test', pass 'pass', type tun, proto tcp, encrypt no, compress no, tunnel 10.11.0.1 <-> 10.11.0.2.
+# Client: TCP connect -> challenge-response (MD5+Blowfish) -> length-prefixed data plane -> ICMP 10.11.0.1 both ways.
+#
+# Prep on the VM (~/vtun-lab/): build image lab-vtun (Dockerfile), publish the harness -> ./client-bin, then
+# docker compose up -d. See README.
+services:
+  vtun-server:
+    image: lab-vtun:latest
+    container_name: vtun-server
+    networks: [labnet]
+    cap_add: [NET_ADMIN]
+    devices: ["/dev/net/tun:/dev/net/tun"]
+    sysctls:
+      - net.ipv4.ip_forward=1
+    volumes:
+      - ./:/lab:ro
+    working_dir: /lab
+    command: sh -c "cp /lab/vtund.conf /etc/vtund.conf && cp /lab/setup-server.sh /tmp/s.sh && chmod +x /tmp/s.sh && exec /tmp/s.sh"
+
+  client:
+    image: mcr.microsoft.com/dotnet/runtime-deps:8.0
+    container_name: vtun-client
+    depends_on: [vtun-server]
+    networks: [labnet]
+    volumes:
+      - ./:/lab:ro
+      - ./client-bin:/app:ro
+    working_dir: /app
+    # Keep the container alive so `docker exec` can run the harness manually (see README).
+    command: sleep infinity
+
+networks:
+  labnet:
+    driver: bridge

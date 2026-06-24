@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Live full-tunnel harness V.11: publish self-contained linux-x64 → scp into the VM lab → docker exec inside the
+    client container, connect to a REAL vtund 3.0.4 server, run the challenge-response handshake, then ICMP both ways
+    through the tunnel. NOT in the solution (it only validates the driver live).
+    Publish:  dotnet publish -c Release -r linux-x64 -o publish
+    Run:      ./harness <serverHost> <port> <hostName> <password> <tunnelAddr/cidr> <peerAddr>
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\TqkLibrary.VpnClient.Drivers.Vtun\TqkLibrary.VpnClient.Drivers.Vtun.csproj" />
+    <ProjectReference Include="..\..\..\src\TqkLibrary.VpnClient.IpStack\TqkLibrary.VpnClient.IpStack.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.0" />
+  </ItemGroup>
+</Project>

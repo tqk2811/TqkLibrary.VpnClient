@@ -1,0 +1,6 @@
+# Lab artifacts — KHÔNG commit (binary publish, pcap).
+client-bin/
+publish/
+*.pcap
+harness/bin/
+harness/obj/
