@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Tailscale control protocol (ts2021): the Noise_IK_25519_ChaChaPoly_BLAKE2s control handshake, the ts2021 frame codec, the tailcfg JSON messages (RegisterRequest/RegisterResponse, MapRequest/MapResponse, Node), the mkey:/nodekey:/discokey: key codecs and the netmap to multi-peer WireGuardConfig mapping. The data plane is reused wholesale from WireGuard; this project is control plane only.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Crypto\TqkLibrary.VpnClient.Crypto.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.WireGuard\TqkLibrary.VpnClient.WireGuard.csproj" />
+  </ItemGroup>
+
+  <!-- System.Text.Json is in-box on net8.0; netstandard2.0 needs the package (the tailcfg messages are JSON). -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+
+</Project>
