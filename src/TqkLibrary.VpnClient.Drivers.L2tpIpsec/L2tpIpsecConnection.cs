@@ -176,7 +176,7 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
 
             var pppChannel = new L2tpPppFrameChannel(session);
             var authenticator = new MsChapV2Authenticator(_userName ?? string.Empty, _password ?? string.Empty);
-            var ppp = new PppEngine(pppChannel, _magic, IPAddress.Any, authenticator: authenticator);
+            var ppp = new PppEngine(pppChannel, _magic, IPAddress.Any, authenticator: authenticator, logger: Logger);
 
             var linkUp = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             ppp.LinkUp += () => linkUp.TrySetResult(true);
@@ -261,7 +261,7 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
 
             var pppChannel = new L2tpPppFrameChannel(l2tp.PrimarySession);
             var authenticator = new MsChapV2Authenticator(_userName ?? string.Empty, _password ?? string.Empty);
-            var ppp = new PppEngine(pppChannel, _magic, IPAddress.Any, authenticator: authenticator, enableIpv6: _enableIpv6);
+            var ppp = new PppEngine(pppChannel, _magic, IPAddress.Any, authenticator: authenticator, enableIpv6: _enableIpv6, logger: Logger);
             _ppp = ppp;
             _ipv6Config = null;   // fresh per attempt; the previous attempt's global address must not leak
 

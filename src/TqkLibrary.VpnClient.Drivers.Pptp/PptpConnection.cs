@@ -154,7 +154,7 @@ namespace TqkLibrary.VpnClient.Drivers.Pptp
             // clear, the server Protocol-Rejects it, and the stray cleartext frame desyncs the server's MPPE state.
             var auth = new MsChapV2Authenticator(user, password);
             var mppe = new MppePppFrameChannel(gre, () => (password, auth.NtResponse!));
-            var ppp = new PppEngine(mppe, _magic, IPAddress.Any, authenticator: auth, deferNetworkLayer: true);
+            var ppp = new PppEngine(mppe, _magic, IPAddress.Any, authenticator: auth, deferNetworkLayer: true, logger: Logger);
             _ppp = ppp;
 
             // CCP/MPPE starts only after MS-CHAPv2 succeeds (the NT-Response is the MPPE key material).

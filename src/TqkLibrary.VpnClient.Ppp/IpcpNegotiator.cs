@@ -1,4 +1,5 @@
 using System.Net;
+using Microsoft.Extensions.Logging;
 using TqkLibrary.VpnClient.Ppp.Enums;
 using TqkLibrary.VpnClient.Ppp.Models;
 
@@ -20,8 +21,9 @@ namespace TqkLibrary.VpnClient.Ppp
         /// Creates an IPCP negotiator. <paramref name="localAddress"/> is the address we request for ourselves
         /// (0.0.0.0 for a client). If <paramref name="assignPeerAddress"/> is set we act as a server and assign it.
         /// </summary>
-        public IpcpNegotiator(Action<byte[]> send, IPAddress localAddress, IPAddress? assignPeerAddress = null, IPAddress? assignPeerDns = null)
-            : base(send)
+        public IpcpNegotiator(Action<byte[]> send, IPAddress localAddress, IPAddress? assignPeerAddress = null, IPAddress? assignPeerDns = null,
+            ILogger? logger = null)
+            : base(send, layer: "ppp.ipcp", logger: logger)
         {
             _localAddress = localAddress;
             _assignPeerAddress = assignPeerAddress;

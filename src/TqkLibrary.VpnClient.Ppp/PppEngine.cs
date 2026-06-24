@@ -1,5 +1,8 @@
 using System.Net;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using TqkLibrary.VpnClient.Abstractions.Channels.Interfaces;
+using TqkLibrary.VpnClient.Abstractions.Diagnostics.Extensions;
 using TqkLibrary.VpnClient.Ppp.Enums;
 using TqkLibrary.VpnClient.Ppp.Framing.Enums;
 using TqkLibrary.VpnClient.Ppp.Interfaces;
@@ -19,8 +22,11 @@ namespace TqkLibrary.VpnClient.Ppp
         readonly Ipv6cpNegotiator? _ipv6cp;
         readonly PppPacketChannel _packetChannel;
         readonly IPppAuthenticator? _authenticator;
+        readonly ILogger _logger;
         readonly object _sync = new();
         readonly bool _deferNetworkLayer;
+
+        const string Layer = "ppp";
         bool _networkLayerStarted;
         bool _readyForNetworkLayer; // LCP up + auth done; waiting only on the deferral gate (CCP/MPPE)
         bool _gateReleased;         // the caller opened CCP/MPPE (StartNetworkLayer); releases the deferral
@@ -41,6 +47,8 @@ namespace TqkLibrary.VpnClient.Ppp
         /// otherwise the first IPCP Configure-Request goes out in the clear and the peer Protocol-Rejects it (and the
         /// stray cleartext packet can desync the peer's MPPE state). L2TP/SSTP leave this false (no CCP).
         /// </para>
+        /// <para><paramref name="logger"/> receives the LCP/IPCP/IPV6CP/auth protocol traces; null logs to a no-op
+        /// logger (no behaviour change).</para>
         /// </summary>
         public PppEngine(
             IPppFrameChannel channel,
@@ -53,20 +61,22 @@ namespace TqkLibrary.VpnClient.Ppp
             bool enableIpv6 = false,
             byte[]? interfaceId = null,
             byte[]? assignPeerInterfaceId = null,
-            bool deferNetworkLayer = false)
+            bool deferNetworkLayer = false,
+            ILogger? logger = null)
         {
             _channel = channel;
             _channel.FrameReceived += OnFrame;
             _authenticator = authenticator;
             _deferNetworkLayer = deferNetworkLayer;
-            _lcp = new LcpNegotiator(p => SendControl(PppProtocol.Lcp, p), magic);
-            _ipcp = new IpcpNegotiator(p => SendControl(PppProtocol.Ipcp, p), localAddress, assignPeerAddress, assignPeerDns);
+            _logger = logger ?? NullLogger.Instance;
+            _lcp = new LcpNegotiator(p => SendControl(PppProtocol.Lcp, p), magic, _logger);
+            _ipcp = new IpcpNegotiator(p => SendControl(PppProtocol.Ipcp, p), localAddress, assignPeerAddress, assignPeerDns, _logger);
             _packetChannel = new PppPacketChannel(SendIpAsync, mtu);
             _lcp.Opened += OnLcpOpened;
             _ipcp.Opened += OnIpcpOpened;
             if (enableIpv6)
             {
-                _ipv6cp = new Ipv6cpNegotiator(p => SendControl(PppProtocol.Ipv6cp, p), interfaceId ?? DeriveInterfaceId(magic), assignPeerInterfaceId);
+                _ipv6cp = new Ipv6cpNegotiator(p => SendControl(PppProtocol.Ipv6cp, p), interfaceId ?? DeriveInterfaceId(magic), assignPeerInterfaceId, _logger);
                 _ipv6cp.Opened += OnIpv6cpOpened;
             }
         }
@@ -155,12 +165,14 @@ namespace TqkLibrary.VpnClient.Ppp
         void OnIpcpOpened()
         {
             IsLinkUp = true;
+            _logger.LogProtocolStep(Layer, "IPCP opened — link up (IPv4)");
             LinkUp?.Invoke();
         }
 
         void OnIpv6cpOpened()
         {
             IsIpv6Up = true;
+            _logger.LogProtocolStep(Layer, "IPV6CP opened — link-local IPv6 negotiated");
             Ipv6Up?.Invoke();
         }
 
@@ -174,10 +186,12 @@ namespace TqkLibrary.VpnClient.Ppp
             {
                 case PppAuthStatus.Success:
                     IsAuthenticated = true;
+                    _logger.LogProtocolStep(Layer, "authentication succeeded");
                     AuthSucceeded?.Invoke();   // PPTP hooks this to start CCP; the network layer then waits for the gate
                     ReadyForNetworkLayer();
                     break;
                 case PppAuthStatus.Failure:
+                    _logger.LogProtocolStep(Layer, "authentication failed");
                     AuthFailed?.Invoke();
                     break;
             }

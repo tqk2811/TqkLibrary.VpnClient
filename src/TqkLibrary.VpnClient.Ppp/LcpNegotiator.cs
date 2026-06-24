@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using TqkLibrary.VpnClient.Abstractions.Diagnostics.Extensions;
 using TqkLibrary.VpnClient.Ppp.Enums;
 using TqkLibrary.VpnClient.Ppp.Models;
 
@@ -13,8 +15,10 @@ namespace TqkLibrary.VpnClient.Ppp
         ushort _mru = 1500;
         bool _sendMagic = true;
 
-        /// <summary>Creates an LCP negotiator with the given local magic number.</summary>
-        public LcpNegotiator(Action<byte[]> send, uint magic) : base(send)
+        /// <summary>Creates an LCP negotiator with the given local magic number. <paramref name="logger"/> receives
+        /// option-negotiation / Echo traces; null logs to a no-op logger (no behaviour change).</summary>
+        public LcpNegotiator(Action<byte[]> send, uint magic, ILogger? logger = null)
+            : base(send, layer: "ppp.lcp", logger: logger)
         {
             _magic = magic;
         }
@@ -54,7 +58,7 @@ namespace TqkLibrary.VpnClient.Ppp
                     case LcpOptionType.MagicNumber:
                         break; // accept
                     case LcpOptionType.AuthenticationProtocol:
-                        if (IsMsChapV2(option.Data)) RequiresMsChapV2 = true;
+                        if (IsMsChapV2(option.Data)) { RequiresMsChapV2 = true; Logger.LogProtocolStep(Layer, "peer requires MS-CHAPv2 authentication"); }
                         else rejected.Add(option);
                         break;
                     default:
@@ -91,6 +95,7 @@ namespace TqkLibrary.VpnClient.Ppp
             // Magic-Number. A server probing liveness (e.g. pppd lcp-echo-interval/lcp-echo-failure) otherwise sees no
             // reply and tears the link down after a couple of minutes — surfacing as the gateway dropping the session.
             if (code != (byte)PppCode.EchoRequest) return null;
+            Logger.LogProtocolStep(Layer, "Echo-Request received → Echo-Reply (RFC 1661 §5.8)");
             byte[] magic = { (byte)(_magic >> 24), (byte)(_magic >> 16), (byte)(_magic >> 8), (byte)_magic };
             return PppControlCodec.Build((byte)PppCode.EchoReply, identifier, magic);
         }

@@ -206,7 +206,7 @@ namespace TqkLibrary.VpnClient.Drivers.Sstp
             _channel = channel;
 
             var authenticator = new MsChapV2Authenticator(_userName ?? string.Empty, _password ?? string.Empty);
-            var engine = new PppEngine(channel, _magic, IPAddress.Any, authenticator: authenticator, enableIpv6: _enableIpv6);
+            var engine = new PppEngine(channel, _magic, IPAddress.Any, authenticator: authenticator, enableIpv6: _enableIpv6, logger: Logger);
             _engine = engine;
             _ipv6Config = null;   // fresh per attempt; the previous attempt's global address must not leak
             var ipv6Up = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);

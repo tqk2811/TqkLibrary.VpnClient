@@ -1,4 +1,7 @@
 using System.Threading;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using TqkLibrary.VpnClient.Abstractions.Diagnostics.Extensions;
 using TqkLibrary.VpnClient.Ppp.Enums;
 using TqkLibrary.VpnClient.Ppp.Models;
 
@@ -30,6 +33,13 @@ namespace TqkLibrary.VpnClient.Ppp
         readonly TimeSpan _restartInterval;
         readonly int _maxRequests;
 
+        /// <summary>The protocol-trace layer name this negotiator stamps on its <see cref="VpnLogExtensions"/> entries
+        /// (e.g. <c>ppp.lcp</c>, <c>ppp.ipcp</c>, <c>ppp.ipv6cp</c>).</summary>
+        protected string Layer { get; }
+
+        /// <summary>The logger this negotiator traces to (a no-op <see cref="NullLogger"/> when none was supplied).</summary>
+        protected ILogger Logger { get; }
+
         Timer? _restartTimer;
         byte _nextId = 1;
         byte _lastRequestId;
@@ -45,11 +55,14 @@ namespace TqkLibrary.VpnClient.Ppp
         /// until it is acknowledged, at most <paramref name="maxRequests"/> total transmissions
         /// (default <see cref="DefaultMaxRequests"/>; ≤0 ⇒ unbounded).
         /// </summary>
-        protected PppNegotiator(Action<byte[]> send, TimeSpan? restartInterval = null, int maxRequests = DefaultMaxRequests)
+        protected PppNegotiator(Action<byte[]> send, TimeSpan? restartInterval = null, int maxRequests = DefaultMaxRequests,
+            string layer = "ppp", ILogger? logger = null)
         {
             _send = send;
             _restartInterval = restartInterval ?? DefaultRestartInterval;
             _maxRequests = maxRequests <= 0 ? int.MaxValue : maxRequests;
+            Layer = layer;
+            Logger = logger ?? NullLogger.Instance;
         }
 
         /// <summary>Current negotiation state.</summary>
@@ -69,6 +82,7 @@ namespace TqkLibrary.VpnClient.Ppp
                 wire = BuildRequestLocked();
                 ArmRestartTimerLocked();
             }
+            Logger.LogProtocolStep(Layer, "Configure-Request sent (negotiation started)");
             if (wire != null) _send(wire);
         }
 
@@ -98,11 +112,13 @@ namespace TqkLibrary.VpnClient.Ppp
                         break;
                     case PppCode.ConfigureNak:
                         OnNak(options);
+                        Logger.LogProtocolStep(Layer, "Configure-Nak received; re-requesting with adjusted options");
                         toSend = BuildRequestLocked();  // resend with adjusted options + restart the timer/counter
                         ArmRestartTimerLocked();
                         break;
                     case PppCode.ConfigureReject:
                         OnReject(options);
+                        Logger.LogProtocolStep(Layer, "Configure-Reject received; dropping rejected options and re-requesting");
                         toSend = BuildRequestLocked();
                         ArmRestartTimerLocked();
                         break;
@@ -146,6 +162,7 @@ namespace TqkLibrary.VpnClient.Ppp
             {
                 State = PppNegotiationState.Opened;
                 StopRestartTimerLocked();
+                Logger.LogProtocolStep(Layer, "Opened (both sides acked)");
                 return true;
             }
             return false;

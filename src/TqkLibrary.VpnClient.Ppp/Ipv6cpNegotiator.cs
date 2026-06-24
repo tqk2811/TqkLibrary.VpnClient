@@ -1,4 +1,5 @@
 using System.Net;
+using Microsoft.Extensions.Logging;
 using TqkLibrary.VpnClient.Ppp.Enums;
 using TqkLibrary.VpnClient.Ppp.Models;
 
@@ -19,8 +20,9 @@ namespace TqkLibrary.VpnClient.Ppp
         /// Creates an IPV6CP negotiator. <paramref name="localInterfaceId"/> is the 8-byte identifier we request for
         /// ourselves. If <paramref name="assignPeerInterfaceId"/> is set we act as a server and force it onto the peer.
         /// </summary>
-        public Ipv6cpNegotiator(Action<byte[]> send, byte[] localInterfaceId, byte[]? assignPeerInterfaceId = null)
-            : base(send)
+        public Ipv6cpNegotiator(Action<byte[]> send, byte[] localInterfaceId, byte[]? assignPeerInterfaceId = null,
+            ILogger? logger = null)
+            : base(send, layer: "ppp.ipv6cp", logger: logger)
         {
             if (localInterfaceId == null || localInterfaceId.Length != 8)
                 throw new ArgumentException("The IPV6CP Interface-Identifier must be exactly 8 bytes.", nameof(localInterfaceId));
