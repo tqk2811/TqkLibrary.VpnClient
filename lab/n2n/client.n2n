@@ -1,0 +1,6 @@
+# V.7.4 n2n .NET client edge config (driver Drivers.N2n). community "labnet", supernode at supernode:7654,
+# static overlay 10.7.0.2/24 (the gateway edge2 is 10.7.0.1), NULL transform (no payload encryption, matches -A1).
+community=labnet
+endpoint=supernode:7654
+overlay=10.7.0.2/24
+transform=null

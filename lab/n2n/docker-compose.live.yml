@@ -1,0 +1,45 @@
+# V.7.4 phase b — n2n L2 full-tunnel live lab: a real n2n v3.1.1 supernode + a real edge gateway (edge2, tun
+# overlay 10.7.0.1/24) + the .NET client edge (driver Drivers.N2n, overlay 10.7.0.2/24 via the userspace IP stack —
+# no tun needed). All on the labnet bridge, community "labnet", transform NULL (-A1, no header encryption).
+#
+# The .NET client registers with the supernode, then sends ICMP echo 10.7.0.2 -> 10.7.0.1; edge2's tun answers
+# => ICMP both directions over the L2 overlay (PACKET Ethernet frames relayed by the supernode).
+#
+#   docker compose -f lab/n2n/docker-compose.live.yml up -d supernode edge2
+#   docker compose -f lab/n2n/docker-compose.live.yml up -d client
+#   docker exec n2n-client sh -c 'cd /app && ./Vpn2ProxyDemo dns --vpn /lab/client.n2n'
+#     -> "Gateway nội bộ: 10.7.0.1 (ICMP reachable, RTT X ms)"
+#   docker exec n2n-edge2 sh -c 'apk add tcpdump 2>/dev/null; tcpdump -i edge0 -n icmp'  # (image has tcpdump via apt)
+#   docker compose -f lab/n2n/docker-compose.live.yml down -v
+services:
+  supernode:
+    image: n2n-v3:lab
+    container_name: n2n-supernode
+    command: ["supernode", "-f", "-vvv"]
+    networks: [labnet]
+
+  # A real n2n edge acting as the in-overlay gateway: tun "edge0" with the static overlay IP 10.7.0.1/24.
+  edge2:
+    image: n2n-v3:lab
+    container_name: n2n-edge2
+    cap_add: [NET_ADMIN]
+    devices: ["/dev/net/tun"]
+    depends_on: [supernode]
+    networks: [labnet]
+    # -d edge0: device name; -a: static overlay IP; -c: community; -l: supernode; -A1: NULL transform; -r: route; -f: foreground.
+    command: ["edge", "-d", "edge0", "-a", "10.7.0.1", "-c", "labnet", "-l", "supernode:7654", "-A1", "-r", "-f", "-vv"]
+
+  # The .NET client edge. No tun (userspace TcpIpStack); just the published self-contained binary + the .n2n config.
+  client:
+    image: mcr.microsoft.com/dotnet/runtime-deps:8.0
+    container_name: n2n-client
+    depends_on: [supernode, edge2]
+    networks: [labnet]
+    volumes:
+      - ./client-bin:/app:ro
+      - ./client.n2n:/lab/client.n2n:ro
+    working_dir: /app
+    command: sleep infinity
+
+networks:
+  labnet:
