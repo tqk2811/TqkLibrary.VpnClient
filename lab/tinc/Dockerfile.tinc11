@@ -9,7 +9,9 @@ WORKDIR /src
 # Pin a 1.1pre release tag for reproducibility.
 RUN git clone --depth 1 --branch release-1.1pre18 https://github.com/gsliepen/tinc.git . \
     || git clone --depth 1 --branch 1.1 https://github.com/gsliepen/tinc.git .
-RUN autoreconf -fsi && ./configure --enable-vde=no --with-systemd=no >/dev/null && make -j"$(nproc)" >/dev/null
+# Skip the texinfo doc build (needs makeinfo); only the daemon/CLI binaries are needed for the lab.
+RUN autoreconf -fsi && ./configure --enable-vde=no --with-systemd=no >/dev/null \
+    && make -C src -j"$(nproc)" MAKEINFO=true tincd tinc >/dev/null
 RUN cp src/tincd /tincd && cp src/tinc /tinc
 
 FROM debian:bookworm-slim

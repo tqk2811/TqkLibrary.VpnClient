@@ -29,7 +29,7 @@ services:
     networks: [labnet]
     volumes:
       - ./:/lab:ro
-      - ./shared:/shared:ro
+      - ./shared:/shared
       - ./client-bin:/app:ro
     working_dir: /app
     # Giữ container sống để docker exec chạy harness thủ công (xem README).
