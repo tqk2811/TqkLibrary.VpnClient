@@ -16,8 +16,13 @@ namespace TqkLibrary.VpnClient.Drivers.ZeroTier
         /// </summary>
         public const int DefaultMtu = 1400;
 
-        /// <summary>The protocol version this client advertises in HELLO (ZeroTier 1.14–1.16 wire).</summary>
-        public const byte ProtocolVersion = 13;
+        /// <summary>
+        /// The protocol version this client advertises in HELLO. Deliberately &lt; 11 so a peer running 1.14–1.16 keeps
+        /// the VL1 session on Salsa20/12 + Poly1305 (cipher 1) instead of negotiating AES-GMAC-SIV (cipher 3), which it
+        /// does only when the remote advertises protocol &gt;= 11. The wire format of the messages this client uses
+        /// (HELLO / OK / NETWORK_CONFIG_REQUEST / EXT_FRAME) is unchanged across these versions.
+        /// </summary>
+        public const byte ProtocolVersion = 10;
 
         /// <summary>Software major version advertised in HELLO.</summary>
         public const byte VersionMajor = 1;

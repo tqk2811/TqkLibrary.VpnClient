@@ -32,6 +32,11 @@ namespace TqkLibrary.VpnClient.ZeroTier.Vl1
     public sealed class Vl1PacketCodec
     {
         const int Poly1305KeyBytes = 32;
+        // ZeroTier derives the one-time Poly1305 key from the FIRST 64-byte Salsa20 block (using only its leading 32
+        // bytes) and then encrypts the payload starting at the NEXT block — ZeroTier's Salsa20 advances block-by-block, so
+        // the unused 32 bytes of block 0 are discarded, not carried into the payload keystream. BouncyCastle's
+        // Salsa20Engine is byte-granular, so we must explicitly consume the full 64-byte block before encrypting.
+        const int Salsa20BlockBytes = 64;
 
         /// <summary>
         /// Builds a sealed VL1 packet from <paramref name="header"/> (its <c>Cipher</c> selects the suite — default
@@ -66,8 +71,10 @@ namespace TqkLibrary.VpnClient.ZeroTier.Vl1
             byte[] nonce = NonceFromPacketId(header.PacketId);
             var engine = NewEngine(mangled, nonce);
 
-            // Block 0 -> Poly1305 one-time key.
+            // Block 0 -> Poly1305 one-time key (first 32 bytes; the rest of the 64-byte block is discarded so the payload
+            // cipher starts at block 1, matching ZeroTier's block-granular Salsa20).
             byte[] polyKey = NextKeystream(engine, Poly1305KeyBytes);
+            DiscardToNextBlock(engine, Poly1305KeyBytes);
 
             if (encrypt)
             {
@@ -113,6 +120,7 @@ namespace TqkLibrary.VpnClient.ZeroTier.Vl1
             var engine = NewEngine(mangled, nonce);
 
             byte[] polyKey = NextKeystream(engine, Poly1305KeyBytes);
+            DiscardToNextBlock(engine, Poly1305KeyBytes);
 
             // Constant-time-ish MAC check (over the on-wire section) before touching the plaintext.
             byte[] expected = ComputeMac(polyKey, section);
@@ -205,6 +213,20 @@ namespace TqkLibrary.VpnClient.ZeroTier.Vl1
             byte[] ks = new byte[count];
             engine.ProcessBytes(zeros, 0, count, ks, 0);
             return ks;
+        }
+
+        // Advance the (byte-granular BouncyCastle) engine past the remainder of the current 64-byte Salsa20 block, so the
+        // next ProcessBytes starts on a block boundary — matching ZeroTier's block-granular Salsa20, which discards the
+        // unused tail of the block it took the Poly1305 key from. <paramref name="alreadyConsumed"/> is how many bytes of
+        // the current block were already produced.
+        static void DiscardToNextBlock(Salsa20Engine engine, int alreadyConsumed)
+        {
+            int remainder = alreadyConsumed % Salsa20BlockBytes;
+            if (remainder == 0) return;
+            int skip = Salsa20BlockBytes - remainder;
+            byte[] zeros = new byte[skip];
+            byte[] sink = new byte[skip];
+            engine.ProcessBytes(zeros, 0, skip, sink, 0);
         }
 
         static byte[] ComputeMac(byte[] polyKey, ReadOnlySpan<byte> data)

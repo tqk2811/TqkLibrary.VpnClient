@@ -16,8 +16,12 @@ namespace TqkLibrary.VpnClient.ZeroTier.Vl2
     /// </summary>
     public sealed class NetworkConfigCodec
     {
-        // Dictionary keys used by a ZeroTier controller's network config (NetworkConfig::toDictionary).
-        const string KeyStaticIps = "I";       // packed InetAddresses, prefix length in the port field
+        // Dictionary keys used by a ZeroTier controller's network config (NetworkConfig::toDictionary). Newer controllers
+        // pack IPs as the binary "I" key; pre-1.6 controllers emit the legacy text "v4s"/"v6s" keys (comma-separated
+        // "ip/prefix"). The driver reads whichever is present.
+        const string KeyStaticIps = "I";       // packed InetAddresses, prefix length in the port field (current)
+        const string KeyStaticIpsV4Legacy = "v4s"; // comma-separated "ip/prefix" text (legacy)
+        const string KeyStaticIpsV6Legacy = "v6s";
         const string KeyRoutes = "RT";          // packed (target, via, flags(2), metric(2)) entries
         const string KeyMtu = "mtu";
         const string KeyComNew = "C";           // certificate of membership (current)
@@ -59,16 +63,45 @@ namespace TqkLibrary.VpnClient.ZeroTier.Vl2
             o += NetworkId.SizeInBytes;
             int dictLen = BinaryPrimitives.ReadUInt16BigEndian(body.Slice(o, 2));
             o += 2;
-            if (dictLen == 0 || body.Length - o < dictLen) return false;
+            if (dictLen == 0) return false;
+            // A chunked config advertises a total dict length larger than this packet carries; the dictionary text is
+            // newline-terminated and self-describing, so clamp to the bytes actually present and parse what we have (the
+            // first chunk holds the assigned IP + COM for a small network).
+            int available = Math.Min(dictLen, body.Length - o);
 
-            var dict = ZeroTierDictionary.Deserialize(body.Slice(o, dictLen));
+            var dict = ZeroTierDictionary.Deserialize(body.Slice(o, available));
             config.Network = network;
-            config.AssignedAddresses = ParseInetList(dict.GetBytes(KeyStaticIps));
+            // Prefer the binary "I" key; fall back to the legacy "v4s"/"v6s" text keys (pre-1.6 controllers).
+            var ips = ParseInetList(dict.GetBytes(KeyStaticIps));
+            if (ips.Count == 0)
+            {
+                ParseLegacyStaticIps(dict.GetString(KeyStaticIpsV4Legacy), System.Net.Sockets.AddressFamily.InterNetwork, ips);
+                ParseLegacyStaticIps(dict.GetString(KeyStaticIpsV6Legacy), System.Net.Sockets.AddressFamily.InterNetworkV6, ips);
+            }
+            config.AssignedAddresses = ips;
             config.Routes = ParseRoutes(dict.GetBytes(KeyRoutes));
             config.CertificateOfMembership = dict.GetBytes(KeyComNew) ?? dict.GetBytes(KeyComLegacy);
             config.Name = dict.GetString(KeyName);
             if (dict.TryGetUInt64(KeyMtu, out ulong mtu) && mtu > 0 && mtu <= 0xFFFF) config.Mtu = (int)mtu;
             return true;
+        }
+
+        // Parse a legacy "v4s"/"v6s" value: a comma-separated list of "ip/prefix" (the prefix goes into the port field,
+        // matching how the binary "I" key carries it).
+        static void ParseLegacyStaticIps(string? text, System.Net.Sockets.AddressFamily family, System.Collections.Generic.List<InetAddressValue> into)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            foreach (string entry in text!.Split(','))
+            {
+                string e = entry.Trim();
+                if (e.Length == 0) continue;
+                int slash = e.IndexOf('/');
+                string ipPart = slash >= 0 ? e.Substring(0, slash) : e;
+                ushort prefix = 0;
+                if (slash >= 0) ushort.TryParse(e.Substring(slash + 1), out prefix);
+                if (System.Net.IPAddress.TryParse(ipPart, out System.Net.IPAddress? ip) && ip.AddressFamily == family)
+                    into.Add(new InetAddressValue { Address = ip, Port = prefix });
+            }
         }
 
         // Read a back-to-back run of InetAddresses (no count prefix — each self-describes its length).

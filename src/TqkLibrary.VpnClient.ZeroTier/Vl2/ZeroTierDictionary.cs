@@ -74,7 +74,10 @@ namespace TqkLibrary.VpnClient.ZeroTier.Vl2
             for (int i = 0; i < data.Length; i++)
             {
                 byte c = data[i];
-                if (c == 0) break;             // NUL terminates the whole dictionary
+                // NUL is NOT a hard terminator: a ZeroTier controller (pre-1.6) emits binary values that contain raw NUL
+                // bytes (e.g. the "v"/version field), so a value keeps NUL verbatim. A stray NUL outside any entry (before
+                // a key has started) is just skipped. Entries are delimited only by '\n'; the buffer bounds the dict.
+                if (c == 0 && !inValue && key.Count == 0) continue;
 
                 if (escaped)
                 {

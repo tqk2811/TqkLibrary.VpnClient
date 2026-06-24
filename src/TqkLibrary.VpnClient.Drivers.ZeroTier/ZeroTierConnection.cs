@@ -243,13 +243,23 @@ namespace TqkLibrary.VpnClient.Drivers.ZeroTier
         {
             var tcs = new TaskCompletionSource<ZeroTierNetworkConfig>(TaskCreationOptions.RunContinuationsAsynchronously);
             _networkConfigTcs = tcs;
-            await SendNetworkConfigRequestAsync(cancellationToken).ConfigureAwait(false);
 
+            // The controller only answers a NETWORK_CONFIG_REQUEST once it has confirmed our bidirectional path
+            // (it WHOISes us / waits for our OK(HELLO)), so the first request can be dropped. Re-send periodically
+            // until the config arrives or the overall timeout elapses (mirrors the real ZeroTier client's retry).
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutCts.CancelAfter(_config.NetworkConfigTimeout);
             using (timeoutCts.Token.Register(() => tcs.TrySetCanceled()))
             {
-                try { return await tcs.Task.ConfigureAwait(false); }
+                try
+                {
+                    while (true)
+                    {
+                        await SendNetworkConfigRequestAsync(cancellationToken).ConfigureAwait(false);
+                        Task completed = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(2), timeoutCts.Token)).ConfigureAwait(false);
+                        if (completed == tcs.Task) return await tcs.Task.ConfigureAwait(false);
+                    }
+                }
                 catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                 {
                     Logger.LogHandshakeFailed(DriverName, "no network config from the controller (member not authorized, or controller unreachable)");
@@ -310,7 +320,7 @@ namespace TqkLibrary.VpnClient.Drivers.ZeroTier
         {
             if (!_packetCodec.Open(datagram.Span, _sessionKey, out Vl1Header header, out byte[] payload))
             {
-                Logger.LogPacketDropped(DriverName, VpnDropReason.DecryptFailed, "VL1 packet failed to open (MAC mismatch / wrong key)");
+                Logger.LogPacketDropped(DriverName, VpnDropReason.DecryptFailed, $"VL1 packet failed to open ({datagram.Length}B)");
                 return;
             }
 
@@ -320,7 +330,7 @@ namespace TqkLibrary.VpnClient.Drivers.ZeroTier
                 case Vl1Verb.NetworkConfig: OnNetworkConfig(payload); break;
                 case Vl1Verb.ExtFrame: _channel?.DeliverExtFrame(payload); break;
                 case Vl1Verb.Frame: _channel?.DeliverFrame(payload); break;
-                case Vl1Verb.Hello: OnHello(header); break;     // a peer-initiated HELLO; ignored (we are the initiator)
+                case Vl1Verb.Hello: OnHello(header, payload); break;   // a peer-initiated HELLO; reply OK(HELLO) to confirm the path
                 case Vl1Verb.Echo: OnEcho(header, payload); break;
                 case Vl1Verb.Error: OnError(payload); break;
                 default: break;
@@ -329,21 +339,23 @@ namespace TqkLibrary.VpnClient.Drivers.ZeroTier
 
         void OnOk(byte[] payload)
         {
-            if (!_okCodec.TryDecodeCommon(payload, out byte inReVerb, out _)) return;
-            switch ((Vl1Verb)inReVerb)
+            // A large OK carrying our network id is the OK(NETWORK_CONFIG_REQUEST) — its in-re header layout varies by
+            // ZeroTier version (a 2-byte gap exists on pre-1.6 controllers), so route by content (the embedded config
+            // body) rather than the in-re-verb byte. The smaller OK(HELLO) is matched first by its in-re-verb.
+            if (_okCodec.TryDecodeCommon(payload, out byte inReVerb, out _) && (Vl1Verb)inReVerb == Vl1Verb.Hello
+                && _okCodec.TryDecodeOkHello(payload, out OkHelloMessage okHello))
             {
-                case Vl1Verb.Hello:
-                    if (_okCodec.TryDecodeOkHello(payload, out OkHelloMessage okHello)
-                        && okHello.TimestampEcho == _helloTimestamp)
-                        _okHelloTcs?.TrySetResult(okHello);
-                    break;
-                case Vl1Verb.NetworkConfigRequest:
-                    // OK(NETWORK_CONFIG_REQUEST): the config dictionary follows the OK common header.
-                    if (payload.Length > OkMessageCodec.CommonHeaderLength)
-                        TryCompleteNetworkConfig(payload.AsSpan(OkMessageCodec.CommonHeaderLength));
-                    break;
-                default: break;
+                if (okHello.TimestampEcho == _helloTimestamp)
+                {
+                    Logger.LogProtocolStep(DriverName, "OK(HELLO) timestamp echo matches; VL1 session confirmed");
+                    _okHelloTcs?.TrySetResult(okHello);
+                }
+                return;
             }
+
+            // Otherwise, try to extract a network config from the OK payload (the controller's config reply).
+            if (_networkConfigTcs != null && payload.Length > NetworkId.SizeInBytes + 2)
+                TryCompleteNetworkConfig(payload);
         }
 
         void OnNetworkConfig(byte[] payload)
@@ -352,19 +364,52 @@ namespace TqkLibrary.VpnClient.Drivers.ZeroTier
             TryCompleteNetworkConfig(payload);
         }
 
-        void TryCompleteNetworkConfig(ReadOnlySpan<byte> configBody)
+        // Locate the config body (networkId(8) || dictLen(2 BE) || dict) inside the OK/NETWORK_CONFIG payload by scanning
+        // for our 8-byte network id followed by a dictLen that covers the rest, then decode it. Robust to the small,
+        // version-dependent header gap before the body.
+        void TryCompleteNetworkConfig(byte[] payload)
         {
-            if (_networkConfigCodec.TryDecodeConfig(configBody, out ZeroTierNetworkConfig config))
-                _networkConfigTcs?.TrySetResult(config);
-            else
-                Logger.LogPacketDropped(DriverName, VpnDropReason.Unexpected, "network config did not decode (multi-chunk config not supported)");
+            byte[] nwid = new byte[NetworkId.SizeInBytes];
+            _config.NetworkId.Write(nwid);
+
+            for (int o = 0; o + NetworkId.SizeInBytes + 2 <= payload.Length; o++)
+            {
+                if (!payload.AsSpan(o, NetworkId.SizeInBytes).SequenceEqual(nwid)) continue;
+                int dictLen = (payload[o + 8] << 8) | payload[o + 9];
+                if (dictLen == 0) continue;                                              // not the config body
+                // The codec clamps an over-long (chunked) dictLen to the bytes present, so accept any non-zero length.
+                if (_networkConfigCodec.TryDecodeConfig(payload.AsSpan(o), out ZeroTierNetworkConfig config)
+                    && config.HasAssignedAddress)
+                {
+                    Logger.LogProtocolStep(DriverName, $"network config decoded (dictLen={dictLen}, ips={config.AssignedAddresses.Count}, com={(config.CertificateOfMembership is null ? "no" : "yes")})");
+                    _networkConfigTcs?.TrySetResult(config);
+                    return;
+                }
+            }
+            Logger.LogPacketDropped(DriverName, VpnDropReason.Unexpected, $"network config did not decode ({payload.Length}B; multi-chunk or unrecognised layout)");
         }
 
-        void OnHello(Vl1Header header)
+        void OnHello(Vl1Header header, byte[] payload)
         {
-            // We are the initiator; a peer HELLO would need an OK reply with our identity. The supernode/controller path
-            // does not require us to answer, so this is logged and ignored (keeps the data path through the peer).
-            Logger.LogProtocolStep(DriverName, $"inbound HELLO from {header.Source} (ignored; client is the initiator)");
+            // The peer (root/controller) sends its own HELLO to confirm a bidirectional path. We must answer with an
+            // OK(HELLO) — echoing the timestamp from its HELLO — or it never marks us a confirmed peer and will not
+            // process our NETWORK_CONFIG_REQUEST. The HELLO body starts with proto/major/minor/revision(2)/timestamp(8).
+            if (!_helloCodec.TryDecode(payload, out HelloMessage incoming)) return;
+
+            // OK(HELLO): inReVerb(HELLO) || inRePacketId || timestampEcho || proto/major/minor/revision || physical InetAddress(nil).
+            byte[] body = new byte[OkMessageCodec.CommonHeaderLength + 8 + 1 + 1 + 1 + 2 + 1];
+            int o = 0;
+            body[o++] = (byte)Vl1Verb.Hello;
+            BinaryPrimitives.WriteUInt64BigEndian(body.AsSpan(o, 8), header.PacketId); o += 8;
+            BinaryPrimitives.WriteUInt64BigEndian(body.AsSpan(o, 8), incoming.Timestamp); o += 8;   // echo the peer's HELLO timestamp
+            body[o++] = ZeroTierDriverConstants.ProtocolVersion;
+            body[o++] = ZeroTierDriverConstants.VersionMajor;
+            body[o++] = ZeroTierDriverConstants.VersionMinor;
+            BinaryPrimitives.WriteUInt16BigEndian(body.AsSpan(o, 2), 0); o += 2;                    // revision
+            body[o] = 0x00;                                                                          // nil physical destination
+            byte[] datagram = SealControl(Vl1Verb.Ok, body);
+            Logger.LogProtocolStep(DriverName, $"inbound HELLO from {header.Source}; replying OK(HELLO) to confirm the path");
+            _ = SendAsync(datagram);
         }
 
         void OnEcho(Vl1Header header, byte[] payload)
