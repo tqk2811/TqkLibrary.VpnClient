@@ -6,6 +6,8 @@ using TqkLibrary.VpnClient.Drivers.Ikev2;
 using TqkLibrary.VpnClient.Drivers.IpEncap;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec.Enums;
+using TqkLibrary.VpnClient.Drivers.Nebula;
+using TqkLibrary.VpnClient.Drivers.Nebula.Config;
 using TqkLibrary.VpnClient.Drivers.OpenConnect;
 using TqkLibrary.VpnClient.Drivers.OpenVpn;
 using TqkLibrary.VpnClient.Drivers.Pptp;
@@ -129,6 +131,18 @@ namespace TqkLibrary.VpnClient
         /// <summary>Registers the WireGuard driver with explicit auto-reconnect options (e.g. to disable it).</summary>
         public VpnClientBuilder UseWireGuard(WireGuardConfig config, WireGuardReconnectOptions reconnectOptions)
             => AddDriver(new WireGuardDriver(config, reconnectOptions));
+
+        /// <summary>
+        /// Registers the Nebula (Slack mesh VPN) driver: a UDP transport, the Noise_IX_25519_AESGCM_SHA256 handshake
+        /// (certificate auth against the network CA) and a type-1 (Message) AES-256-GCM data plane behind a stable L3
+        /// packet channel. The static <see cref="NebulaConfig"/> (CA cert, host cert + X25519 key, peer endpoint, overlay
+        /// IP/CIDR, MTU) maps straight to a <c>TunnelConfig</c> (no IPCP/DHCP). Auto-reconnect is enabled by default.
+        /// </summary>
+        public VpnClientBuilder UseNebula(NebulaConfig config) => AddDriver(new NebulaDriver(config));
+
+        /// <summary>Registers the Nebula driver with explicit auto-reconnect options (e.g. to disable it).</summary>
+        public VpnClientBuilder UseNebula(NebulaConfig config, NebulaReconnectOptions reconnectOptions)
+            => AddDriver(new NebulaDriver(config, reconnectOptions));
 
         /// <summary>
         /// Registers the OpenConnect (Cisco AnyConnect / ocserv) driver: HTTPS config-auth then CSTP, in-band

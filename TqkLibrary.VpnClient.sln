@@ -140,6 +140,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TqkLibrary.VpnClient.Nebula
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TqkLibrary.VpnClient.Nebula.Tests", "tests\TqkLibrary.VpnClient.Nebula.Tests\TqkLibrary.VpnClient.Nebula.Tests.csproj", "{609AAEF3-62C8-494B-B116-474AFFADBD5B}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TqkLibrary.VpnClient.Drivers.Nebula", "src\TqkLibrary.VpnClient.Drivers.Nebula\TqkLibrary.VpnClient.Drivers.Nebula.csproj", "{AC266265-2DF0-4A4B-9169-B041B558BBAF}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TqkLibrary.VpnClient.Drivers.Nebula.Tests", "tests\TqkLibrary.VpnClient.Drivers.Nebula.Tests\TqkLibrary.VpnClient.Drivers.Nebula.Tests.csproj", "{05539CA9-825B-47A5-90DE-8E36DC01E46D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -882,6 +886,30 @@ Global
 		{609AAEF3-62C8-494B-B116-474AFFADBD5B}.Release|x64.Build.0 = Release|Any CPU
 		{609AAEF3-62C8-494B-B116-474AFFADBD5B}.Release|x86.ActiveCfg = Release|Any CPU
 		{609AAEF3-62C8-494B-B116-474AFFADBD5B}.Release|x86.Build.0 = Release|Any CPU
+		{AC266265-2DF0-4A4B-9169-B041B558BBAF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AC266265-2DF0-4A4B-9169-B041B558BBAF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AC266265-2DF0-4A4B-9169-B041B558BBAF}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{AC266265-2DF0-4A4B-9169-B041B558BBAF}.Debug|x64.Build.0 = Debug|Any CPU
+		{AC266265-2DF0-4A4B-9169-B041B558BBAF}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{AC266265-2DF0-4A4B-9169-B041B558BBAF}.Debug|x86.Build.0 = Debug|Any CPU
+		{AC266265-2DF0-4A4B-9169-B041B558BBAF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AC266265-2DF0-4A4B-9169-B041B558BBAF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AC266265-2DF0-4A4B-9169-B041B558BBAF}.Release|x64.ActiveCfg = Release|Any CPU
+		{AC266265-2DF0-4A4B-9169-B041B558BBAF}.Release|x64.Build.0 = Release|Any CPU
+		{AC266265-2DF0-4A4B-9169-B041B558BBAF}.Release|x86.ActiveCfg = Release|Any CPU
+		{AC266265-2DF0-4A4B-9169-B041B558BBAF}.Release|x86.Build.0 = Release|Any CPU
+		{05539CA9-825B-47A5-90DE-8E36DC01E46D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{05539CA9-825B-47A5-90DE-8E36DC01E46D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{05539CA9-825B-47A5-90DE-8E36DC01E46D}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{05539CA9-825B-47A5-90DE-8E36DC01E46D}.Debug|x64.Build.0 = Debug|Any CPU
+		{05539CA9-825B-47A5-90DE-8E36DC01E46D}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{05539CA9-825B-47A5-90DE-8E36DC01E46D}.Debug|x86.Build.0 = Debug|Any CPU
+		{05539CA9-825B-47A5-90DE-8E36DC01E46D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{05539CA9-825B-47A5-90DE-8E36DC01E46D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{05539CA9-825B-47A5-90DE-8E36DC01E46D}.Release|x64.ActiveCfg = Release|Any CPU
+		{05539CA9-825B-47A5-90DE-8E36DC01E46D}.Release|x64.Build.0 = Release|Any CPU
+		{05539CA9-825B-47A5-90DE-8E36DC01E46D}.Release|x86.ActiveCfg = Release|Any CPU
+		{05539CA9-825B-47A5-90DE-8E36DC01E46D}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -948,6 +976,8 @@ Global
 		{B1F71D41-D050-4FE5-B6B5-EA9AD3B3FA4A} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{471141C2-D350-40C8-A971-A4B3CB0F83A3} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{609AAEF3-62C8-494B-B116-474AFFADBD5B} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{AC266265-2DF0-4A4B-9169-B041B558BBAF} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{05539CA9-825B-47A5-90DE-8E36DC01E46D} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {009866DB-2C18-4FC0-84E8-A53C4AE4010E}
