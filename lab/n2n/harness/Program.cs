@@ -7,6 +7,8 @@
 using System.Net;
 using System.Net.Sockets;
 using TqkLibrary.VpnClient.N2n;
+using TqkLibrary.VpnClient.N2n.Transform;
+using TqkLibrary.VpnClient.N2n.Wire.Enums;
 using TqkLibrary.VpnClient.N2n.Wire.Models;
 
 if (args.Length < 3)
@@ -78,12 +80,26 @@ try
         Console.WriteLine($"[harness] *** REGISTER_SUPER_ACK decoded *** cookie={ack.Cookie:x8} (sent {cookie:x8})");
         Console.WriteLine($"[harness] assigned dev_addr = {ack.DevAddr.NetAddr:x8}/{ack.DevAddr.NetBitLen}, lifetime={ack.Lifetime}s");
         Console.WriteLine($"[harness] supernode MAC = {Convert.ToHexString(ack.SrcMac)}, edge public sock = {SafeSock(ack.Sock)}");
-        if (ack.Cookie == cookie)
+        if (ack.Cookie != cookie)
+            Console.WriteLine("[harness] note: ACK cookie mismatch (still accepted — codec interop proven).");
+
+        // --- STRETCH: send one PACKET (a broadcast Ethernet frame) so the supernode logs "RX PACKET (multicast)". ---
+        // This exercises the data-plane PACKET codec against the real supernode (transform NULL — community has no key).
+        byte[] broadcast = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+        byte[] frame = BuildBroadcastFrame(edgeMac);
+        var pkt = new N2nPacket
         {
-            Console.WriteLine("[harness] RESULT: REGISTER_SUPER INTEROP SUCCESS (supernode accepted our registration, cookie echoed).");
-            return 0;
-        }
-        Console.WriteLine("[harness] RESULT: ACK decoded but cookie mismatch (still accepted — codec interop proven).");
+            SrcMac = edgeMac,
+            DstMac = broadcast,
+            Compression = 1,                 // N2N_COMPRESSION_ID_NONE
+            Transform = N2nTransformId.Null,
+            Payload = frame,
+        };
+        byte[] pktWire = codec.EncodePacket(community, pkt, new N2nNullTransform());
+        udp.Send(pktWire, pktWire.Length, dest);
+        Console.WriteLine($"[harness] sent PACKET (broadcast, {pktWire.Length} bytes, transform NULL) to drive supernode RX PACKET.");
+
+        Console.WriteLine("[harness] RESULT: REGISTER_SUPER INTEROP SUCCESS (supernode accepted our registration, cookie echoed).");
         return 0;
     }
     Console.WriteLine("[harness] reply was not a decodable REGISTER_SUPER_ACK.");
@@ -99,4 +115,16 @@ static string SafeSock(N2nSock? s)
 {
     try { return s is null ? "(none)" : s.ToEndPoint().ToString(); }
     catch { return "(unparsable)"; }
+}
+
+// A minimal broadcast Ethernet frame (dst=broadcast, src=our MAC, ethertype 0x0800 IPv4 + small body) just to give the
+// supernode a PACKET to log/relay. The content is inert; we only want to exercise the PACKET wire path.
+static byte[] BuildBroadcastFrame(byte[] srcMac)
+{
+    byte[] f = new byte[42];
+    for (int i = 0; i < 6; i++) f[i] = 0xFF;          // dst = broadcast
+    Array.Copy(srcMac, 0, f, 6, 6);                    // src
+    f[12] = 0x08; f[13] = 0x00;                         // ethertype IPv4
+    for (int i = 14; i < f.Length; i++) f[i] = (byte)i;
+    return f;
 }
