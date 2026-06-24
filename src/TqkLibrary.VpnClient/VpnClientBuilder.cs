@@ -7,6 +7,8 @@ using TqkLibrary.VpnClient.Drivers.Ikev2;
 using TqkLibrary.VpnClient.Drivers.IpEncap;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec.Enums;
+using TqkLibrary.VpnClient.Drivers.N2n;
+using TqkLibrary.VpnClient.Drivers.N2n.Config;
 using TqkLibrary.VpnClient.Drivers.Nebula;
 using TqkLibrary.VpnClient.Drivers.Nebula.Config;
 using TqkLibrary.VpnClient.Drivers.OpenConnect;
@@ -171,6 +173,20 @@ namespace TqkLibrary.VpnClient
         /// <summary>Registers the tinc driver with explicit auto-reconnect options (e.g. to disable it).</summary>
         public VpnClientBuilder UseTinc(TincConfig config, TincReconnectOptions reconnectOptions)
             => AddDriver(new TincDriver(config, reconnectOptions));
+
+        /// <summary>
+        /// Registers the n2n v3 (ntop) driver: a UDP transport to the supernode that registers the edge (REGISTER_SUPER /
+        /// REGISTER_SUPER_ACK) and then carries full Ethernet frames as PACKET messages (NULL or AES-CBC transform)
+        /// behind an L2 channel bridged into the Ethernet fabric (ARP + VirtualHost) down to a stable L3 packet channel.
+        /// The static <see cref="N2nConfig"/> (community, this edge's static overlay IP + MAC, transform key, MTU) maps
+        /// straight to a <c>TunnelConfig</c> (no DHCP); a keepalive REGISTER timer keeps the edge registered. Supernode-
+        /// relayed point-to-point (P2P hole-punching bypassed). Auto-reconnect is enabled by default.
+        /// </summary>
+        public VpnClientBuilder UseN2n(N2nConfig config) => AddDriver(new N2nDriver(config));
+
+        /// <summary>Registers the n2n driver with explicit auto-reconnect options (e.g. to disable it).</summary>
+        public VpnClientBuilder UseN2n(N2nConfig config, N2nReconnectOptions reconnectOptions)
+            => AddDriver(new N2nDriver(config, reconnectOptions));
 
         /// <summary>
         /// Registers the OpenConnect (Cisco AnyConnect / ocserv) driver: HTTPS config-auth then CSTP, in-band
