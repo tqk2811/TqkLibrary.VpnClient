@@ -30,7 +30,7 @@ wire, shared qua ladder Montgomery — KHÔNG phải X25519 thuần), cipher **C
 | Hướng | Project | Lý do |
 |-------|---------|-------|
 | Dùng | [Crypto](../TqkLibrary.VpnClient.Crypto) | [`ISignatureAlgo`](../TqkLibrary.VpnClient.Crypto/Interfaces/ISignatureAlgo.cs)/[`Ed25519Signer`](../TqkLibrary.VpnClient.Crypto/Noise/Ed25519Signer.cs#L15) (ký/verify SIG), [`IDhGroup`](../TqkLibrary.VpnClient.Crypto/Interfaces/IDhGroup.cs) (interface ECDH cho [`SptpsEcdh`](Sptps/SptpsEcdh.cs#L33)), [`AntiReplayWindow`](../TqkLibrary.VpnClient.Crypto/AntiReplayWindow.cs#L8) (replay UDP data), `BouncyCastle` `Ed25519`/`X25519` (ECDH có khóa Ed25519), `ChaChaEngine`/`Poly1305` (record cipher), `HMACSHA512` BCL (PRF) |
-| Được dùng bởi | `Drivers.Tinc` (V.7.2 phase b — chưa làm) | driver sẽ lắp ráp TCP meta + UDP data + route table quanh các codec/handshake này |
+| Được dùng bởi | [`Drivers.Tinc`](../TqkLibrary.VpnClient.Drivers.Tinc) (V.7.2 phase b — XONG) | driver lắp ráp TCP meta + data-plane SPTPS + UDP data quanh các codec/handshake này (`BuildMetaLabel`/`BuildUdpLabel`, `SptpsRecordLayer` meta, `SptpsDatagramRecordLayer` data + handshake framing, `TincMetaRequest`, `TincHostConfig`/`TincBase64`) |
 
 ## Cấu trúc thư mục
 
@@ -65,7 +65,7 @@ TqkLibrary.VpnClient.Tinc/
 | [`SptpsPrf`](Sptps/SptpsPrf.cs#L29) | TLS-1.0 P_hash XOR HMAC-SHA-512 — expand shared secret + seed → 128B key material |
 | [`TincChaChaPoly1305`](Sptps/TincChaChaPoly1305.cs#L21) | cipher record (Encrypt/Decrypt theo seqno; biến thể tinc, không RFC 8439) |
 | [`SptpsRecordLayer`](Sptps/SptpsRecordLayer.cs#L14) | record TCP stream (handshake plaintext + app encrypted, seqno đếm cả handshake record) |
-| [`SptpsDatagramRecordLayer`](Sptps/SptpsDatagramRecordLayer.cs#L16) | record UDP data plane (seqno prefix + replay window) |
+| [`SptpsDatagramRecordLayer`](Sptps/SptpsDatagramRecordLayer.cs#L22) | record UDP data plane (seqno prefix + replay window) + handshake framing plaintext (`EncodeHandshake`/`DecodeHandshake`) cho data-plane SPTPS |
 | [`SptpsKex`](Sptps/Models/SptpsKex.cs#L8) | codec KEX 65B |
 | [`TincMetaRequest`](Meta/TincMetaRequest.cs#L13) | codec request line meta (ID/ADD_EDGE/…) |
 | [`TincBase64`](Hosts/TincBase64.cs#L15) | base64 little-endian phi chuẩn của tinc (encode/decode khóa host file) |
@@ -121,7 +121,11 @@ TqkLibrary.VpnClient.Tinc/
   - Ghi chú key: `tinc generate-ed25519-keys` ghi `ed25519_key.priv` **96B = expanded(64) ‖ public(32)** (KHÔNG có seed);
     harness/driver tự sinh **seed 32B** của mình rồi đăng ký public key (chuẩn driver-realistic) — orlp ed25519 = RFC 8032,
     nên `Ed25519Signer` (sign từ seed) tương thích `tincd` verify.
-- **Phase (b) driver runtime**: chưa làm — TCP meta auto-mesh (ADD_EDGE/ADD_SUBNET), UDP data + fallback TCP, bảng
-  route/subnet → `IPacketChannel` (router) / `IEthernetChannel` (switch — tái dùng [Ethernet fabric](../TqkLibrary.VpnClient.Ethernet)),
-  supervisor F.6, `UseTinc`, demo scheme.
+- **Phase (b) driver runtime**: XONG ở [`Drivers.Tinc`](../TqkLibrary.VpnClient.Drivers.Tinc) — TCP meta (ID→handshake→ACK→ADD_SUBNET→ADD_EDGE) +
+  data-plane SPTPS riêng (REQ_KEY/ANS_KEY) + UDP data (PKT_PROBE reply + TCP fallback SPTPS_PACKET) → `IPacketChannel` (router),
+  supervisor F.6, `UseTinc`, demo `--vpn <file>.tinc`. **VALIDATE LIVE** data-plane 2 chiều vs tincd 1.1pre18 (UDP probe RTT~2ms,
+  client ICMP request tới server tun, wire byte-verified); full ICMP echo-reply 2 chiều residual server-side (kernel container).
+  Mở rộng phase a cho phase b: `SptpsHandshake.BuildUdpLabel` + `SptpsDatagramRecordLayer.EncodeHandshake/DecodeHandshake`
+  (plaintext seqno‖type‖data, đếm seqno chung với data records) + `EnableEncryption`/ctor unkeyed. Mode L2 switch
+  (`IEthernetChannel`) + auto-mesh đa-node = stretch chưa làm.
 - **tinc 1.0 legacy** (RSA + sơ đồ cũ) KHÔNG hiện thực — ưu tiên 1.1 SPTPS như roadmap.
