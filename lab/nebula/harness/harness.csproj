@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Harness handshake-interop V.7.1: publish self-contained linux-x64 rồi scp vào VM lab, bắt tay Noise IX
+    tới nebula THẬT. KHÔNG nằm trong solution (chỉ là driver kiểm chứng protocol layer).
+    Publish:  dotnet publish -c Release -r linux-x64 -o publish
+    Chạy:     ./harness <certDir> <responderIp:port>
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\TqkLibrary.VpnClient.Nebula\TqkLibrary.VpnClient.Nebula.csproj" />
+    <ProjectReference Include="..\..\..\src\TqkLibrary.VpnClient.Crypto\TqkLibrary.VpnClient.Crypto.csproj" />
+  </ItemGroup>
+</Project>

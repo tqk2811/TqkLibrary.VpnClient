@@ -6,5 +6,6 @@ nebula
 nebula-cert
 *.tar.gz
 # Binary publish của harness handshake (self-contained linux-x64, ~70MB) — KHÔNG commit.
-harness
 harness-bin/
+# Binary publish của client demo phase b (self-contained linux-x64) — KHÔNG commit.
+client-bin/

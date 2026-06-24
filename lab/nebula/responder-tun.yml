@@ -1,0 +1,38 @@
+# Cấu hình nebula THẬT làm lighthouse + peer cho lab full-tunnel V.7.1 phase b (ICMP 2 chiều).
+# Khác responder.yml (tun disabled, chỉ handshake): ở đây tun ENABLED — nebula dựng interface overlay
+# 192.168.100.1 trả lời ICMP echo. Cần CAP_NET_ADMIN + /dev/net/tun (compose cấp). Firewall allow icmp 2 chiều.
+pki:
+  ca: /lab/ca.crt
+  cert: /lab/lighthouse.crt
+  key: /lab/lighthouse.key
+static_host_map: {}
+lighthouse:
+  am_lighthouse: true
+  interval: 60
+listen:
+  host: 0.0.0.0
+  port: 4242
+punchy:
+  punch: true
+tun:
+  disabled: false
+  dev: nebula1
+  mtu: 1300
+logging:
+  level: debug
+  format: text
+firewall:
+  outbound_action: drop
+  inbound_action: drop
+  conntrack:
+    tcp_timeout: 12m
+    udp_timeout: 3m
+    default_timeout: 10m
+  outbound:
+    - port: any
+      proto: any
+      host: any
+  inbound:
+    - port: any
+      proto: any
+      host: any

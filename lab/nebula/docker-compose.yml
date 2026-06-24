@@ -1,0 +1,33 @@
+# Lab full-tunnel V.7.1 phase b: nebula THẬT (lighthouse+peer, tun overlay 192.168.100.1) + client .NET
+# (driver Drivers.Nebula, overlay 192.168.100.5 qua userspace TcpIpStack) trên cùng bridge labnet.
+# Client gửi ICMP echo 192.168.100.5 -> 192.168.100.1; nebula tun trả reply => ICMP 2 chiều qua overlay.
+#
+# Chuẩn bị (trên VM, thư mục ~/nebula-lab/): nebula + nebula-cert binary + ca.crt/lighthouse.*/client.* (gen-certs.sh).
+# Copy file lab này + client-bin (publish linux-x64) vào ~/nebula-lab/. Chạy: docker compose up -d ; xem README.
+services:
+  nebula-peer:
+    image: alpine:3.20
+    container_name: nebula-peer
+    networks: [labnet]
+    cap_add: [NET_ADMIN]
+    devices: ["/dev/net/tun:/dev/net/tun"]
+    volumes:
+      - ./:/lab:ro
+    working_dir: /lab
+    command: sh -c "cp /lab/responder-tun.yml /tmp/r.yml && exec /lab/nebula -config /tmp/r.yml"
+
+  client:
+    image: mcr.microsoft.com/dotnet/runtime-deps:8.0
+    container_name: nebula-client
+    depends_on: [nebula-peer]
+    networks: [labnet]
+    volumes:
+      - ./:/lab:ro
+      - ./client-bin:/app:ro
+    working_dir: /app
+    # Giữ container sống để docker exec chạy client demo thủ công (xem README).
+    command: sleep infinity
+
+networks:
+  labnet:
+    driver: bridge

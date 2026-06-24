@@ -1,0 +1,7 @@
+# Config .nebula cho client demo (V.7.1 phase b lab). Trỏ tới PEM của nebula-cert (sinh bởi gen-certs.sh).
+# endpoint = static-host-map của peer (service nebula-peer trên labnet, UDP 4242). overlay = IP client trong cert.
+ca=/lab/ca.crt
+cert=/lab/client.crt
+key=/lab/client.key
+endpoint=nebula-peer:4242
+overlay=192.168.100.5/24
