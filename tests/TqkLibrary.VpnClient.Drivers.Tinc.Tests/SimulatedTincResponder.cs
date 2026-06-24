@@ -75,20 +75,18 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc.Tests
             byte[] myKex = hs.CreateKex();
             await _meta.WriteAsync(_record.EncodeHandshake(myKex), cancellationToken).ConfigureAwait(false);
 
-            // Read client KEX, then client SIG.
+            // Read client KEX, then client SIG. tinc's responder sends its SIG (record seqno 1) when it consumes the
+            // client's SIG (inside receive_sig), and does NOT send/expect an empty ACK record — after consuming the
+            // client SIG both sides are keyed (the in cipher is enabled internally via receive_ack(NULL,0)).
             (byte t1, byte[] clientKex) = await ReadRecordAsync(cancellationToken).ConfigureAwait(false);
             hs.ConsumeKex(clientKex);
-            // Responder sends its SIG (record seqno 1) after consuming the client KEX.
+            (byte t2, byte[] clientSig) = await ReadRecordAsync(cancellationToken).ConfigureAwait(false);
+            if (!hs.ConsumeSig(clientSig)) throw new Exception("responder: client SIG verify failed");
             byte[] mySig = hs.CreateSig();
             await _meta.WriteAsync(_record.EncodeHandshake(mySig), cancellationToken).ConfigureAwait(false);
 
-            (byte t2, byte[] clientSig) = await ReadRecordAsync(cancellationToken).ConfigureAwait(false);
-            if (!hs.ConsumeSig(clientSig)) throw new Exception("responder: client SIG verify failed");
-
-            // Now keyed. Read the client's empty ACK record; then send our own empty ACK record.
+            // Now keyed (the meta ACK line is the first encrypted application record we send).
             _record.EnableEncryption(hs.OutCipherKey, hs.InCipherKey);
-            await _meta.WriteAsync(_record.EncodeRecord((byte)SptpsRecordType.Handshake, ReadOnlySpan<byte>.Empty), cancellationToken).ConfigureAwait(false);
-            (byte t3, byte[] ack) = await ReadRecordAsync(cancellationToken).ConfigureAwait(false);
 
             // 3) Send our ACK line (request 4) + our ADD_SUBNET so the client routes us.
             await SendRequestAsync(new TincMetaRequest(TincRequestType.Ack, "655", "0", "7000000"), cancellationToken).ConfigureAwait(false);
@@ -108,7 +106,12 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc.Tests
             switch (req.Type)
             {
                 case TincRequestType.ReqKey:
-                    await HandleReqKeyAsync(req, cancellationToken).ConfigureAwait(false);
+                    // REQ_KEY "<from> <to> <reqno> <b64>" — the client's data KEX (and any SPTPS_PACKET data record).
+                    if (req.Arguments.Count >= 4) await HandleDataRecordAsync(req.Arguments[2], req.Arguments[3], cancellationToken).ConfigureAwait(false);
+                    break;
+                case TincRequestType.AnsKey:
+                    // ANS_KEY "<from> <to> <b64> -1 -1 -1 <comp>" — the client's data SIG (a SPTPS_HANDSHAKE record).
+                    if (req.Arguments.Count >= 3) await HandleDataRecordAsync(null, req.Arguments[2], cancellationToken).ConfigureAwait(false);
                     break;
                 case TincRequestType.Ping:
                     await SendRequestAsync(new TincMetaRequest(TincRequestType.Pong), cancellationToken).ConfigureAwait(false);
@@ -117,15 +120,17 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc.Tests
             }
         }
 
-        // The client's data-plane handshake KEX arrives as "REQ_KEY <client> <me> REQ_KEY <b64(seqno||128||kex)>".
-        // Start our responder data-plane SPTPS, answer with our KEX then SIG via ANS_KEY.
-        async Task HandleReqKeyAsync(TincMetaRequest req, CancellationToken cancellationToken)
+        // The client's data-plane handshake KEX arrives via REQ_KEY (reqno 15) and its SIG via ANS_KEY (reqno null).
+        // Start our responder data-plane SPTPS, answer with our KEX (after the KEX) then our SIG (after the SIG).
+        async Task HandleDataRecordAsync(string? reqnoText, string b64, CancellationToken cancellationToken)
         {
-            if (req.Arguments.Count < 4) return;
-            if (!int.TryParse(req.Arguments[2], out int reqno)) return;
-            if (reqno != (int)TincRequestType.ReqKey && reqno != (int)TincRequestType.SptpsPacket) return;
+            if (reqnoText is not null)
+            {
+                if (!int.TryParse(reqnoText, out int reqno)) return;
+                if (reqno != (int)TincRequestType.ReqKey && reqno != (int)TincRequestType.SptpsPacket) return;
+            }
 
-            byte[] clientRecord = TincBase64.Decode(req.Arguments[3]);
+            byte[] clientRecord = TincBase64.Decode(b64);
 
             SptpsHandshake? hs;
             SptpsDatagramRecordLayer? rec;
@@ -147,14 +152,18 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc.Tests
 
             if (data.Length == SptpsConstants.NonceSize + SptpsConstants.EcdhSize + 1)
             {
-                // Client KEX → consume it, send our (already-generated) KEX (seqno 0) then our SIG (seqno 1) over ANS_KEY.
+                // Client KEX → consume it and send our KEX (seqno 0) over ANS_KEY. Our SIG follows once the client SIG
+                // arrives (tinc's responder sends its SIG inside receive_sig, after consuming the client SIG).
                 hs.ConsumeKex(data);
                 byte[] myKexRecord = rec.EncodeHandshake((byte)SptpsRecordType.Handshake, _myDataKex!);
                 await SendAnsKeyAsync(myKexRecord, cancellationToken).ConfigureAwait(false);
+            }
+            else if (data.Length == SptpsConstants.SignatureSize)
+            {
+                // Client SIG → verify, send our SIG (seqno 1), then we are keyed → bind our data transport.
+                if (!hs.ConsumeSig(data)) throw new Exception("responder: client data SIG verify failed");
                 byte[] mySigRecord = rec.EncodeHandshake((byte)SptpsRecordType.Handshake, hs.CreateSig());
                 await SendAnsKeyAsync(mySigRecord, cancellationToken).ConfigureAwait(false);
-
-                // Keyed: bind our data transport (its seqno continued past KEX/SIG → first data record seqno 2).
                 rec.EnableEncryption(hs.OutCipherKey, hs.InCipherKey);
                 lock (_sync) _data = new TincDataTransport(rec, _myNodeId, _clientNodeId);
             }

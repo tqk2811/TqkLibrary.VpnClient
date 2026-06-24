@@ -53,12 +53,18 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc.DataChannel
         /// Seals an inner IP packet into a UDP data datagram: <c>nullid(6) ‖ SRCID(6) ‖ seqno(4) ‖ ciphertext ‖
         /// tag(16)</c>. <c>DSTID</c> is the null id (a direct, non-relayed packet); <c>SRCID</c> is our node id.
         /// </summary>
-        public byte[] Seal(ReadOnlySpan<byte> ipPacket)
+        public byte[] Seal(ReadOnlySpan<byte> ipPacket) => SealRecord(TincDriverConstants.RouterPacketType, ipPacket);
+
+        /// <summary>
+        /// Seals an arbitrary record (type + payload) into a UDP data datagram with the relay header. Used for both the
+        /// router-mode IP packet (type 0) and a UDP probe reply (type <c>PKT_PROBE</c>).
+        /// </summary>
+        public byte[] SealRecord(byte type, ReadOnlySpan<byte> payload)
         {
             byte[] record;
             lock (_sync)
             {
-                record = _record.Encode(TincDriverConstants.RouterPacketType, ipPacket);
+                record = _record.Encode(type, payload);
                 _sentPacketCount++;
             }
 
@@ -71,13 +77,28 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc.DataChannel
         }
 
         /// <summary>
-        /// Opens an incoming UDP data datagram into the inner IP packet. Strips the 12-byte relay header (DSTID‖SRCID),
-        /// checks the SRCID is the peer's node id, then decrypts the SPTPS record. Returns <c>false</c> (no exception) on
-        /// a short datagram, a foreign SRCID, an AEAD/replay failure, or a non-data record type.
+        /// Opens an incoming UDP data datagram into an inner IP packet (only router-mode type-0 records). Convenience
+        /// over <see cref="TryOpenRecord"/> that drops anything that is not a data packet.
         /// </summary>
         public bool TryOpen(ReadOnlySpan<byte> datagram, out byte[] plaintext)
         {
             plaintext = Array.Empty<byte>();
+            if (!TryOpenRecord(datagram, out byte type, out byte[] data)) return false;
+            if (type != TincDriverConstants.RouterPacketType) return false;
+            plaintext = data;
+            return true;
+        }
+
+        /// <summary>
+        /// Opens an incoming UDP data datagram into its record type + payload. Strips the 12-byte relay header
+        /// (DSTID‖SRCID), checks the SRCID is the peer's node id, then decrypts the SPTPS record. Returns <c>false</c> (no
+        /// exception) on a short datagram, a foreign SRCID, or an AEAD/replay failure. The caller dispatches by type
+        /// (0 = router IP packet, <c>PKT_PROBE</c> = a UDP probe request/reply).
+        /// </summary>
+        public bool TryOpenRecord(ReadOnlySpan<byte> datagram, out byte type, out byte[] data)
+        {
+            type = 0;
+            data = Array.Empty<byte>();
             int idLen = TincDriverConstants.NodeIdLength;
             if (datagram.Length < idLen + idLen) return false;
 
@@ -87,15 +108,11 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc.DataChannel
             if (!srcId.SequenceEqual(_peerNodeId)) return false;
 
             ReadOnlySpan<byte> record = datagram.Slice(idLen + idLen);
-            byte type;
-            byte[] data;
             SptpsDecodeResult result;
             lock (_sync) result = _record.Decode(record, out type, out data);
             if (result != SptpsDecodeResult.Ok) return false;
-            if (type != TincDriverConstants.RouterPacketType) return false; // only bare-IP router-mode packets here
 
             lock (_sync) _receivedPacketCount++;
-            plaintext = data;
             return true;
         }
     }

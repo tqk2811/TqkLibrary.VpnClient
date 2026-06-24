@@ -67,16 +67,39 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc.DataChannel
         }
 
         /// <summary>
-        /// Opens an inbound UDP data datagram. A data packet is raised on <see cref="InboundIpPacket"/>. Returns
-        /// <c>true</c> if the datagram authenticated as a data packet for this session (so the driver can mark the peer
-        /// alive), <c>false</c> if it is foreign / forged / replayed / not a data packet.
+        /// Opens an inbound data datagram and dispatches it by SPTPS record type: a router-mode IP packet (type 0) is
+        /// raised on <see cref="InboundIpPacket"/>; a UDP probe request (<c>PKT_PROBE</c>, data[0]==0) is answered with a
+        /// type-2 probe reply over the same socket so the peer can confirm bidirectional UDP (without it tinc keeps
+        /// falling back to TCP). Returns <c>true</c> if the datagram authenticated for this session (so the driver can
+        /// mark the peer alive), <c>false</c> if it is foreign / forged / replayed.
         /// </summary>
         public bool Deliver(ReadOnlySpan<byte> datagram)
         {
-            if (!_transport.TryOpen(datagram, out byte[] inner)) return false;
+            if (!_transport.TryOpenRecord(datagram, out byte type, out byte[] payload)) return false;
             _onPacketReceived?.Invoke();
-            if (inner.Length > 0) InboundIpPacket?.Invoke(inner);
+
+            if (type == TincDriverConstants.ProbePacketType)
+            {
+                HandleProbe(payload);
+                return true;
+            }
+            if (type == TincDriverConstants.RouterPacketType && payload.Length > 0)
+                InboundIpPacket?.Invoke(payload);
             return true;
+        }
+
+        // A probe with data[0]==0 is a request: reply with a type-2 probe (data[0]=2, the original length in the next
+        // two bytes), padded to MIN_PROBE_SIZE, sealed back over the UDP socket. data[0]!=0 is a reply — drop.
+        void HandleProbe(byte[] payload)
+        {
+            if (payload.Length < 1 || payload[0] != 0) return; // only answer requests
+            int len = payload.Length;
+            byte[] reply = new byte[Math.Max(len, TincDriverConstants.MinProbeSize)];
+            reply[0] = 2; // type-2 probe reply (protocol ≥ 17.3)
+            reply[1] = (byte)(len >> 8);
+            reply[2] = (byte)len;
+            byte[] wire = _transport.SealRecord(TincDriverConstants.ProbePacketType, reply);
+            _ = _send(wire, CancellationToken.None);
         }
 
         /// <inheritdoc/>

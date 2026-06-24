@@ -24,5 +24,12 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc
         /// packets with this type and the receiver re-derives the Ethernet header from the IP version nibble.
         /// </summary>
         public const byte RouterPacketType = 0;
+
+        /// <summary>The SPTPS record type for a UDP path-MTU / liveness probe (tinc's <c>PKT_PROBE</c>, net.h). A probe
+        /// request has <c>data[0] == 0</c>; the reply echoes it with <c>data[0] = 2</c> (type-2, protocol ≥ 17.3).</summary>
+        public const byte ProbePacketType = 4;
+
+        /// <summary>The minimum size of a UDP probe packet (tinc's <c>MIN_PROBE_SIZE</c> = 1 + sizeof(uint16)).</summary>
+        public const int MinProbeSize = 3;
     }
 }

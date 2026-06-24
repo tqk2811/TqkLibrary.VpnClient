@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using TqkLibrary.VpnClient.Abstractions.Drivers;
 using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Tinc.Meta;
+using TqkLibrary.VpnClient.Tinc.Meta.Enums;
 using TqkLibrary.VpnClient.Tinc.Sptps;
 using TqkLibrary.VpnClient.Tinc.Sptps.Enums;
 
@@ -82,14 +83,11 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc.Meta
             if (!_handshake.ConsumeSig(sigData)) throw new VpnConnectionException("tinc server SIG verification failed (wrong Ed25519 key?).");
             _logger.LogTrace("[tinc-meta] server SIG verified");
 
-            // After receiving the peer SIG, tinc's SPTPS enables the OUT keys and the initiator sends an empty ACK
-            // record (encrypted, record seqno 2), then waits for the peer's empty ACK record to enable the IN keys.
+            // tinc's SPTPS: after the initiator consumes the peer SIG it is fully keyed (generate_key_material sets the
+            // out cipher; receive_handshake's SIG branch calls receive_ack(NULL,0) internally to enable the in cipher) —
+            // the initiator does NOT send or wait for an empty ACK record on the wire. The next record we read is the
+            // server's first application record (its meta ACK line). Enable encryption from here on.
             _record.EnableEncryption(_handshake.OutCipherKey, _handshake.InCipherKey);
-            await _stream.WriteAsync(_record.EncodeRecord((byte)SptpsRecordType.Handshake, ReadOnlySpan<byte>.Empty), cancellationToken).ConfigureAwait(false);
-
-            (byte ackType, byte[] ackData) = await ReadRecordAsync(cancellationToken).ConfigureAwait(false);
-            if (ackType != (byte)SptpsRecordType.Handshake || ackData.Length != 0)
-                throw new VpnConnectionException($"Expected an empty ACK handshake record (got type {ackType}, {ackData.Length} bytes).");
             _logger.LogTrace("[tinc-meta] SPTPS handshake complete (keyed)");
         }
 
@@ -102,8 +100,17 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc.Meta
         }
 
         /// <summary>
+        /// A raw SPTPS data packet that arrived over the meta-connection (TCP data fallback: tinc's
+        /// <c>SPTPS_PACKET &lt;len&gt;</c> request followed by <c>len</c> raw bytes). The bytes are the same wire form as a
+        /// UDP data datagram (<c>DSTID ‖ SRCID ‖ seqno ‖ ciphertext ‖ tag</c>). The driver feeds them to its data channel.
+        /// </summary>
+        public Action<byte[]>? RawDataPacket { get; set; }
+
+        /// <summary>
         /// Reads one application record (a meta request line) and parses it. Skips any control records (handshake /
-        /// alert / close) by reading the next record. Returns null on a clean close (the peer closed the stream).
+        /// alert / close) by reading the next record. Handles tinc's TCP data fallback inline: an
+        /// <c>SPTPS_PACKET &lt;len&gt;</c> request is followed by <c>len</c> raw (non-record-framed) data bytes, which are
+        /// handed to <see cref="RawDataPacket"/> and skipped. Returns null on a clean close (the peer closed the stream).
         /// </summary>
         public async Task<TincMetaRequest?> ReadRequestAsync(CancellationToken cancellationToken)
         {
@@ -116,7 +123,20 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc.Meta
                 if (result.type >= (byte)SptpsRecordType.Handshake) continue; // control record — ignore, read next
                 string line = Encoding.ASCII.GetString(result.data).TrimEnd('\n');
                 if (line.Length == 0) continue;
-                return TincMetaRequest.Parse(line);
+                TincMetaRequest request;
+                try { request = TincMetaRequest.Parse(line); }
+                catch (FormatException) { continue; } // tolerate an unparseable line rather than tearing down the link
+
+                // TCP data fallback: "SPTPS_PACKET <len>" is followed by <len> RAW bytes on the stream (not an SPTPS
+                // record) — read and dispatch them to the data channel, then keep reading meta requests.
+                if (request.Type == TincRequestType.SptpsPacket && request.Arguments.Count >= 1
+                    && int.TryParse(request.Arguments[0], out int rawLen) && rawLen > 0)
+                {
+                    byte[] raw = await ReadRawAsync(rawLen, cancellationToken).ConfigureAwait(false);
+                    RawDataPacket?.Invoke(raw);
+                    continue;
+                }
+                return request;
             }
         }
 
@@ -136,6 +156,17 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc.Meta
                     throw new VpnConnectionException("tinc meta record authentication failed (out of sync / wrong key).");
                 await FillAsync(cancellationToken).ConfigureAwait(false);
             }
+        }
+
+        // Read exactly <count> raw bytes off the (already SPTPS-decrypted) stream buffer — the TCP data-fallback packet
+        // that follows a SPTPS_PACKET request. These bytes are NOT record-framed (tinc's send_meta_raw).
+        async Task<byte[]> ReadRawAsync(int count, CancellationToken cancellationToken)
+        {
+            while (_inbound.Count < count) await FillAsync(cancellationToken).ConfigureAwait(false);
+            byte[] raw = new byte[count];
+            for (int i = 0; i < count; i++) raw[i] = _inbound[i];
+            _inbound.RemoveRange(0, count);
+            return raw;
         }
 
         async Task<string> ReadLineAsync(CancellationToken cancellationToken)

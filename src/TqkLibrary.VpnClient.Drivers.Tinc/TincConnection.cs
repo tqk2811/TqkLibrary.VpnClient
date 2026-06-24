@@ -127,6 +127,7 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc
             byte[] peerPub = _config.PeerHost.Ed25519PublicKey
                 ?? throw new VpnConnectionException("Peer host config has no Ed25519PublicKey.");
             var metaConn = new TincMetaConnection(_meta, _config.NodeName, _config.PrivateKey, peerPub, Logger);
+            metaConn.RawDataPacket = raw => OnInboundDatagram(raw); // TCP data-fallback packets share the UDP datagram wire form
             await metaConn.HandshakeAsync(cancellationToken).ConfigureAwait(false);
             _metaConn = metaConn;
             Logger.LogHandshake(DriverName, $"meta SPTPS handshake with {metaConn.PeerName} complete");
@@ -142,6 +143,16 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc
                 string subnet = $"{_config.OverlayAddress}/{_config.PrefixLength}";
                 await metaConn.SendRequestAsync(new TincMetaRequest(TincRequestType.AddSubnet, _config.NodeName, subnet), cancellationToken).ConfigureAwait(false);
             }
+
+            // 2b) Announce our edge to the peer (ADD_EDGE client→server). tinc's graph (MST/SSSP) needs an edge in BOTH
+            //     directions to set each node's via/nexthop; without our edge the peer cannot route the data SPTPS reply
+            //     (it logs "selecting relay" and drops). Format: "12 <rand> <from> <to> <to-addr> <to-port> <opts> <weight>".
+            string edgeOptions = ((TincDriverConstants.ProtocolMinor << 24) | 0x08).ToString("x", System.Globalization.CultureInfo.InvariantCulture); // PMTU_DISCOVERY
+            string rnd = NextRandomHex();
+            await metaConn.SendRequestAsync(new TincMetaRequest(TincRequestType.AddEdge,
+                rnd, _config.NodeName, _config.PeerName,
+                endpoint.Address.ToString(), endpoint.Port.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                edgeOptions, "256"), cancellationToken).ConfigureAwait(false);
 
             // 3) Start the background meta read loop (consumes ACK / ADD_SUBNET / ADD_EDGE / REQ_KEY / ANS_KEY).
             _metaReadTask = Task.Run(() => MetaReadLoopAsync(loopToken), loopToken);
@@ -208,6 +219,16 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc
             int innerReqno = isInitialReqKey ? (int)TincRequestType.ReqKey : (int)TincRequestType.SptpsPacket;
             var req = new TincMetaRequest(TincRequestType.ReqKey, _config.NodeName, _config.PeerName,
                 innerReqno.ToString(System.Globalization.CultureInfo.InvariantCulture), b64);
+            await meta.SendRequestAsync(req, cancellationToken).ConfigureAwait(false);
+        }
+
+        // Send a data-plane SPTPS HANDSHAKE record (e.g. our SIG) over the meta-connection via ANS_KEY — tinc's
+        // send_sptps_data routes SPTPS_HANDSHAKE records through "ANS_KEY <from> <to> <b64> -1 -1 -1 <comp>".
+        async Task SendSptpsHandshakeViaAnsKeyAsync(byte[] sptpsRecord, CancellationToken cancellationToken)
+        {
+            TincMetaConnection meta = _metaConn!;
+            string b64 = TincBase64.Encode(sptpsRecord);
+            var req = new TincMetaRequest(TincRequestType.AnsKey, _config.NodeName, _config.PeerName, b64, "-1", "-1", "-1", "0");
             await meta.SendRequestAsync(req, cancellationToken).ConfigureAwait(false);
         }
 
@@ -324,14 +345,18 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc
                 return;
             }
 
-            // The peer's first handshake record is its KEX (65 bytes); the second is its SIG (64 bytes). An empty record
-            // is the ACK — ignore it.
+            // The peer's first handshake record is its KEX (65 bytes); the second is its SIG (64 bytes). On consuming the
+            // server KEX the initiator must send its OWN SIG (tinc's receive_kex → send_sig); that SIG goes back over the
+            // meta-connection via ANS_KEY (send_sptps_data for a SPTPS_HANDSHAKE record). After consuming the server SIG
+            // both sides are keyed (the in cipher is enabled internally) — no empty ACK record on the wire.
             try
             {
                 if (data.Length == SptpsConstants.NonceSize + SptpsConstants.EcdhSize + 1) // 1 (version) + 32 (nonce) + 32 (pubkey)
                 {
                     handshake.ConsumeKex(data);
-                    Logger.LogHandshake(DriverName, "data-plane SPTPS server KEX consumed");
+                    Logger.LogHandshake(DriverName, "data-plane SPTPS server KEX consumed; sending our SIG (ANS_KEY)");
+                    byte[] sigRecord = record.EncodeHandshake((byte)SptpsRecordType.Handshake, handshake.CreateSig()); // seqno 1
+                    await SendSptpsHandshakeViaAnsKeyAsync(sigRecord, cancellationToken).ConfigureAwait(false);
                 }
                 else if (data.Length == SptpsConstants.SignatureSize)
                 {
@@ -347,7 +372,6 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc
             {
                 Logger.LogPacketDropped(DriverName, VpnDropReason.Unexpected, $"data handshake record error: {ex.Message}");
             }
-            await Task.CompletedTask.ConfigureAwait(false);
         }
 
         void BindDataChannel(SptpsHandshake handshake, SptpsDatagramRecordLayer record)
@@ -445,5 +469,14 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc
 
         /// <inheritdoc/>
         public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+        // tinc stamps each ADD_EDGE with a random hex nonce (its rand()); any value works — it only deduplicates.
+        static string NextRandomHex()
+        {
+            byte[] b = new byte[4];
+            using (var rng = System.Security.Cryptography.RandomNumberGenerator.Create()) rng.GetBytes(b);
+            uint v = ((uint)b[0] << 24) | ((uint)b[1] << 16) | ((uint)b[2] << 8) | b[3];
+            return v.ToString("x", System.Globalization.CultureInfo.InvariantCulture);
+        }
     }
 }
