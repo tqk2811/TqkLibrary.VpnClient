@@ -54,6 +54,10 @@ namespace TqkLibrary.VpnClient.Abstractions.Diagnostics.Extensions
             LoggerMessage.Define<string, VpnDropReason, string>(LogLevel.Debug, VpnEventIds.PacketDropped,
                 "[{Driver}] dropped inbound packet ({Reason}): {Detail}");
 
+        static readonly Action<ILogger, string, string, Exception?> _protocolStep =
+            LoggerMessage.Define<string, string>(LogLevel.Trace, VpnEventIds.ProtocolStep,
+                "[{Layer}] {Step}");
+
         /// <summary>Logs a lifecycle state transition (Information).</summary>
         public static void LogStateChanged(this ILogger logger, string driver, string state)
             => _stateChanged(logger, driver, state, null);
@@ -93,5 +97,14 @@ namespace TqkLibrary.VpnClient.Abstractions.Diagnostics.Extensions
         /// <summary>Logs a dropped inbound packet with a classified reason and a short detail (Debug).</summary>
         public static void LogPacketDropped(this ILogger logger, string driver, VpnDropReason reason, string detail = "")
             => _packetDropped(logger, driver, reason, detail, null);
+
+        /// <summary>
+        /// Logs a fine-grained step inside a protocol layer (an IKE Main/Quick Mode message, an ESP SA install/swap, a
+        /// PPP LCP/IPCP transition, a TCP state change) at <see cref="LogLevel.Trace"/>. <paramref name="layer"/> names
+        /// the protocol layer (e.g. <c>ike</c>, <c>esp</c>, <c>ppp.lcp</c>, <c>tcp</c>). Per-step/per-packet, so callers
+        /// on a hot path should guard it with <c>logger.IsEnabled(LogLevel.Trace)</c> before composing the message.
+        /// </summary>
+        public static void LogProtocolStep(this ILogger logger, string layer, string step)
+            => _protocolStep(logger, layer, step, null);
     }
 }

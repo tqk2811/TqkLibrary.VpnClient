@@ -340,7 +340,7 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
         async Task<(NatTraversalChannel, IkeV1Client)> ForcedPhase1Async(IPAddress serverIp, CancellationToken cancellationToken)
         {
             NatTraversalChannel natt = StartAttemptChannel(serverIp, localPort: 0, cancellationToken);
-            var ike = new IkeV1Client(_preSharedKey, IPAddress.Any, serverIp);
+            var ike = new IkeV1Client(_preSharedKey, IPAddress.Any, serverIp, logger: Logger);
             _ike = ike;
 
             ike.ProcessMainMode2(await ExchangeIkeAsync(natt, ike.BuildMainMode1(), cancellationToken).ConfigureAwait(false));
@@ -365,7 +365,7 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
             // forced path which deliberately claims IPAddress.Any. A gateway that sees ID_ci = 0.0.0.0 while the packet
             // arrives from the real address concludes there is a NAT and installs UDP-encapsulated ESP (espinudp) — which
             // then drops our native proto-50 carrier as an XfrmInStateMismatch. The real ID keeps the SA plain ESP.
-            var ike = new IkeV1Client(_preSharedKey, localIp, serverIp);
+            var ike = new IkeV1Client(_preSharedKey, localIp, serverIp, logger: Logger);
             _ike = ike;
 
             ike.ProcessMainMode2(await ExchangeIkeAsync(natt, ike.BuildMainMode1(), cancellationToken).ConfigureAwait(false));
@@ -788,7 +788,7 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
                 {
                     IPAddress localIp = natt.GetLocalAddress();
                     ushort localPort = (ushort)natt.LocalPort;
-                    newIke = new IkeV1Client(_preSharedKey, localIp, serverIp) { PreferNativeTransport = true };
+                    newIke = new IkeV1Client(_preSharedKey, localIp, serverIp, logger: Logger) { PreferNativeTransport = true };
                     _rekeyIke = newIke;
                     newIke.ProcessMainMode2(await ExchangePhase1RekeyAsync(newIke, newIke.BuildMainMode1()).ConfigureAwait(false));
                     newIke.ProcessMainMode4(await ExchangePhase1RekeyAsync(newIke,
@@ -796,7 +796,7 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
                 }
                 else
                 {
-                    newIke = new IkeV1Client(_preSharedKey, IPAddress.Any, serverIp);
+                    newIke = new IkeV1Client(_preSharedKey, IPAddress.Any, serverIp, logger: Logger);
                     _rekeyIke = newIke;
                     newIke.ProcessMainMode2(await ExchangePhase1RekeyAsync(newIke, newIke.BuildMainMode1()).ConfigureAwait(false));
                     newIke.ProcessMainMode4(await ExchangePhase1RekeyAsync(newIke, newIke.BuildMainMode3(IPAddress.Any, serverIp)).ConfigureAwait(false));

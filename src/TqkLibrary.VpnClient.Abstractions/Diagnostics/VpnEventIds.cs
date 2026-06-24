@@ -47,5 +47,12 @@ namespace TqkLibrary.VpnClient.Abstractions.Diagnostics
 
         /// <summary>An inbound packet/frame was dropped (decrypt/AEAD failure, MAC/auth mismatch, replay, malformed, unexpected type).</summary>
         public static readonly EventId PacketDropped = new(400, nameof(PacketDropped));
+
+        // ---- 5xx: deep protocol trace (IKE/ESP/PPP/IpStack per-step / per-packet) ----
+
+        /// <summary>A fine-grained step inside a protocol layer (an individual IKE Main/Quick Mode message, an ESP SA
+        /// install/swap, a PPP LCP/IPCP option-negotiation transition, a TCP state change). Trace level — emitted per
+        /// step/packet, so it is off unless a consumer raises a protocol category to <see cref="LogLevel.Trace"/>.</summary>
+        public static readonly EventId ProtocolStep = new(500, nameof(ProtocolStep));
     }
 }

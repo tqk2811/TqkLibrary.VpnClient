@@ -1,5 +1,8 @@
 using System.Net;
 using System.Security.Cryptography;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using TqkLibrary.VpnClient.Abstractions.Diagnostics.Extensions;
 using TqkLibrary.VpnClient.Abstractions.Drivers;
 using TqkLibrary.VpnClient.Crypto;
 using TqkLibrary.VpnClient.Crypto.Abstractions.Interfaces;
@@ -18,10 +21,12 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
     public sealed class IkeV1Client
     {
         const byte IdTypeIpv4 = 1;
+        const string Layer = "ike.v1";
 
         readonly byte[] _preSharedKey;
         readonly IPAddress _localIdentity;
         readonly IPAddress _remoteIdentity;
+        readonly ILogger _logger;
 
         HashAlgorithmName _hash = HashAlgorithmName.SHA1;
         HmacPrf _prf = new(HashAlgorithmName.SHA1);
@@ -52,12 +57,18 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
         byte[] _rekeyChildOutboundSpi = Array.Empty<byte>();
         IkeV1Cipher? _rekeyCipher;
 
-        /// <summary>Creates a client with the PSK and the IPv4 identities to assert for Phase 1 / traffic selectors.</summary>
-        public IkeV1Client(byte[] preSharedKey, IPAddress localIdentity, IPAddress remoteIdentity, byte[]? initiatorCookie = null)
+        /// <summary>
+        /// Creates a client with the PSK and the IPv4 identities to assert for Phase 1 / traffic selectors.
+        /// <paramref name="logger"/> receives fine-grained Main/Quick Mode / NAT-D / rekey traces at
+        /// <see cref="LogLevel.Trace"/>; null logs to a no-op logger (no behaviour change).
+        /// </summary>
+        public IkeV1Client(byte[] preSharedKey, IPAddress localIdentity, IPAddress remoteIdentity, byte[]? initiatorCookie = null,
+            ILogger? logger = null)
         {
             _preSharedKey = preSharedKey;
             _localIdentity = localIdentity;
             _remoteIdentity = remoteIdentity;
+            _logger = logger ?? NullLogger.Instance;
             InitiatorCookie = initiatorCookie ?? RandomNonZero(8);
             _nonceInitiator = RandomBytes(16);
             _quickModeNonce = RandomBytes(16);
@@ -135,6 +146,11 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
 
             _privateKey = _dhGroup.GeneratePrivateKey();
             _keInitiator = _dhGroup.DerivePublicValue(_privateKey);
+
+            if (_logger.IsEnabled(LogLevel.Trace))
+                _logger.LogProtocolStep(Layer,
+                    $"MM2: responder cookie learned; chose hash={_hash.Name}, keyLen={_cipherKeyLength * 8}b, " +
+                    $"DH={(groupId == IkeV1Constants.Group.Modp2048 ? "modp2048" : "modp1024")}, NAT-D type={(int)NatDiscoveryType}");
         }
 
         /// <summary>
@@ -177,6 +193,7 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
                 _hash, _preSharedKey, _nonceInitiator, _nonceResponder, shared,
                 InitiatorCookie, ResponderCookie, _keInitiator, _keResponder, _cipherKeyLength, blockSize: 16);
             _phase1Cipher = new IkeV1Cipher(_keys.CipherKey, _keys.InitialIv);
+            _logger.LogProtocolStep(Layer, "MM4: KEr/Nr consumed, SKEYID* derived, Phase 1 cipher armed");
         }
 
         /// <summary>
@@ -196,6 +213,8 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
             byte[] expectedRemote = IkeV1NatDetection.ComputeHash(_hash, InitiatorCookie, ResponderCookie, remoteIp, remotePort);
             bool localBehindNat = !IkeV1NatDetection.MatchesAny(_responderNatD, expectedLocal);
             bool remoteBehindNat = !IkeV1NatDetection.MatchesAny(_responderNatD, expectedRemote);
+            if (_logger.IsEnabled(LogLevel.Trace))
+                _logger.LogProtocolStep(Layer, $"NAT-D verdict: localBehindNat={localBehindNat}, remoteBehindNat={remoteBehindNat}");
             return new IkeV1NatDetectionResult(serverSentNatD: true, localBehindNat, remoteBehindNat);
         }
 
@@ -225,7 +244,11 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
             byte[] expected = IkeV1Auth.ComputeHashR(_prf, _keys!.Skeyid, _keInitiator, _keResponder,
                 InitiatorCookie, ResponderCookie, _saInitiatorBody, idR.Body);
             _phase1LastIv = _phase1Cipher!.CurrentIv;
-            return FixedTimeEquals(expected, hashR.Body);
+            bool ok = FixedTimeEquals(expected, hashR.Body);
+            _logger.LogProtocolStep(Layer, ok
+                ? "MM6: responder HASH_R verified — Phase 1 (Main Mode) established"
+                : "MM6: responder HASH_R mismatch (wrong PSK or tampered reply)");
+            return ok;
         }
 
         // ---- Quick Mode ----
@@ -272,6 +295,9 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
             ChildOutboundSpi = sa.Proposals[0].Spi;
             _nonceResponder = nr.Body;
             NegotiatedEsp = selection;
+            if (_logger.IsEnabled(LogLevel.Trace))
+                _logger.LogProtocolStep(Layer,
+                    $"QM2: HASH(2) verified, ESP CHILD SA negotiated ({selection.Algorithm}, key {selection.EncryptionKeyLengthBytes * 8}b); outbound SPI captured");
             return ChildOutboundSpi.Length == 4;
         }
 
@@ -363,6 +389,9 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
             _rekeyChildOutboundSpi = sa.Proposals[0].Spi;
             _rekeyNonceResponder = nr.Body;
             RekeyNegotiatedEsp = selection;
+            if (_logger.IsEnabled(LogLevel.Trace))
+                _logger.LogProtocolStep(Layer,
+                    $"rekey QM2: replacement ESP CHILD SA negotiated ({selection.Algorithm}, key {selection.EncryptionKeyLengthBytes * 8}b)");
             return _rekeyChildOutboundSpi.Length == 4;
         }
 
@@ -452,14 +481,32 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
                 if (payload.Type == IsakmpPayloadType.Notification
                     && IkeV1Dpd.TryParseNotify(payload.Body, out ushort notifyType, out uint sequence))
                 {
-                    if (notifyType == IkeV1Dpd.RUThere) return new IkeV1InformationalResult(IkeV1InformationalKind.DpdRequest, sequence);
-                    if (notifyType == IkeV1Dpd.RUThereAck) return new IkeV1InformationalResult(IkeV1InformationalKind.DpdAck, sequence);
+                    if (notifyType == IkeV1Dpd.RUThere)
+                    {
+                        if (_logger.IsEnabled(LogLevel.Trace))
+                            _logger.LogProtocolStep(Layer, $"informational: DPD R-U-THERE seq={sequence}");
+                        return new IkeV1InformationalResult(IkeV1InformationalKind.DpdRequest, sequence);
+                    }
+                    if (notifyType == IkeV1Dpd.RUThereAck)
+                    {
+                        if (_logger.IsEnabled(LogLevel.Trace))
+                            _logger.LogProtocolStep(Layer, $"informational: DPD R-U-THERE-ACK seq={sequence}");
+                        return new IkeV1InformationalResult(IkeV1InformationalKind.DpdAck, sequence);
+                    }
                 }
                 else if (payload.Type == IsakmpPayloadType.Delete && payload.Body.Length >= 5)
                 {
                     byte protocol = payload.Body[4]; // Delete body: DOI(4) | Protocol(1) | …
-                    if (protocol == IkeV1Constants.Protocol.Esp) return new IkeV1InformationalResult(IkeV1InformationalKind.DeleteEsp, 0);
-                    if (protocol == IkeV1Constants.Protocol.Isakmp) return new IkeV1InformationalResult(IkeV1InformationalKind.DeleteIsakmp, 0);
+                    if (protocol == IkeV1Constants.Protocol.Esp)
+                    {
+                        _logger.LogProtocolStep(Layer, "informational: peer DELETE (ESP CHILD SA)");
+                        return new IkeV1InformationalResult(IkeV1InformationalKind.DeleteEsp, 0);
+                    }
+                    if (protocol == IkeV1Constants.Protocol.Isakmp)
+                    {
+                        _logger.LogProtocolStep(Layer, "informational: peer DELETE (ISAKMP SA)");
+                        return new IkeV1InformationalResult(IkeV1InformationalKind.DeleteIsakmp, 0);
+                    }
                 }
             }
             return new IkeV1InformationalResult(IkeV1InformationalKind.Unknown, 0);

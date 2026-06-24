@@ -1,5 +1,8 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Security.Cryptography;
+using Microsoft.Extensions.Logging;
+using TqkLibrary.VpnClient.Abstractions.Diagnostics;
 using TqkLibrary.VpnClient.Abstractions.Drivers;
 using TqkLibrary.VpnClient.Crypto;
 using TqkLibrary.VpnClient.Ipsec.Esp;
@@ -87,6 +90,52 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.Tests
             byte[] toClient = responderEsp.Protect(System.Text.Encoding.ASCII.GetBytes("pong from server"));
             Assert.True(clientEsp.TryUnprotect(toClient, out byte[] gotByClient, out _));
             Assert.Equal("pong from server", System.Text.Encoding.ASCII.GetString(gotByClient));
+        }
+
+        [Fact]
+        public void FullHandshake_WithLogger_EmitsProtocolStepTraces()
+        {
+            // Q.2: the deep IKEv1 layer takes an optional ILogger and stamps each fine-grained step on the shared
+            // ProtocolStep event id. A captured logger must see the Main/Quick Mode + NAT-D traces.
+            var log = new CapturingLogger();
+            var client = new IkeV1Client(Psk, IPAddress.Loopback, IPAddress.Loopback, logger: log);
+            var responder = new SimulatedResponderV1(Psk, client.InitiatorCookie);
+
+            // A real NAT-D verdict (gateway reports our source seen at a translated port) so the NAT-D trace fires too.
+            IPAddress localIp = IPAddress.Parse("198.51.100.10"), serverIp = IPAddress.Parse("203.0.113.5");
+            client.ProcessMainMode2(responder.HandleMainMode1(client.BuildMainMode1()));
+            byte[] mm3 = client.BuildMainMode3(localIp, 500, serverIp, 500);
+            client.ProcessMainMode4(responder.HandleMainMode3(mm3, responder.ResponderCookie,
+                observedInitiatorEndpoint: localIp, observedInitiatorPort: 61000,
+                responderEndpoint: serverIp, responderPort: 500));
+            IkeV1NatDetectionResult nat = client.DetectNat(localIp, 500, serverIp, 500);
+            Assert.True(nat.ServerSentNatD);
+            Assert.True(client.ProcessMainMode6(responder.HandleMainMode5(client.BuildMainMode5())));
+            Assert.True(client.ProcessQuickMode2(responder.HandleQuickMode1(client.BuildQuickMode1())));
+            responder.HandleQuickMode3(client.BuildQuickMode3());
+
+            Assert.True(log.Captured(VpnEventIds.ProtocolStep));
+            Assert.Contains(log.MessagesFor(VpnEventIds.ProtocolStep), m => m.Contains("MM4"));
+            Assert.Contains(log.MessagesFor(VpnEventIds.ProtocolStep), m => m.Contains("NAT-D verdict"));
+            Assert.Contains(log.MessagesFor(VpnEventIds.ProtocolStep), m => m.Contains("MM6") && m.Contains("verified"));
+            Assert.Contains(log.MessagesFor(VpnEventIds.ProtocolStep), m => m.Contains("QM2"));
+        }
+
+        [Fact]
+        public void FullHandshake_NullLogger_ReachesSameNegotiatedSa()
+        {
+            // The null-logger path runs the exact same handshake (logging is additive): same negotiated SPIs, no throw.
+            var client = new IkeV1Client(Psk, IPAddress.Loopback, IPAddress.Loopback, logger: null);
+            var responder = new SimulatedResponderV1(Psk, client.InitiatorCookie);
+
+            client.ProcessMainMode2(responder.HandleMainMode1(client.BuildMainMode1()));
+            client.ProcessMainMode4(responder.HandleMainMode3(client.BuildMainMode3(IPAddress.Any, IPAddress.Loopback), responder.ResponderCookie));
+            Assert.True(client.ProcessMainMode6(responder.HandleMainMode5(client.BuildMainMode5())));
+            Assert.True(client.ProcessQuickMode2(responder.HandleQuickMode1(client.BuildQuickMode1())));
+            responder.HandleQuickMode3(client.BuildQuickMode3());
+
+            Assert.Equal(responder.ChildInboundSpi, client.ChildOutboundSpi);
+            Assert.Equal(client.ChildInboundSpi, responder.ChildOutboundSpi);
         }
 
         [Fact]
@@ -319,6 +368,24 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.Tests
         /// It hand-rolls ISAKMP framing (the codec's chain helpers are <c>internal</c>) and reuses the public crypto
         /// helpers (<see cref="IkeV1KeyMaterial"/>, <see cref="IkeV1Auth"/>, <see cref="IkeV1QuickMode"/>, …).
         /// </summary>
+        // A tiny in-memory ILogger that records each entry's event id + formatted message (mirrors the per-driver
+        // CapturingLoggerFactory the runtime-driver tests use, trimmed to what this layer's assertions need).
+        sealed class CapturingLogger : ILogger
+        {
+            readonly ConcurrentQueue<(EventId Id, string Message)> _entries = new();
+
+            public bool Captured(EventId id) => _entries.Any(e => e.Id.Id == id.Id);
+            public IReadOnlyList<string> MessagesFor(EventId id)
+                => _entries.Where(e => e.Id.Id == id.Id).Select(e => e.Message).ToArray();
+
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => true; // capture everything, including Trace-level ProtocolStep
+
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+                Func<TState, Exception?, string> formatter)
+                => _entries.Enqueue((eventId, formatter(state, exception)));
+        }
+
         sealed class SimulatedResponderV1
         {
             const byte IdTypeIpv4 = 1;
