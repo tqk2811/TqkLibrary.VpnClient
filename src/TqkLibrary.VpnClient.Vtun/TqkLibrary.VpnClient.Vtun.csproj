@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>vtun (legacy tunnel daemon) protocol layer: the challenge-response authentication (50-byte ASCII message blocks, MD5+Blowfish-ECB challenge, the a..p challenge encoding), the host-flags codec (bf2cf/cf2bf — tun/tap, tcp/udp, compress/encrypt/keepalive), and the data-plane frame codec (2-byte big-endian length+flags word: data, ECHO_REQ/ECHO_REP keepalive, CONN_CLOSE). Pure codec — no sockets. ⚠️ vtun's auth/data crypto (Blowfish-ECB/MD5) is legacy and weak; this exists only to interoperate with the vtund daemon.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Crypto\TqkLibrary.VpnClient.Crypto.csproj" />
+  </ItemGroup>
+
+</Project>
