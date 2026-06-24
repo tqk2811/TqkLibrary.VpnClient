@@ -1,0 +1,67 @@
+# =====================================================================
+# lab/ipencap — compose RIÊNG, topology AN TOÀN cho V.8 (plain IP-encap, no-NAT).
+#
+# 2 container trên CÙNG một Docker bridge tùy biến 'labnet' (subnet TĨNH để peer biết
+# trước IP client mà đặt 'remote' cho ip-tunnel):
+#   - ipencap-peer  : Linux `ip tunnel` thuần — tạo gre1 (proto-47) + ipip1 (proto-4) +
+#                     sit1 (proto-41) trỏ về client, gán IP tunnel, bật forwarding.
+#   - dotnet-client : chạy binary demo .NET self-contained đã publish, CAP_NET_RAW.
+#
+# Vì sao AN TOÀN (nhái lab/l2tp-nonat + lab/pptp — KHÔNG host-net, KHÔNG privileged):
+#   - KHÔNG network_mode: host  -> ip-tunnel mở CHỈ trong netns container, KHÔNG phá mạng VM.
+#   - KHÔNG privileged-trên-host -> chỉ NET_ADMIN (peer) + NET_RAW (client) trong netns riêng.
+#   - 2 container cùng bridge, subnet tĩnh -> gói proto-47/4/41 đi L2 THẲNG, KHÔNG NAT ->
+#     raw socket của client + ip-tunnel của peer gặp nhau trực tiếp (giống native-ESP proto-50).
+#   - KHÔNG publish cổng ra ngoài: test hoàn toàn nội bộ bridge.
+#
+# Lưu ý kernel: peer dùng NET_ADMIN tạo `ip link add ... type gre/ipip/sit` ⇒ kernel TỰ
+# autoload module ip_gre/ipip/sit (đã xác nhận trên VM). Không cần modprobe thủ công/sudo.
+# =====================================================================
+services:
+  ipencap-peer:
+    image: ubuntu:24.04
+    container_name: lab-ipencap-peer
+    restart: "no"
+    cap_add:
+      - NET_ADMIN          # tạo gre1/ipip1/sit1 + route trong netns container (KHÔNG đụng VM)
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv6.conf.all.forwarding=1
+      # rp_filter=0: nhận gói inner-IP đến qua tunnel mà không bị reverse-path-filter drop.
+      - net.ipv4.conf.all.rp_filter=0
+      - net.ipv4.conf.default.rp_filter=0
+    networks:
+      labnet:
+        ipv4_address: 172.30.0.2
+    volumes:
+      - ./peer-entrypoint.sh:/peer-entrypoint.sh:ro
+    # Cài iproute2 + dnsmasq (responder DNS cho probe UDP), dựng 3 tunnel, rồi đứng yên.
+    entrypoint: ["/bin/bash", "/peer-entrypoint.sh"]
+
+  dotnet-client:
+    # runtime-deps đủ chạy binary self-contained publish (linux-x64). KHÔNG cần SDK.
+    image: mcr.microsoft.com/dotnet/runtime-deps:8.0
+    container_name: lab-ipencap-client
+    restart: "no"
+    cap_add:
+      - NET_RAW            # V.8: raw socket gửi/nhận GRE-47 / IPIP-4 / SIT-41 native
+    networks:
+      labnet:
+        ipv4_address: 172.30.0.3
+    volumes:
+      # Mount thư mục publish của VM (đặt binary demo vào ./client-bin trên VM trước).
+      - ./client-bin:/opt/client:ro
+    working_dir: /opt/client
+    # TẠM chạy thủ công: container đứng yên, runbook 'docker exec' chạy demo với gre://|ipip://|sit://.
+    entrypoint: ["sleep", "infinity"]
+    depends_on:
+      - ipencap-peer
+
+networks:
+  # bridge tùy biến + subnet TĨNH: intra-bridge KHÔNG NAT (NAT chỉ áp traffic RA NGOÀI host)
+  # -> proto-47/4/41 đi thẳng -> no-NAT cho V.8. Subnet cố định để peer biết IP client.
+  labnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

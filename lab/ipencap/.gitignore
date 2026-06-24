@@ -1,0 +1,4 @@
+# Binary demo self-contained publish (linux-x64) — KHÔNG commit (build artifact).
+client-bin/
+# pcap dump tạm khi debug.
+*.pcap
