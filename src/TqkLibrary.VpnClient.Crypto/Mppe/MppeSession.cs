@@ -102,8 +102,12 @@ namespace TqkLibrary.VpnClient.Crypto.Mppe
         {
             if (_stateless)
             {
-                // Stateless: re-key before every packet; FLUSHED set on every packet (skip the very first key, already initial).
-                if (!_firstPacket) ReKey();
+                // Stateless (RFC 3078 §4.1): re-key before EVERY packet — including the first. The ctor loads the initial
+                // session key (the equivalent of pppd/kernel mppe_init's mppe_rekey(initial=1)); the first transmitted
+                // packet then runs mppe_rekey(0) once more, so it is encrypted with the *second* key, not the initial
+                // one. Skipping the first re-key (the obvious-looking optimisation) leaves our packet-0 key one step
+                // behind the peer ⇒ the server decrypts garbage and Protocol-Rejects it. FLUSHED is set on every packet.
+                ReKey();
                 _firstPacket = false;
                 return true;
             }
@@ -125,19 +129,21 @@ namespace TqkLibrary.VpnClient.Crypto.Mppe
         // Receiver side: bring RC4 state to the received coherency count.
         void SyncForReceive(int coherency, bool flushed)
         {
-            if (_firstPacket)
+            if (_stateless)
             {
+                // Stateless: every received packet re-keys (mirror of the sender) — INCLUDING the first, so the receive
+                // key tracks the peer's send key step-for-step from packet 0. The first packet carries the *second* key.
+                ReKey();
                 _firstPacket = false;
-                // First packet: initial key already loaded; honor flush by re-init at the initial key.
-                _rc4 = new Rc4(_sessionKey);
                 _coherencyCount = coherency;
                 return;
             }
 
-            if (_stateless)
+            if (_firstPacket)
             {
-                // Stateless: every packet re-keys; advance the key once per received packet (FLUSHED always set).
-                ReKey();
+                _firstPacket = false;
+                // First stateful packet: initial key already loaded; honor flush by re-init at the initial key.
+                _rc4 = new Rc4(_sessionKey);
                 _coherencyCount = coherency;
                 return;
             }
