@@ -39,8 +39,16 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
     /// pending handshake of any peer, type-3 feeds the cookie machinery, type-4 transport data is delivered to whichever
     /// peer's session owns its receiver index. A dead session (a handshake that could not complete within
     /// <c>REKEY_ATTEMPT_TIME</c>, or a transport fault) triggers the supervisor / auto-reconnect, mirroring the OpenVPN
-    /// / IKEv2 drivers. Not a server — the responder role lives only in tests. The single-peer point-to-point case is
-    /// just one peer with allowed-ips <c>0.0.0.0/0, ::/0</c>.
+    /// / IKEv2 drivers. The single-peer point-to-point case is just one peer with allowed-ips <c>0.0.0.0/0, ::/0</c>.
+    /// <para>
+    /// By default the connection is <b>initiator-only</b> (it never answers an inbound type-1, exactly as a WireGuard
+    /// client does against a server). When <c>acceptInbound</c> is set, it also runs the <b>responder</b> half: an
+    /// inbound type-1 from a configured peer is met with a type-2 response and brings that peer up — so two .NET
+    /// WireGuard connections can hand-shake each other (one side initiates, the other answers) without a server. This is
+    /// the path Tailscale uses to bring two directly-reachable .NET nodes' tunnel up. A peer is considered up as soon as
+    /// its <i>first</i> session completes from <b>either</b> direction (an initiation we sent that was answered, or an
+    /// inbound initiation we answered), so <c>EstablishAsync</c> no longer requires our own initiation to be answered.
+    /// </para>
     /// </summary>
     public sealed class WireGuardConnection : ReconnectingVpnConnection<WireGuardConnectionState>, IDisposable, IAsyncDisposable
     {
@@ -57,6 +65,7 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
         readonly WireGuardTimers _timers;
         readonly TunnelConfig _tunnelConfig;
         readonly WireGuardCryptoRouter _router;
+        readonly bool _acceptInbound;     // also run the responder half (answer an inbound type-1) — peer-to-peer mode
 
         // One UDP transport per distinct endpoint: peers that share an endpoint (e.g. all the peers without an explicit
         // [Peer] Endpoint, which fall back to the connection's host:port) share one socket — the single-listen-socket
@@ -77,7 +86,9 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
         /// <paramref name="timers"/> overrides the whitepaper timer thresholds (mainly for tests); <paramref name="clock"/>
         /// supplies the millisecond clock (default: the system tick clock) — tests inject a deterministic one.
         /// <paramref name="loggerFactory"/> receives diagnostic traces (handshake/rekey/reconnect/drop); null logs to a
-        /// no-op logger.
+        /// no-op logger. <paramref name="acceptInbound"/> additionally runs the <b>responder</b> half: an inbound type-1
+        /// from a configured peer is answered with a type-2 response (the default <c>false</c> is the proven
+        /// initiator-only client; set it for the peer-to-peer case where two .NET nodes hand-shake each other).
         /// </summary>
         public WireGuardConnection(string host, int port, WireGuardConfig config, IWireGuardTransportFactory transportFactory,
             WireGuardReconnectOptions? reconnectOptions = null,
@@ -85,7 +96,8 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
             IHostResolver? hostResolver = null,
             WireGuardTimers? timers = null,
             Func<long>? clock = null,
-            ILoggerFactory? loggerFactory = null)
+            ILoggerFactory? loggerFactory = null,
+            bool acceptInbound = false)
             : base(DriverNameConst, reconnectOptions ?? new WireGuardReconnectOptions(), clock, loggerFactory)
         {
             _host = host ?? throw new ArgumentNullException(nameof(host));
@@ -97,6 +109,7 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
             _hostResolver = hostResolver ?? DnsHostResolver.Default;
             _timers = timers ?? new WireGuardTimers(); // per-peer keepalive comes from each peer's config below
             _tunnelConfig = config.ToTunnelConfig();
+            _acceptInbound = acceptInbound;
             var allowed = new List<IReadOnlyList<string>>(_peerConfigs.Count);
             foreach (WireGuardPeer p in _peerConfigs) allowed.Add(p.AllowedIps);
             _router = WireGuardCryptoRouter.Build(allowed);
@@ -154,9 +167,19 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
             _peers = peers;
 
             // --- run an initiator handshake against every peer and start the timer loop before awaiting them ---
+            // In peer-to-peer (acceptInbound) mode a deterministic tie-break decides which side initiates so the two
+            // nodes do not *both* initiate (which would race two key generations and wedge the single-active-session
+            // data plane): the node with the larger static public key initiates, the other waits for the inbound type-1
+            // and answers it (OnInitiation). An ordinary initiator-only client always initiates (unchanged behaviour).
             long now = Now();
+            byte[] localPublic = BuildLocalStatic().PublicKey;
             foreach (Peer peer in peers)
             {
+                if (!ShouldInitiate(localPublic, peer.Config.PublicKey))
+                {
+                    Logger.LogHandshake(DriverName, $"peer {peer.Index}: responder-only (tie-break) — waiting for inbound type-1");
+                    continue;
+                }
                 Logger.LogHandshake(DriverName, $"Noise_IKpsk2 initiation sent to peer {peer.Index} (type-1 + mac1)");
                 Session session = StartHandshake(peer);
                 peer.Active = session;
@@ -167,18 +190,19 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
             // with a cookie-reply) is resent with a valid mac2 by the ResendHandshake path while we wait.
             StartTimerLoop();
 
-            // Every peer's handshake must complete within REKEY_ATTEMPT_TIME for the tunnel to be considered up.
+            // Every peer must come up within REKEY_ATTEMPT_TIME for the tunnel to be considered up. A peer is up once
+            // its first session completes from *either* direction: an initiation we sent that was answered (OnResponse),
+            // or — in acceptInbound (peer-to-peer) mode — an inbound initiation we answered (OnInitiation). Both paths
+            // call BindSession, which signals FirstUp; so we wait on the peer rather than on our own initiation session.
             foreach (Peer peer in peers)
             {
-                Session session = peer.Active!;
-                bool completed = await session.WaitForHandshakeAsync(_timers.RekeyAttemptTimeMs, cancellationToken).ConfigureAwait(false);
+                bool completed = await peer.WaitForFirstUpAsync(_timers.RekeyAttemptTimeMs, cancellationToken).ConfigureAwait(false);
                 if (!completed)
                 {
                     StopAttemptLoop();
-                    Logger.LogHandshakeFailed(DriverName, $"no type-2 response from peer {peer.Index} within REKEY_ATTEMPT_TIME");
-                    throw new VpnConnectionException($"WireGuard handshake timed out: no type-2 response from peer {peer.Index}.");
+                    Logger.LogHandshakeFailed(DriverName, $"peer {peer.Index} did not come up within REKEY_ATTEMPT_TIME");
+                    throw new VpnConnectionException($"WireGuard handshake timed out: peer {peer.Index} did not come up.");
                 }
-                BindSession(peer, session);
             }
 
             Facade.SetInner(channel);
@@ -237,6 +261,28 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
             return new WireGuardKeyPair { PrivateKey = (byte[])priv.Clone(), PublicKey = dh.DerivePublicValue(priv) };
         }
 
+        // Decide whether this side initiates the handshake to a peer. An initiator-only client (the default) always
+        // does. In peer-to-peer (acceptInbound) mode both sides could initiate at once, which would race two key
+        // generations against the single-active-session data plane, so a deterministic tie-break by static public key
+        // picks exactly one initiator: the larger key initiates, the smaller waits and answers the inbound type-1.
+        bool ShouldInitiate(byte[] localPublic, byte[] peerPublic)
+        {
+            if (!_acceptInbound) return true;
+            return CompareKeys(localPublic, peerPublic) > 0;
+        }
+
+        // Lexicographic (unsigned) comparison of two equal-length keys; ties cannot happen for distinct static keys.
+        static int CompareKeys(byte[] a, byte[] b)
+        {
+            int n = Math.Min(a.Length, b.Length);
+            for (int i = 0; i < n; i++)
+            {
+                int d = a[i] - b[i];
+                if (d != 0) return d;
+            }
+            return a.Length - b.Length;
+        }
+
         // Bind a completed handshake's transport to a fresh per-peer channel and install it behind the routing channel.
         void BindSession(Peer peer, Session session)
         {
@@ -252,6 +298,7 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
             session.Channel = channel;
             peer.State.OnHandshakeCompleted(now);
             _channel?.SetPeerChannel(peer.Index, channel);
+            peer.MarkFirstUp(); // unblocks EstablishAsync the first time this peer's channel binds (initiator or responder)
         }
 
         // Put a handshake datagram (initiation / resend) on this peer's own transport — its own endpoint. The send is
@@ -280,7 +327,57 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
             if (type == WireGuardConstants.MessageTypeResponse) { OnResponse(span); return; }
             if (type == WireGuardConstants.MessageTypeCookieReply) { OnCookieReply(span); return; }
             if (type == WireGuardConstants.MessageTypeTransportData) { OnTransportData(span); return; }
-            // type-1 initiation is the server's job (we are the initiator); drop anything else.
+            // type-1 initiation is answered only in peer-to-peer (acceptInbound) mode; an initiator-only client drops it.
+            if (type == WireGuardConstants.MessageTypeInitiation && _acceptInbound) { OnInitiation(span); return; }
+        }
+
+        // ---- responder path (peer-to-peer / acceptInbound only): answer an inbound type-1 and bring the peer up ----
+
+        // An inbound type-1 from a configured peer: demux it to the peer whose static public key verifies its mac1
+        // (WireGuard's own first-cut filter), run the responder half of the Noise_IKpsk2 handshake, send the type-2
+        // response, derive the transport keys and bind the peer's channel. The peer is then up exactly as if our own
+        // initiation had been answered — make-before-break: the new responder session replaces whatever the peer had.
+        void OnInitiation(ReadOnlySpan<byte> span)
+        {
+            var codec = new WireGuardMessageCodec();
+            if (!codec.TryDecodeInitiation(span, out WireGuardInitiationMessage init))
+            {
+                Logger.LogPacketDropped(DriverName, VpnDropReason.Malformed, "type-1 initiation failed to decode");
+                return;
+            }
+
+            Peer[]? peers = _peers;
+            if (peers is null) return;
+
+            foreach (Peer peer in peers)
+            {
+                // A fresh responder handshake keyed with our static + this peer's configured static public key.
+                var handshake = new WireGuardHandshake(BuildLocalStatic(), peer.Config.PublicKey, peer.Config.PresharedKey);
+                if (!handshake.VerifyIncomingMac1(span)) continue;          // not this peer (or forged) — try the next
+                if (!handshake.ConsumeInitiation(init, out _, out _))        // bad tag / for a different responder
+                {
+                    Logger.LogPacketDropped(DriverName, VpnDropReason.DecryptFailed, $"type-1 initiation from peer {peer.Index} failed AEAD");
+                    return;
+                }
+
+                uint localIndex = NextIndex();
+                WireGuardResponseMessage resp = handshake.CreateResponse(localIndex, init.SenderIndex);
+                byte[] wire = codec.EncodeResponse(resp);
+                handshake.StampOutgoingMacs(wire);
+                _ = SendToPeerAsync(peer, wire);
+
+                // The completed responder session becomes this peer's active session (it carries fresh keys). PeerIndex is
+                // the index the initiator advertised (we seal to it); LocalIndex is ours (datagrams must address it).
+                var session = new Session(handshake, localIndex) { PeerIndex = init.SenderIndex };
+                session.CompleteHandshake();
+                peer.Active = session;
+                peer.Pending = null;
+                BindSession(peer, session);
+                Logger.LogHandshake(DriverName, $"type-1 initiation from peer {peer.Index} answered (responder); transport keys derived");
+                return;
+            }
+
+            Logger.LogPacketDropped(DriverName, VpnDropReason.AuthFailed, "type-1 initiation matched no configured peer's mac1");
         }
 
         void OnResponse(ReadOnlySpan<byte> span)
@@ -317,13 +414,20 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
             targetSession.CompleteHandshake();
             Logger.LogHandshake(DriverName, $"type-2 response from peer {target.Index} consumed; transport keys derived");
 
-            // A rekey handshake (pending while the old session keeps running): swap that peer's channel make-before-break.
             if (target.Pending == targetSession)
             {
+                // A rekey handshake (pending while the old session keeps running): swap that peer's channel make-before-break.
                 target.Active = targetSession;
                 target.Pending = null;
                 BindSession(target, targetSession);
                 Logger.LogRekey(DriverName, $"peer {target.Index} channel swapped to new session (make-before-break)");
+            }
+            else
+            {
+                // The peer's *initial* initiation was answered: bind its channel and bring the peer up. (Previously the
+                // EstablishAsync loop bound the initial session after the await; the bind now lives here so a peer can
+                // also come up via the responder path — see OnInitiation.)
+                BindSession(target, targetSession);
             }
         }
 
@@ -496,6 +600,11 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
         /// <see cref="Pending"/> that replaces <see cref="Active"/> once its handshake completes.</summary>
         sealed class Peer
         {
+            // Completed the first time this peer's channel binds, from either direction (an answered initiation we sent,
+            // or an inbound initiation we answered). EstablishAsync awaits it instead of our own initiation's response,
+            // so the peer-to-peer case (where the other side answers *our* initiation, or we answer *theirs*) comes up.
+            readonly TaskCompletionSource<bool> _firstUp = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
             public Peer(int index, WireGuardPeer config, WireGuardPeerState state, IDatagramTransport transport)
             {
                 Index = index;
@@ -510,6 +619,18 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
             public IDatagramTransport Transport { get; } // the UDP socket for this peer's endpoint (shared with peers on the same endpoint)
             public Session? Active { get; set; }    // the live session feeding this peer's channel
             public Session? Pending { get; set; }   // a make-before-break rekey handshake in flight (no transport yet)
+
+            /// <summary>Signals that this peer is up (idempotent — only the first bind matters).</summary>
+            public void MarkFirstUp() => _firstUp.TrySetResult(true);
+
+            /// <summary>Waits until the peer comes up, or the timeout/cancellation elapses (returns false then).</summary>
+            public async Task<bool> WaitForFirstUpAsync(long timeoutMs, CancellationToken cancellationToken)
+            {
+                using var timeout = new CancellationTokenSource(timeoutMs > 0 ? (int)Math.Min(timeoutMs, int.MaxValue) : -1);
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, cancellationToken);
+                using (linked.Token.Register(() => _firstUp.TrySetResult(false)))
+                    return await _firstUp.Task.ConfigureAwait(false);
+            }
         }
 
         /// <summary>One handshake/transport generation for one peer: the Noise state machine, the two session indices,
@@ -517,8 +638,6 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
         /// the first.</summary>
         sealed class Session
         {
-            readonly TaskCompletionSource<bool> _handshakeDone = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
             public Session(WireGuardHandshake handshake, uint localIndex)
             {
                 Handshake = handshake;
@@ -529,21 +648,12 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
             public uint LocalIndex { get; }
             public uint PeerIndex { get; set; }
             public WireGuardChannel? Channel { get; set; }
+
+            /// <summary>True once this session's handshake has completed (a response consumed, or a responder bind). Per-peer
+            /// readiness is signalled by <see cref="Peer.MarkFirstUp"/>; this flag only gates pending-handshake matching.</summary>
             public bool HandshakeDone { get; private set; }
 
-            public void CompleteHandshake()
-            {
-                HandshakeDone = true;
-                _handshakeDone.TrySetResult(true);
-            }
-
-            public async Task<bool> WaitForHandshakeAsync(long timeoutMs, CancellationToken cancellationToken)
-            {
-                using var timeout = new CancellationTokenSource(timeoutMs > 0 ? (int)Math.Min(timeoutMs, int.MaxValue) : -1);
-                using var linked = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, cancellationToken);
-                using (linked.Token.Register(() => _handshakeDone.TrySetResult(false)))
-                    return await _handshakeDone.Task.ConfigureAwait(false);
-            }
+            public void CompleteHandshake() => HandshakeDone = true;
         }
     }
 }
