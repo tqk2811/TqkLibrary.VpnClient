@@ -55,7 +55,10 @@ echo "[entrypoint] tạo user '$OC_USER' (ocpasswd plain)."
 # Build ocserv.conf theo biến môi trường.
 # ---------------------------------------------------------------------
 UDP_LINE="udp-port = 443"
-DTLS_LEGACY="dtls-legacy = true"
+# DTLS_LEGACY=false (mặc định) -> ocserv ưu tiên DTLS 1.2 PSK hiện đại (PSK-NEGOTIATE);
+# DTLS_LEGACY=true -> bật thêm legacy AnyConnect DTLS resumption (interop cũ).
+DTLS_LEGACY_VAL="${DTLS_LEGACY:-false}"
+DTLS_LEGACY="dtls-legacy = $DTLS_LEGACY_VAL"
 if [ "$DTLS" != "1" ]; then
     # Tắt DTLS: không mở udp-port ⇒ server không quảng bá X-DTLS-* ⇒ client TLS-only.
     UDP_LINE="# udp-port disabled (DTLS off)"
