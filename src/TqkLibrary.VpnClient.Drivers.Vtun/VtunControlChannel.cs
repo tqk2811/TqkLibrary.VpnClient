@@ -4,6 +4,7 @@ using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Vtun.Auth;
 using TqkLibrary.VpnClient.Vtun.Wire;
 using TqkLibrary.VpnClient.Vtun.Wire.Enums;
+using TqkLibrary.VpnClient.Vtun.Wire.Interfaces;
 
 namespace TqkLibrary.VpnClient.Drivers.Vtun
 {
@@ -26,8 +27,19 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun
             _stream = stream ?? throw new ArgumentNullException(nameof(stream));
         }
 
+        /// <summary>
+        /// The data-plane transform applied to each data frame's payload — set once after the handshake names the cipher
+        /// (<c>null</c> = <c>encrypt no</c>, the payload is the bare tunnelled packet). Installed by the driver from the
+        /// server-selected <see cref="VtunCipher"/>. Affects only data frames; control/auth framing is never transformed.
+        /// </summary>
+        public IVtunFrameTransform? DataTransform { get; set; }
+
         /// <summary>The host flags the server returned in <c>OK FLAGS:</c> (valid after <see cref="AuthenticateAsync"/>).</summary>
         public VtunHostFlags ServerFlags { get; private set; }
+
+        /// <summary>The data-plane cipher id from the <c>E&lt;n&gt;</c> token (valid after <see cref="AuthenticateAsync"/>;
+        /// <c>0</c> when the server selected no encryption or the legacy bare-<c>E</c> token).</summary>
+        public int ServerCipherId { get; private set; }
 
         /// <summary>
         /// Runs the vtun client authentication against the server (vtun's <c>auth_client</c>): wait for the
@@ -58,10 +70,11 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun
             // 5) Flags / error — "OK FLAGS: <...>" on success, "ERR" on a bad password / unknown host / lock denied.
             string flagsLine = await ReadMessageAsync(cancellationToken).ConfigureAwait(false);
             if (!flagsLine.StartsWith("OK", StringComparison.Ordinal) ||
-                !VtunHostFlagsCodec.TryParse(flagsLine, out VtunHostFlags flags, out _, out _, out _))
+                !VtunHostFlagsCodec.TryParse(flagsLine, out VtunHostFlags flags, out _, out int cipher, out _))
                 throw new VpnAuthenticationException($"vtun server rejected authentication (got '{flagsLine}').");
 
             ServerFlags = flags;
+            ServerCipherId = cipher;
             return flags;
         }
 
@@ -92,7 +105,9 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun
             VtunFrameHeader decoded = VtunFrameCodec.DecodeHeader(header);
             if (decoded.Type == VtunFrameType.Data && decoded.Length > 0)
             {
-                LastPayload = await ReadExactAsync(decoded.Length, cancellationToken).ConfigureAwait(false);
+                byte[] frame = await ReadExactAsync(decoded.Length, cancellationToken).ConfigureAwait(false);
+                // Decrypt the data-frame payload when a cipher is in effect (a bad-pad frame decodes to empty → dropped).
+                LastPayload = DataTransform is null ? frame : DataTransform.Decrypt(frame);
             }
             else
             {
@@ -104,10 +119,14 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun
         /// <summary>The payload of the most recent <see cref="ReadFrameAsync"/> data frame (empty for control frames).</summary>
         public byte[] LastPayload { get; private set; } = Array.Empty<byte>();
 
-        /// <summary>Writes one data frame (2-byte length header + <paramref name="payload"/>).</summary>
+        /// <summary>
+        /// Writes one data frame (2-byte length header + payload). When a <see cref="DataTransform"/> is installed the
+        /// payload is encrypted first, so the framed length is the ciphertext length.
+        /// </summary>
         public ValueTask WriteDataFrameAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken = default)
         {
-            byte[] frame = VtunFrameCodec.EncodeData(payload.Span);
+            ReadOnlySpan<byte> body = DataTransform is null ? payload.Span : DataTransform.Encrypt(payload.Span);
+            byte[] frame = VtunFrameCodec.EncodeData(body);
             return _stream.WriteAsync(frame, cancellationToken);
         }
 

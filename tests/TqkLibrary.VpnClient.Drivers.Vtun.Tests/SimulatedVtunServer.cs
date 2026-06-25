@@ -2,6 +2,7 @@ using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Vtun.Auth;
 using TqkLibrary.VpnClient.Vtun.Wire;
 using TqkLibrary.VpnClient.Vtun.Wire.Enums;
+using TqkLibrary.VpnClient.Vtun.Wire.Interfaces;
 
 namespace TqkLibrary.VpnClient.Drivers.Vtun.Tests
 {
@@ -18,6 +19,8 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun.Tests
         readonly IByteStreamTransport _stream;
         readonly string _password;
         readonly VtunHostFlags _flags;
+        readonly int _cipherId;
+        readonly IVtunFrameTransform? _transform; // server-side data-plane transform when 'encrypt' is announced
         readonly Queue<byte> _inbound = new();
         readonly byte[] _readBuffer = new byte[4096];
 
@@ -28,11 +31,14 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun.Tests
         public bool Authenticated { get; private set; }
 
         public SimulatedVtunServer(IByteStreamTransport serverSide, string password,
-            VtunHostFlags flags = VtunHostFlags.Tcp | VtunHostFlags.Tun)
+            VtunHostFlags flags = VtunHostFlags.Tcp | VtunHostFlags.Tun, int cipherId = 0)
         {
             _stream = serverSide;
             _password = password;
             _flags = flags;
+            _cipherId = cipherId;
+            if ((flags & VtunHostFlags.Encrypt) != 0)
+                _transform = VtunFrameTransformFactory.TryCreate(VtunFrameTransformFactory.FromCipherId(cipherId), password);
             new Random(1234).NextBytes(Challenge); // deterministic for the test (real vtund uses RAND_bytes)
         }
 
@@ -70,8 +76,8 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun.Tests
             if (!recovered.AsSpan().SequenceEqual(Challenge)) { await WriteMessageAsync("ERR", cancellationToken).ConfigureAwait(false); return; }
 
             Authenticated = true;
-            // 5) send flags
-            await WriteMessageAsync($"OK FLAGS: {VtunHostFlagsCodec.Encode(_flags)}", cancellationToken).ConfigureAwait(false);
+            // 5) send flags (with the cipher id in the E<n> token when encryption is announced)
+            await WriteMessageAsync($"OK FLAGS: {VtunHostFlagsCodec.Encode(_flags, cipher: _cipherId)}", cancellationToken).ConfigureAwait(false);
         }
 
         async Task DataLoopAsync(CancellationToken cancellationToken)
@@ -83,11 +89,14 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun.Tests
                 switch (decoded.Type)
                 {
                     case VtunFrameType.Data:
-                        byte[] payload = decoded.Length > 0
+                        byte[] frame = decoded.Length > 0
                             ? await ReadExactAsync(decoded.Length, cancellationToken).ConfigureAwait(false)
                             : Array.Empty<byte>();
-                        // Reflect the data frame back so the client sees its packet return.
-                        await _stream.WriteAsync(VtunFrameCodec.EncodeData(payload), cancellationToken).ConfigureAwait(false);
+                        // Decrypt → re-encrypt so the reflected frame is independently transformed (matching real vtund,
+                        // which decrypts inbound and re-encrypts outbound rather than echoing ciphertext verbatim).
+                        byte[] plain = _transform is null ? frame : _transform.Decrypt(frame);
+                        byte[] outbound = _transform is null ? plain : _transform.Encrypt(plain);
+                        await _stream.WriteAsync(VtunFrameCodec.EncodeData(outbound), cancellationToken).ConfigureAwait(false);
                         break;
                     case VtunFrameType.EchoRequest:
                         await _stream.WriteAsync(VtunFrameCodec.EncodeControl(VtunFrameType.EchoReply), cancellationToken).ConfigureAwait(false);

@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text;
 using TqkLibrary.VpnClient.Crypto;
 using TqkLibrary.VpnClient.Vtun.Wire;
@@ -103,12 +102,8 @@ namespace TqkLibrary.VpnClient.Vtun.Auth
             return result;
         }
 
-        // vtun: BF_set_key(&key, 16, MD5(pwd, strlen(pwd), NULL)) — the Blowfish key is the raw 16-byte MD5 of the password.
-        static byte[] DeriveKey(string password)
-        {
-            byte[] pwdBytes = Encoding.ASCII.GetBytes(password ?? string.Empty);
-            using var md5 = MD5.Create();
-            return md5.ComputeHash(pwdBytes);
-        }
+        // vtun: BF_set_key(&key, 16, MD5(pwd, strlen(pwd), NULL)) — the Blowfish key is the raw 16-byte MD5 of the
+        // password. Shared with the data-plane encryptor via VtunKeyDerivation (the same MD5(password) key material).
+        static byte[] DeriveKey(string password) => VtunKeyDerivation.DeriveKey16(password);
     }
 }

@@ -13,6 +13,7 @@ using TqkLibrary.VpnClient.Drivers.Vtun.Enums;
 using TqkLibrary.VpnClient.Drivers.Vtun.Transport;
 using TqkLibrary.VpnClient.Vtun.Wire;
 using TqkLibrary.VpnClient.Vtun.Wire.Enums;
+using TqkLibrary.VpnClient.Vtun.Wire.Interfaces;
 
 namespace TqkLibrary.VpnClient.Drivers.Vtun
 {
@@ -127,9 +128,22 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun
                     $"vtun server selected an unsupported link type ({flags & VtunHostFlags.TypeMask}); this driver supports 'type tun' only.");
             if ((flags & VtunHostFlags.ProtocolMask) == VtunHostFlags.Udp)
                 throw new VpnConnectionException("vtun server selected 'proto udp'; this driver supports 'proto tcp' only.");
-            if ((flags & (VtunHostFlags.Encrypt | VtunHostFlags.Zlib | VtunHostFlags.Lzo)) != 0)
+            if ((flags & (VtunHostFlags.Zlib | VtunHostFlags.Lzo)) != 0)
                 throw new VpnConnectionException(
-                    $"vtun server enabled an unsupported feature ({flags & (VtunHostFlags.Encrypt | VtunHostFlags.Zlib | VtunHostFlags.Lzo)}); this driver supports 'encrypt no' + 'compress no' only.");
+                    $"vtun server enabled an unsupported feature ({flags & (VtunHostFlags.Zlib | VtunHostFlags.Lzo)}); this driver supports 'compress no' only.");
+
+            // 2b) Data-plane encryption: when the server selected 'encrypt', resolve and install the matching transform.
+            //     The default cipher (Blowfish-128-ECB / legacy bare-'E') is supported; any other id is named in the error.
+            if ((flags & VtunHostFlags.Encrypt) != 0)
+            {
+                VtunCipher serverCipher = VtunFrameTransformFactory.FromCipherId(control.ServerCipherId);
+                IVtunFrameTransform? transform = VtunFrameTransformFactory.TryCreate(serverCipher, _config.Password);
+                if (transform is null)
+                    throw new VpnConnectionException(
+                        $"vtun server selected an unsupported data-plane cipher ({serverCipher}); this driver supports Blowfish-128-ECB ('encrypt yes' / legacy 'E') only.");
+                control.DataTransform = transform;
+                Logger.LogHandshake(DriverName, $"data-plane encryption enabled: {serverCipher}");
+            }
 
             // 3) Bind the L3 packet channel behind the stable facade.
             long now = Now();
