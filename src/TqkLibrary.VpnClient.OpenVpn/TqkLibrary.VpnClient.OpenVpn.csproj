@@ -9,4 +9,11 @@
     <ProjectReference Include="..\TqkLibrary.VpnClient.Crypto\TqkLibrary.VpnClient.Crypto.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- BouncyCastle TLS (Org.BouncyCastle.Tls.*) backs the optional tls-ekm control channel: it exposes the RFC 5705
+         keying-material exporter the BCL SslStream lacks on netstandard2.0/net8.0. Crypto already pulls in the package
+         transitively, but the TLS types need a direct reference. The default SslStream control channel is unaffected. -->
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.4.0" />
+  </ItemGroup>
+
 </Project>

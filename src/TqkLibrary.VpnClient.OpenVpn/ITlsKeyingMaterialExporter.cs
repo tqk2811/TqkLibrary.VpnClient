@@ -9,16 +9,16 @@ namespace TqkLibrary.VpnClient.OpenVpn
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Scaffold only (roadmap F.5).</b> This is an unimplemented seam. The default TLS engine on the control channel is
+    /// <b>Realized (roadmap F.5).</b> The default TLS engine on the control channel is
     /// <see cref="System.Net.Security.SslStream"/>, which <b>does not</b> expose an RFC 5705 exporter on
-    /// <c>netstandard2.0</c> or <c>net8.0</c>: <c>SslStream.ExportKeyingMaterial(...)</c> was only added in <b>.NET 9</b>
-    /// (verified by reflection — net8 <see cref="System.Net.Security.SslStream"/> has no <c>Export*</c>/<c>Keying</c> member).
+    /// <c>netstandard2.0</c> or <c>net8.0</c> (<c>SslStream.ExportKeyingMaterial(...)</c> was only added in <b>.NET 9</b>),
+    /// so the implementation routes the control-channel TLS through <b>BouncyCastle TLS</b>
+    /// (<see cref="OpenVpnBouncyCastleControlTls"/>, which wraps <c>Org.BouncyCastle.Tls.TlsClientProtocol</c> over the
+    /// in-memory <see cref="OpenVpnTlsBridgeStream"/> and runs <c>TlsContext.ExportKeyingMaterial</c>).
     /// </para>
     /// <para>
-    /// Until the project either targets .NET 9+ or routes the control-channel TLS through <b>BouncyCastle TLS</b>
-    /// (<c>Org.BouncyCastle.Tls.TlsContext.ExportKeyingMaterial</c>), <c>tls-ekm</c> stays unimplemented and the client
-    /// keeps using key-method-2 (the legacy PRF derivation). Wiring an implementation requires a real TLS handshake under
-    /// test, which is out of scope for the offline F.5a slice — hence this contract is declared but not yet realized.
+    /// This is opt-in: the control channel selects the BouncyCastle engine only when <c>key-derivation tls-ekm</c> is
+    /// requested. Without it the client keeps the live-validated key-method-2 PRF path over <see cref="SslStream"/>.
     /// </para>
     /// </remarks>
     public interface ITlsKeyingMaterialExporter

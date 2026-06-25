@@ -32,6 +32,7 @@ namespace TqkLibrary.VpnClient.OpenVpn
         readonly IOpenVpnControlWrap? _wrap;
         readonly Func<long> _clock;
         readonly byte _keyId;
+        readonly OpenVpnKeyDerivationMode _keyDerivation;
         readonly ulong _localSessionId;
         readonly OpenVpnReliableSendWindow _sendWindow;
         readonly OpenVpnReliableReceiveWindow _recvWindow;
@@ -42,7 +43,8 @@ namespace TqkLibrary.VpnClient.OpenVpn
 
         System.Threading.Timer? _timer;
         ulong _remoteSessionId;
-        SslStream? _ssl;
+        SslStream? _ssl;                                   // key-derivation tls1-prf (default): the BCL TLS engine
+        OpenVpnBouncyCastleControlTls? _bcTls;             // key-derivation tls-ekm (opt-in): the BouncyCastle TLS engine (exposes the RFC 5705 exporter)
         bool _disposed;
 
         /// <summary>
@@ -55,13 +57,15 @@ namespace TqkLibrary.VpnClient.OpenVpn
         /// deterministic one.
         /// </summary>
         public OpenVpnControlChannel(IOpenVpnTransport transport, byte keyId = 0,
-            OpenVpnReliabilityOptions? options = null, IOpenVpnControlWrap? controlWrap = null, Func<long>? clock = null)
+            OpenVpnReliabilityOptions? options = null, IOpenVpnControlWrap? controlWrap = null, Func<long>? clock = null,
+            OpenVpnKeyDerivationMode keyDerivation = OpenVpnKeyDerivationMode.Tls1Prf)
         {
             _transport = transport ?? throw new ArgumentNullException(nameof(transport));
             _options = options ?? new OpenVpnReliabilityOptions();
             _wrap = controlWrap;
             _clock = clock ?? DefaultClock;
             _keyId = keyId;
+            _keyDerivation = keyDerivation;
             _sendWindow = new OpenVpnReliableSendWindow(_options);
             _recvWindow = new OpenVpnReliableReceiveWindow(_options);
             _windowSlots = new SemaphoreSlim(_options.WindowSize, _options.WindowSize);
@@ -79,8 +83,34 @@ namespace TqkLibrary.VpnClient.OpenVpn
         /// <summary>The key generation id this channel tags its control packets with.</summary>
         public byte KeyId => _keyId;
 
-        /// <summary>The authenticated TLS pipe, valid after <see cref="ConnectAsync"/> completes.</summary>
-        public SslStream TlsStream => _ssl ?? throw new InvalidOperationException("The control channel TLS is not established yet.");
+        /// <summary>The data-channel key-derivation mode this channel runs (tls1-prf default, or tls-ekm via BouncyCastle).</summary>
+        public OpenVpnKeyDerivationMode KeyDerivation => _keyDerivation;
+
+        /// <summary>
+        /// The authenticated TLS pipe (the BCL <see cref="SslStream"/>), valid after <see cref="ConnectAsync"/> completes.
+        /// Only available in the default tls1-prf mode; in tls-ekm mode the BouncyCastle engine drives TLS — use
+        /// <see cref="PlaintextStream"/> for the application-data pipe and <see cref="KeyingMaterialExporter"/> for the
+        /// RFC 5705 exporter.
+        /// </summary>
+        public SslStream TlsStream => _ssl ?? throw new InvalidOperationException(
+            _bcTls != null
+                ? "This control channel runs tls-ekm over BouncyCastle (no SslStream); use PlaintextStream."
+                : "The control channel TLS is not established yet.");
+
+        /// <summary>
+        /// The decrypted application-data pipe the key-method-2 negotiation + PUSH exchange run over, regardless of TLS
+        /// engine (the <see cref="SslStream"/> in tls1-prf mode, the BouncyCastle plaintext stream in tls-ekm mode). Valid
+        /// after <see cref="ConnectAsync"/> completes.
+        /// </summary>
+        public Stream PlaintextStream => (Stream?)_ssl ?? _bcTls?.PlaintextStream
+            ?? throw new InvalidOperationException("The control channel TLS is not established yet.");
+
+        /// <summary>
+        /// The RFC 5705 keying-material exporter for the finished control-channel TLS session — non-null only in tls-ekm
+        /// mode (the BouncyCastle engine). The data-channel keys are exported from it over the label
+        /// <c>"EXPORTER-OpenVPN-datakeys"</c>; null in the default tls1-prf mode (the BCL SslStream exposes no exporter).
+        /// </summary>
+        public ITlsKeyingMaterialExporter? KeyingMaterialExporter => _bcTls;
 
         /// <summary>The server certificate captured during the TLS handshake (null until/unless one was presented).</summary>
         public X509Certificate2? RemoteCertificate { get; private set; }
@@ -94,13 +124,21 @@ namespace TqkLibrary.VpnClient.OpenVpn
 
         /// <summary>
         /// Runs the reset exchange then the TLS client handshake. <paramref name="targetHost"/> is the TLS SNI/target;
-        /// <paramref name="clientCertificates"/> authenticate the client (OpenVPN's cert auth) when supplied;
-        /// <paramref name="serverCertificateValidation"/> validates the server certificate (null ⇒ accept any — the
-        /// driver supplies real validation later). Throws if cancelled.
+        /// <paramref name="clientCertificates"/> authenticate the client (OpenVPN's cert auth) on the default
+        /// <see cref="SslStream"/> path; <paramref name="serverCertificateValidation"/> validates the server certificate
+        /// (null ⇒ accept any — the driver supplies real validation later).
+        /// <para>
+        /// In tls-ekm mode (<see cref="OpenVpnKeyDerivationMode.TlsEkm"/>) the handshake runs over BouncyCastle instead of
+        /// <see cref="SslStream"/> so the RFC 5705 exporter is available; client-certificate auth then comes from
+        /// <paramref name="clientCertPem"/> + <paramref name="clientKeyPem"/> (PEM), since BouncyCastle builds the
+        /// credential from PEM directly. Throws if cancelled.
+        /// </para>
         /// </summary>
         public async Task ConnectAsync(string targetHost,
             X509CertificateCollection? clientCertificates = null,
             RemoteCertificateValidationCallback? serverCertificateValidation = null,
+            string? clientCertPem = null,
+            string? clientKeyPem = null,
             CancellationToken cancellationToken = default)
         {
             // Start the retransmit/ack pump: idle ticks are cheap (nothing due, no pending acks).
@@ -113,6 +151,16 @@ namespace TqkLibrary.VpnClient.OpenVpn
 
             using (cancellationToken.Register(() => _resetReceived.TrySetCanceled()))
                 await _resetReceived.Task.ConfigureAwait(false);
+
+            if (_keyDerivation == OpenVpnKeyDerivationMode.TlsEkm)
+            {
+                // tls-ekm: BouncyCastle TLS over the same in-memory bridge — exposes the RFC 5705 exporter the SslStream lacks.
+                var bcTls = new OpenVpnBouncyCastleControlTls(_bridge, targetHost, clientCertPem, clientKeyPem, serverCertificateValidation);
+                _bcTls = bcTls;
+                await bcTls.ConnectAsync(cancellationToken).ConfigureAwait(false);
+                RemoteCertificate = bcTls.RemoteCertificate != null ? new X509Certificate2(bcTls.RemoteCertificate) : null;
+                return;
+            }
 
             var ssl = new SslStream(_bridge, leaveInnerStreamOpen: false, (sender, cert, chain, errors) =>
             {
@@ -149,10 +197,16 @@ namespace TqkLibrary.VpnClient.OpenVpn
         public async Task<OpenVpnKeyMaterial> NegotiateKeyMaterialAsync(string optionsString,
             string? username = null, string? password = null, string? peerInfo = null, CancellationToken cancellationToken = default)
         {
-            var negotiation = new OpenVpnKeyNegotiation(TlsStream, LocalSessionId, RemoteSessionId);
+            var negotiation = new OpenVpnKeyNegotiation(PlaintextStream, LocalSessionId, RemoteSessionId);
             OpenVpnKeyMaterial material = await negotiation
                 .NegotiateAsync(optionsString, username, password, peerInfo, cancellationToken).ConfigureAwait(false);
             ServerKeyMethodOptions = negotiation.ServerOptions;
+            // tls-ekm: the data-channel keys come from the RFC 5705 exporter, not the key-method-2 PRF. The control-channel
+            // randoms are still exchanged above (the server expects the key-method-2 message + OCC/peer-info), but the
+            // derived key2 is replaced with the exporter output. Slicing is identical (same {cipher[64]|hmac[64]}×2 layout).
+            if (_keyDerivation == OpenVpnKeyDerivationMode.TlsEkm)
+                return OpenVpnKeyMaterial.FromTlsExporter(KeyingMaterialExporter
+                    ?? throw new InvalidOperationException("tls-ekm requires a BouncyCastle control channel with an RFC 5705 exporter."));
             return material;
         }
 
@@ -163,13 +217,14 @@ namespace TqkLibrary.VpnClient.OpenVpn
         /// </summary>
         public async Task<OpenVpnPushReply> RequestConfigAsync(CancellationToken cancellationToken = default)
         {
+            Stream tls = PlaintextStream;
             byte[] request = OpenVpnControlMessage.Build("PUSH_REQUEST");
-            await TlsStream.WriteAsync(request, 0, request.Length, cancellationToken).ConfigureAwait(false);
-            await TlsStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            await tls.WriteAsync(request, 0, request.Length, cancellationToken).ConfigureAwait(false);
+            await tls.FlushAsync(cancellationToken).ConfigureAwait(false);
 
             while (true)
             {
-                string message = await OpenVpnControlMessage.ReadAsync(TlsStream, cancellationToken).ConfigureAwait(false);
+                string message = await OpenVpnControlMessage.ReadAsync(tls, cancellationToken).ConfigureAwait(false);
                 if (OpenVpnPushReply.TryParse(message, out OpenVpnPushReply reply)) return reply;
                 if (message.StartsWith("AUTH_FAILED", StringComparison.Ordinal))
                     throw new InvalidOperationException("OpenVPN server rejected the session: " + message);
@@ -185,13 +240,13 @@ namespace TqkLibrary.VpnClient.OpenVpn
         /// </summary>
         public async Task SendExitNotifyAsync(CancellationToken cancellationToken = default)
         {
-            SslStream? ssl = _ssl;
-            if (ssl is null) return;
+            Stream? tls = (Stream?)_ssl ?? _bcTls?.PlaintextStream;
+            if (tls is null) return;
             try
             {
                 byte[] message = OpenVpnControlMessage.Build("EXIT_NOTIFY");
-                await ssl.WriteAsync(message, 0, message.Length, cancellationToken).ConfigureAwait(false);
-                await ssl.FlushAsync(cancellationToken).ConfigureAwait(false);
+                await tls.WriteAsync(message, 0, message.Length, cancellationToken).ConfigureAwait(false);
+                await tls.FlushAsync(cancellationToken).ConfigureAwait(false);
             }
             catch { /* best-effort: the link may already be gone — teardown proceeds regardless */ }
         }
@@ -311,6 +366,7 @@ namespace TqkLibrary.VpnClient.OpenVpn
             _transport.DatagramReceived -= OnDatagram;
             _timer?.Dispose();
             _ssl?.Dispose();
+            _bcTls?.Dispose();
             _bridge.CompleteInbound();
             RemoteCertificate?.Dispose();
             _windowSlots.Dispose();
