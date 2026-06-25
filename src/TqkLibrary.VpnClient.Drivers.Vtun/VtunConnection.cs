@@ -11,6 +11,7 @@ using TqkLibrary.VpnClient.Drivers.Vtun.Config;
 using TqkLibrary.VpnClient.Drivers.Vtun.DataChannel;
 using TqkLibrary.VpnClient.Drivers.Vtun.Enums;
 using TqkLibrary.VpnClient.Drivers.Vtun.Transport;
+using TqkLibrary.VpnClient.Ethernet;
 using TqkLibrary.VpnClient.Vtun.Wire;
 using TqkLibrary.VpnClient.Vtun.Wire.Enums;
 using TqkLibrary.VpnClient.Vtun.Wire.Interfaces;
@@ -46,7 +47,11 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun
 
         IByteStreamTransport? _stream;
         VtunControlChannel? _control;
-        VtunPacketChannel? _channel;
+        VtunPacketChannel? _channel;                 // tun mode (L3)
+        VtunEthernetChannel? _etherChannel;          // tap mode (L2)
+        ArpResolver? _arp;                           // tap mode: ARP/NDISC for the L2<->L3 bridge
+        VirtualHost? _virtualHost;                   // tap mode: the Ethernet→IP bridge bound to the facade
+        Action<byte[]>? _deliverData;                // routes an inbound data-frame payload to the active channel
         CancellationTokenSource? _loopCts;
         Task? _receiveTask;
         System.Threading.Timer? _keepaliveTimer;
@@ -121,11 +126,12 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun
             VtunHostFlags flags = await control.AuthenticateAsync(_config.HostName, _config.Password, cancellationToken).ConfigureAwait(false);
             Logger.LogHandshake(DriverName, $"authenticated; server flags = {flags}");
 
-            // 2) The driver carries bare IP packets — require a tun link over TCP. (tap/L2 is a stretch goal; ether/pipe/tty
-            //    are unsupported here.) The server dictates these, so a mismatch is a server-config problem.
-            if ((flags & VtunHostFlags.TypeMask) != VtunHostFlags.Tun)
+            // 2) The driver supports 'type tun' (L3 bare IP) and 'type ether' (L2 tap, bridged to L3 via the Ethernet
+            //    fabric); pipe/tty are unsupported. The server dictates these, so a mismatch is a server-config problem.
+            VtunHostFlags linkType = flags & VtunHostFlags.TypeMask;
+            if (linkType != VtunHostFlags.Tun && linkType != VtunHostFlags.Ether)
                 throw new VpnConnectionException(
-                    $"vtun server selected an unsupported link type ({flags & VtunHostFlags.TypeMask}); this driver supports 'type tun' only.");
+                    $"vtun server selected an unsupported link type ({linkType}); this driver supports 'type tun' and 'type ether' only.");
             if ((flags & VtunHostFlags.ProtocolMask) == VtunHostFlags.Udp)
                 throw new VpnConnectionException("vtun server selected 'proto udp'; this driver supports 'proto tcp' only.");
             if ((flags & (VtunHostFlags.Zlib | VtunHostFlags.Lzo)) != 0)
@@ -145,17 +151,14 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun
                 Logger.LogHandshake(DriverName, $"data-plane encryption enabled: {serverCipher}");
             }
 
-            // 3) Bind the L3 packet channel behind the stable facade.
+            // 3) Bind the data plane behind the stable facade — tun (L3) or tap (L2 bridged to L3).
             long now = Now();
             _lastReceivedMs = now;
             _lastSentMs = now;
-            var channel = new VtunPacketChannel(
-                send: (packet, ct) => SendDataFrameAsync(packet, ct),
-                mtu: _config.Mtu,
-                onPacketSent: () => _lastSentMs = Now(),
-                onPacketReceived: () => _lastReceivedMs = Now());
-            _channel = channel;
-            Facade.SetInner(channel);
+            if (linkType == VtunHostFlags.Ether)
+                BindTapChannel();
+            else
+                BindTunChannel();
 
             _dataActive = true;
             MarkRunning();
@@ -167,6 +170,59 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun
 
             Logger.LogHandshakeCompleted(DriverName);
             MarkConnected();
+        }
+
+        // ---- data-plane binding (tun L3 vs tap L2) ----
+
+        // tun mode: the data frame payload IS a bare IP packet — bind the L3 channel straight to the facade.
+        void BindTunChannel()
+        {
+            var channel = new VtunPacketChannel(
+                send: (packet, ct) => SendDataFrameAsync(packet, ct),
+                mtu: _config.Mtu,
+                onPacketSent: () => _lastSentMs = Now(),
+                onPacketReceived: () => _lastReceivedMs = Now());
+            _channel = channel;
+            _deliverData = payload => channel.Deliver(payload);
+            Facade.SetInner(channel);
+        }
+
+        // tap mode: the data frame payload is a raw Ethernet frame — carry it on an L2 channel and bridge it to L3 via
+        // the userspace Ethernet fabric (ARP + VirtualHost), exactly like the n2n / SoftEther tap drivers.
+        void BindTapChannel()
+        {
+            MacAddress mac = ResolveMac();
+            var channel = new VtunEthernetChannel(
+                srcMac: mac.ToArray(),
+                send: (frame, ct) => SendDataFrameAsync(frame, ct),
+                mtu: _config.Mtu,
+                onFrameSent: () => _lastSentMs = Now(),
+                onFrameReceived: () => _lastReceivedMs = Now());
+            _etherChannel = channel;
+            _deliverData = payload => channel.Deliver(payload);
+
+            IPAddress overlay = _config.TunnelAddress ?? IPAddress.Any;
+            var arp = new ArpResolver(mac, overlay, channel);
+            _arp = arp;
+            var virtualHost = new VirtualHost(mac, channel, arp);
+            virtualHost.InboundNonIpFrame += arp.HandleInboundFrame; // ARP requests/replies arrive on the non-IP seam
+            _virtualHost = virtualHost;
+
+            _tunnelConfig.Mtu = virtualHost.Mtu; // link − 14: the bound stack clamps MSS for the Ethernet header
+            Facade.SetInner(virtualHost);
+        }
+
+        // The tap MAC: parsed from config, or a deterministic locally-administered MAC derived from the tunnel address.
+        MacAddress ResolveMac()
+        {
+            if (!string.IsNullOrEmpty(_config.MacAddress) && MacAddress.TryParse(_config.MacAddress, out MacAddress parsed))
+                return parsed;
+            // 02:00:xx:xx:xx:xx — locally-administered/unicast, low 4 octets from the tunnel address (stable per host).
+            byte[] octets = new byte[6];
+            octets[0] = 0x02;
+            byte[] addr = (_config.TunnelAddress ?? IPAddress.Loopback).GetAddressBytes();
+            for (int i = 0; i < 4 && i < addr.Length; i++) octets[2 + i] = addr[addr.Length - 4 + i];
+            return MacAddress.FromBytes(octets);
         }
 
         // ---- data plane ----
@@ -202,7 +258,7 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun
                     switch (header.Type)
                     {
                         case VtunFrameType.Data:
-                            _channel?.Deliver(control.LastPayload);
+                            _deliverData?.Invoke(control.LastPayload);
                             break;
                         case VtunFrameType.EchoRequest:
                             // Reply so the peer's keepalive sees us alive (vtun's lfd_linker behaviour).
@@ -284,12 +340,20 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun
             if (receive != null) { try { await receive.ConfigureAwait(false); } catch { } }
             loop?.Dispose();
 
+            VirtualHost? host = _virtualHost; _virtualHost = null;
+            if (host != null) { try { await host.DisposeAsync().ConfigureAwait(false); } catch { } }
+            ArpResolver? arp = _arp; _arp = null;
+            if (arp != null) { try { await arp.DisposeAsync().ConfigureAwait(false); } catch { } }
+            VtunEthernetChannel? ether = _etherChannel; _etherChannel = null;
+            if (ether != null) { try { await ether.DisposeAsync().ConfigureAwait(false); } catch { } }
+
             IByteStreamTransport? stream = _stream;
             _stream = null;
             if (stream != null) { try { await stream.DisposeAsync().ConfigureAwait(false); } catch { } }
 
             _control = null;
             _channel = null;
+            _deliverData = null;
         }
 
         /// <inheritdoc/>

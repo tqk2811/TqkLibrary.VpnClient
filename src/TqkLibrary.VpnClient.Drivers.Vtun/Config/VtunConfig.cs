@@ -33,6 +33,13 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun.Config
         /// <summary>The server's tunnel IP address (the inner gateway / ping target); used to add a host route.</summary>
         public IPAddress? PeerAddress { get; init; }
 
+        /// <summary>
+        /// This client's MAC address for <c>type ether</c> (tap) mode — the L2 identity the Ethernet fabric (ARP +
+        /// <c>VirtualHost</c>) uses. Ignored in tun mode. Format <c>aa:bb:cc:dd:ee:ff</c>; <c>null</c> ⇒ a deterministic
+        /// locally-administered MAC derived from <see cref="TunnelAddress"/>.
+        /// </summary>
+        public string? MacAddress { get; init; }
+
         /// <summary>DNS servers to use inside the tunnel; empty when none is configured.</summary>
         public IReadOnlyList<IPAddress> DnsServers { get; init; } = Array.Empty<IPAddress>();
 

@@ -141,13 +141,31 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun.Tests
         [Fact]
         public async Task Connect_UnsupportedFlags_ThrowsConnection()
         {
-            // The server announces tap (ether), which this tun-only driver rejects after a successful auth.
-            var (client, server, serverTask, cts) = Wire(Config(), "pass", VtunHostFlags.Tcp | VtunHostFlags.Ether);
+            // The server announces a pipe link, which this driver rejects after a successful auth (only tun/ether are supported).
+            var (client, server, serverTask, cts) = Wire(Config(), "pass", VtunHostFlags.Tcp | VtunHostFlags.Pipe);
             try
             {
                 using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                 await Assert.ThrowsAsync<VpnConnectionException>(() => client.ConnectAsync(connectCts.Token));
                 Assert.True(server.Authenticated); // auth succeeded; the link type is what was rejected
+            }
+            finally { cts.Cancel(); await client.DisposeAsync(); await serverTask; }
+        }
+
+        [Fact]
+        public async Task Connect_TapMode_BridgesEthernetToL3()
+        {
+            // Server announces 'type ether' (tap). The driver must bring up the L2 channel + ARP + VirtualHost bridge and
+            // reach Connected; the bound facade exposes a bare-IP L3 channel (the Ethernet header is invisible to the stack).
+            var (client, server, serverTask, cts) = Wire(Config(), "pass", VtunHostFlags.Tcp | VtunHostFlags.Ether);
+            try
+            {
+                using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                await client.ConnectAsync(connectCts.Token);
+                Assert.Equal(VtunConnectionState.Connected, client.State);
+                Assert.Equal(VtunHostFlags.Tcp | VtunHostFlags.Ether, client.ServerFlags);
+                // The facade presents an L3 (bare-IP) channel regardless of the L2 carrier.
+                Assert.Equal(Abstractions.Channels.Enums.LinkMedium.Ip, client.PacketChannel.Medium);
             }
             finally { cts.Cancel(); await client.DisposeAsync(); await serverTask; }
         }
