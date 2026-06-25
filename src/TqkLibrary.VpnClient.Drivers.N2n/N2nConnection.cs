@@ -334,9 +334,20 @@ namespace TqkLibrary.VpnClient.Drivers.N2n
         byte[] EncryptControl(byte[] datagram)
             => N2nPacketCodec.EncryptHeader(datagram, datagram.Length, _headerEnc, NextStamp());
 
-        // n2n header timestamp: microseconds since the Unix epoch (time_stamp()).
+        // n2n's header timestamp (time_stamp() in n2n.c) is NOT plain microseconds: it is "left-bound" —
+        // (seconds-since-epoch << 32) | (microseconds-within-second << 12) — so the supernode's anti-replay window
+        // (TIME_STAMP_FRAME = 16s = 16 << 32) and the previous-stamp ordering compare against this layout. Sending plain
+        // microseconds lands far outside the frame and the supernode drops the REGISTER_SUPER "due to time stamp error".
+        // The low 12 bits (counter/flags) stay zero; each datagram gets a fresh, increasing stamp, which satisfies the
+        // monotonic check.
         static readonly DateTime UnixEpoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        static ulong NextStamp() => (ulong)(DateTime.UtcNow - UnixEpoch).Ticks / 10UL;
+        static ulong NextStamp()
+        {
+            TimeSpan since = DateTime.UtcNow - UnixEpoch;
+            ulong seconds = (ulong)(since.Ticks / TimeSpan.TicksPerSecond);
+            ulong micros = (ulong)((since.Ticks % TimeSpan.TicksPerSecond) / 10); // 0..999999
+            return (seconds << 32) | (micros << 12);
+        }
 
         // ---- teardown ----
 
