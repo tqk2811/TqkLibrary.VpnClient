@@ -6,11 +6,13 @@ và **tái dùng nguyên data plane WireGuard** ([`Drivers.WireGuard`](../TqkLib
 Noise_IKpsk2 + transport type-4 + crypto-routing). Driver này chỉ thêm control plane sinh peer; **KHÔNG viết lại
 WireGuard**.
 
-> **Trạng thái:** **control plane VALIDATE LIVE FULL ✓** vs Headscale v0.29.1 (2026-06-24, lab
-> [`lab/tailscale`](../../lab/tailscale/README-vi.md)): login ts2021 → register (preauth) → netmap → build
-> WireGuardConfig → WireGuard data plane khởi động + gửi **handshake initiation 2 chiều** tới endpoint từ netmap.
-> **Data plane chưa hoàn tất handshake** (biên giới đã biết): [`WireGuardConnection`](../TqkLibrary.VpnClient.Drivers.WireGuard/WireGuardConnection.cs#L45)
-> **initiator-only** (không đáp type-1) + node tailscale thật cần **disco** (= future). Xem [lab](../../lab/tailscale/README-vi.md).
+> **Trạng thái:** **FULL-TUNNEL VALIDATE LIVE ICMP 2 chiều ✓** vs Headscale v0.29.1 (2026-06-25, lab
+> [`lab/tailscale`](../../lab/tailscale/README-vi.md)) giữa **2 node .NET**: login ts2021 → register (preauth) →
+> netmap → build WireGuardConfig → WireGuard data plane lên qua **responder role** (driver dựng `WireGuardConnection`
+> với `acceptInbound: true` — tie-break theo static pubkey: 1 node initiate type-1, node kia đáp type-2). tcpdump:
+> type-1 **148B** → type-2 **92B (responder)** → type-4 data **92B 2 chiều**; ICMP `100.64.0.1↔100.64.0.2` reply
+> RTT 0-8ms (89/89). **Còn future:** disco (interop node `tailscale` THẬT bọc magicsock) + DERP + netmap streaming
+> động. Xem [lab](../../lab/tailscale/README-vi.md).
 
 ## Vị trí kiến trúc
 
@@ -59,20 +61,25 @@ TqkLibrary.VpnClient.Drivers.Tailscale/
 1. [`TailscaleConnection.EstablishAsync`](TailscaleConnection.cs#L84): tạo [`ITailscaleControlClient`](../TqkLibrary.VpnClient.Tailscale/Control/ITailscaleControlClient.cs) (mặc định [adapter](TailscaleControlClientAdapter.cs) → `TailscaleControlClient` thật).
 2. `control.LoginAsync(preauthKey)` → [`MapResponse`](../TqkLibrary.VpnClient.Tailscale/Control/Messages/MapResponse.cs) (netmap: self + peers).
 3. [`NetmapToWireGuardConfig.Build`](../TqkLibrary.VpnClient.Tailscale/Netmap/NetmapToWireGuardConfig.cs#L42) → `WireGuardConfig` đa-peer; peer không có endpoint trực tiếp bị skip (DERP = future).
-4. tạo [`WireGuardConnection`](../TqkLibrary.VpnClient.Drivers.WireGuard/WireGuardConnection.cs#L45) (fixed `localPort` khớp endpoint quảng bá) + `ConnectAsync` → WG handshake tới peer.
+4. tạo [`WireGuardConnection`](../TqkLibrary.VpnClient.Drivers.WireGuard/WireGuardConnection.cs#L45) (fixed `localPort` khớp endpoint quảng bá, **`acceptInbound: true`** — mesh peer-to-peer) + `ConnectAsync` → WG handshake với peer (initiate hoặc respond theo tie-break static pubkey).
 5. `Facade.SetInner(wg.PacketChannel)` → `MarkConnected`. WireGuard con giữ auto-reconnect data-plane (đã proven).
 
 ## Trạng thái & ghi chú
 
-- **Data plane tái dùng nguyên**: KHÔNG viết lại WireGuard; control plane chỉ sinh `WireGuardConfig`. WireGuard con
-  giữ rekey/keepalive/auto-reconnect riêng (đã live-validated V.3).
-- **Biên giới data plane (live)**: WG handshake initiation **2 chiều OK** tới endpoint từ netmap, nhưng KHÔNG hoàn tất:
-  [`WireGuardConnection`](../TqkLibrary.VpnClient.Drivers.WireGuard/WireGuardConnection.cs#L45) initiator-only (không đáp
-  type-1 của peer) + node tailscale thật bọc WireGuard trong **disco** (cần disco ping/pong validate path). **disco +
-  DERP = future.**
+- **Data plane tái dùng nguyên + responder role**: KHÔNG viết lại WireGuard; control plane chỉ sinh `WireGuardConfig`
+  và dựng WireGuard con với `acceptInbound: true`. WireGuard con giữ rekey/keepalive/auto-reconnect riêng (đã
+  live-validated V.3) + nửa **responder** (đã có sẵn trong `WireGuardHandshake`, nay bật ở driver) để 2 node .NET tự
+  handshake nhau (xem [README Drivers.WireGuard](../TqkLibrary.VpnClient.Drivers.WireGuard/README-vi.md) — responder role).
+- **FULL-TUNNEL VALIDATE LIVE ✓**: 2 node .NET qua Headscale v0.29.1 — control register+netmap (cả 2 `online=true`,
+  overlay `100.64.0.1`/`.2`) → WireGuard responder role (type-1 148B → type-2 92B → data 92B 2 chiều, tcpdump) → ICMP
+  89/89 reply RTT 0-8ms (chiều ngược do `TcpIpStack` peer tự đáp echo). **Vận hành (rút từ live)**: `LoginAsync` đọc
+  netmap MỘT lần → lab pre-register mỗi node 1 lần (keys X25519 cố định) rồi chạy 2 node đồng thời.
 - **Endpoint advertisement (disco stand-in tối giản)**: `WireGuardLocalPort` (fixed) + `AdvertisedEndpoints` (ip:port)
-  quảng bá vào MapRequest để peer thấy endpoint client — đủ để peer-thật thấy ta trong netmap, nhưng vẫn cần disco.
+  quảng bá vào MapRequest để peer thấy endpoint client — đủ cho path trực tiếp trên bridge (lab), nhưng với node
+  `tailscale` THẬT vẫn cần **disco** (= future, cùng DERP relay + netmap streaming động).
 - **net5+ runtime**: control client cần HTTP/2 h2c. ns2.0 → adapter ném `PlatformNotSupported` (inject factory khác để
   test). Build cả 2 TFM (chỉ phần control runtime gated).
-- Test offline: [`Drivers.Tailscale.Tests`](../../tests/TqkLibrary.VpnClient.Drivers.Tailscale.Tests) — capabilities,
-  `Generate` 2 key, netmap no-usable-peer ném + login preauth + dispose, control error propagate (fake netmap).
+- Test offline: [`Drivers.Tailscale.Tests`](../../tests/TqkLibrary.VpnClient.Drivers.Tailscale.Tests) (5) — capabilities,
+  `Generate` 2 key, netmap no-usable-peer ném + login preauth + dispose, control error propagate (fake netmap), và
+  [`TailscaleTwoNodeTunnelTests`](../../tests/TqkLibrary.VpnClient.Drivers.Tailscale.Tests/TailscaleTwoNodeTunnelTests.cs)
+  **end-to-end 2 node** (mỗi node fake netmap có node kia → WireGuardConfig → responder role → IP round-trip 2 chiều).
