@@ -75,18 +75,19 @@ TqkLibrary.VpnClient.ZeroTier/
 | [`ZeroTierAddress`](Identity/Models/ZeroTierAddress.cs#L14) | địa chỉ node 40-bit — read/write 5B BE, parse 10-hex, `IsValid` (reserved-rules) |
 | [`ZeroTierIdentity`](Identity/Models/ZeroTierIdentity.cs#L12) | identity = address + pubkey 64B (Curve25519‖Ed25519) + privkey tùy chọn |
 | [`ZeroTierIdentityCodec`](Identity/ZeroTierIdentityCodec.cs#L20) | codec idtool-string + binary (round-trip public/private) |
-| [`ZeroTierAddressDerivation`](Identity/ZeroTierAddressDerivation.cs#L30) | memory-hard hash → digest 64B + address; hashcash `digest[0]<17` |
-| [`Vl1Header`](Vl1/Models/Vl1Header.cs#L20) | header VL1: packetId/dest/src 40-bit/cipher byte/MAC 8B/verb byte |
-| [`Vl1PacketCodec`](Vl1/Vl1PacketCodec.cs#L31) | seal/open Salsa20/12 + Poly1305 (tamper/MAC reject) |
+| [`ZeroTierAddressDerivation`](Identity/ZeroTierAddressDerivation.cs#L31) | memory-hard hash → digest 64B + address; hashcash `digest[0]<17` |
+| [`Vl1Header`](Vl1/Models/Vl1Header.cs#L21) | header VL1: packetId/dest/src 40-bit/cipher byte/MAC 8B/verb byte |
+| [`Vl1PacketCodec`](Vl1/Vl1PacketCodec.cs#L32) | seal/open Salsa20/12 + Poly1305 (tamper/MAC reject) |
 | [`Vl1KeyDerivation`](Vl1/Vl1KeyDerivation.cs#L16) | C25519 agreement → SHA-512 shared key (đối xứng 2 đầu) |
-| [`HelloMessageCodec`](Vl1/HelloMessageCodec.cs#L13) | codec body HELLO |
-| [`OkMessageCodec`](Vl1/OkMessageCodec.cs) | OK common header + OK(HELLO) (timestamp echo + physical InetAddress) |
-| [`InetAddressCodec`](Vl1/InetAddressCodec.cs) | ZeroTier InetAddress serialize (nil/v4/v6 + port BE) |
+| [`HelloMessageCodec`](Vl1/HelloMessageCodec.cs#L16) | codec body HELLO |
+| [`OkMessageCodec`](Vl1/OkMessageCodec.cs#L11) | OK common header + OK(HELLO) (timestamp echo + physical InetAddress) |
+| [`InetAddressCodec`](Vl1/InetAddressCodec.cs#L14) | ZeroTier InetAddress serialize (nil/v4/v6 + port BE) |
 | [`NetworkId`](Vl2/Models/NetworkId.cs#L10) | network-id 64-bit + controller-address split |
-| [`Vl2FrameCodec`](Vl2/Vl2FrameCodec.cs#L17) | codec FRAME body (no flags) + `DeriveMac` per-network |
-| [`Vl2ExtFrameCodec`](Vl2/Vl2ExtFrameCodec.cs) | codec EXT_FRAME (MAC tường minh + COM tùy chọn) |
-| [`ZeroTierDictionary`](Vl2/ZeroTierDictionary.cs) | dict key=value text escape (container network config + COM) |
-| [`NetworkConfigCodec`](Vl2/NetworkConfigCodec.cs) | NETWORK_CONFIG_REQUEST + decode config dict (assigned IP/routes/COM/mtu) |
+| [`Vl2FrameCodec`](Vl2/Vl2FrameCodec.cs#L13) | codec FRAME body (no flags) + `DeriveMac` per-network |
+| [`Vl2ExtFrameCodec`](Vl2/Vl2ExtFrameCodec.cs#L14) | codec EXT_FRAME (MAC tường minh + COM tùy chọn) |
+| [`ZeroTierDictionary`](Vl2/ZeroTierDictionary.cs#L14) | dict key=value text escape (container network config + COM) |
+| [`NetworkConfigCodec`](Vl2/NetworkConfigCodec.cs#L17) | NETWORK_CONFIG_REQUEST + decode config dict (assigned IP/routes/COM/mtu) |
+| [`NetworkCredentialsCodec`](Vl2/NetworkCredentialsCodec.cs#L15) | body NETWORK_CREDENTIALS (push COM-only chứng minh membership) |
 
 ## Bảng chuẩn / behavior ZeroTier (clean-room — đọc spec/prose, KHÔNG copy BSL source)
 
@@ -110,10 +111,10 @@ TqkLibrary.VpnClient.ZeroTier/
 
 ## Luồng seal/open VL1 (mangle key + Salsa20/12 + Poly1305)
 
-1. **Seal** [`Vl1PacketCodec.Seal`](Vl1/Vl1PacketCodec.cs#L40): ghi header clear (byte 18 `FFCCCHHH`) → `MangleKey`
+1. **Seal** [`Vl1PacketCodec.Seal`](Vl1/Vl1PacketCodec.cs#L47): ghi header clear (byte 18 `FFCCCHHH`) → `MangleKey`
    (shared key XOR header) → Salsa20/12 init (mangled key, nonce=packetId) → keystream block 0 = poly key (32B) →
    cipher 1: mã hóa `verb‖payload`; cipher 0 (HELLO): giữ nguyên → Poly1305(section) truncate 8B vào MAC `[19..27)`.
-2. **Open** [`Vl1PacketCodec.Open`](Vl1/Vl1PacketCodec.cs#L81): đọc header clear → cùng `MangleKey` + key-stream →
+2. **Open** [`Vl1PacketCodec.Open`](Vl1/Vl1PacketCodec.cs#L98): đọc header clear → cùng `MangleKey` + key-stream →
    tính lại MAC trên section, so khớp (fixed-time) **trước** khi giải mã (cipher 1) / trả verbatim (cipher 0).
 
 ## Trạng thái & ghi chú

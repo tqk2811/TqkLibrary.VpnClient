@@ -24,6 +24,7 @@ Project này hiện thực **IPsec ở tầng PROTOCOL** cho VPN client userspac
   - Không có PackageReference đặc thù (xem [TqkLibrary.VpnClient.Ipsec.csproj](TqkLibrary.VpnClient.Ipsec.csproj)).
 - **Được dùng bởi:**
   - [TqkLibrary.VpnClient.Drivers.L2tpIpsec](../TqkLibrary.VpnClient.Drivers.L2tpIpsec) — driver L2TP/IPsec dùng `Ike/V1` + `Esp/` + `Nat/`.
+  - [TqkLibrary.VpnClient.Drivers.CiscoIpsec](../TqkLibrary.VpnClient.Drivers.CiscoIpsec) — driver Cisco IPsec/EzVPN (V.12) dùng `Ike/V1` (Aggressive Mode + XAUTH + Mode-Config + Quick Mode tunnel) + `Esp/` + `Nat/`.
   - [TqkLibrary.VpnClient.Drivers.Ikev2](../TqkLibrary.VpnClient.Drivers.Ikev2) — driver IKEv2-native dùng `Ike/V2` (`IkeClient`) + `Esp/` (`EspTunnelChannel`) + `Nat/`.
 
 Xem thêm tài liệu as-built toàn cục: [10-codebase-architecture-and-flow.md](../../.docs/10-codebase-architecture-and-flow.md).
@@ -61,9 +62,9 @@ TqkLibrary.VpnClient.Ipsec/
    │  ├─ IkeV1Proposals.cs      Proposal mặc định Phase 1 / Phase 2 (interop VPN Gate / RRAS)
    │  ├─ IkeV1Lifetimes.cs      Lifetime SA (Phase 1 = 8h, Phase 2 = 1h)
    │  ├─ IsakmpMessage.cs       Header 28B + chain payload (encode/decode/parse)
-   │  ├─ Enums/                 Payload type, exchange type, hằng số ISAKMP, kind Informational
-   │  ├─ Models/                IsakmpAttribute / IsakmpTransform / IsakmpProposal + InformationalResult
-   │  └─ Payloads/              IsakmpPayload (base), IsakmpRawPayload, IsakmpSaPayload
+   │  ├─ Enums/                 Payload type, exchange type, hằng số ISAKMP, kind Informational, CFG type (XAUTH/Mode-Config)
+   │  ├─ Models/                IsakmpAttribute / IsakmpTransform + IsakmpProposal (cùng file) + InformationalResult + NatDetectionResult
+   │  └─ Payloads/              IsakmpPayload (base) + IsakmpRawPayload (cùng file), IsakmpSaPayload, IsakmpConfigPayload (XAUTH/Mode-Config)
    └─ V2/                       IKEv2 (RFC 7296) — protocol đủ cho V.1 (IKE_SA_INIT/AUTH PSK/EAP/**cert** + CP + multi-TS + INFORMATIONAL + CREATE_CHILD_SA rekey CHILD_SA **và IKE SA**), wire ở Drivers.Ikev2
       ├─ IkeClient.cs           Client initiator: IKE_SA_INIT + IKE_AUTH (PSK/EAP + verify responder PSK **hoặc cert**, opt-in CP/CERTREQ/multi-TS) + DPD/DELETE + rekey CHILD_SA + rekey IKE SA (Phase-1-equivalent)
       ├─ IkeSaInitiator.cs      Nửa initiator của IKE_SA_INIT (SPI, DH, nonce, SK_*)
@@ -93,7 +94,7 @@ TqkLibrary.VpnClient.Ipsec/
 
 | Type | Vai trò | Vị trí |
 |------|---------|--------|
-| `EspSession` | Cặp SA hai chiều: `Protect` (gán sequence) + `TryUnprotect` (check SPI/replay/integrity rồi giải mã); cửa sổ replay là `AntiReplayWindow` của project Crypto | [EspSession.cs:9](Esp/EspSession.cs#L9) |
+| `EspSession` | Cặp SA hai chiều: `Protect` (gán sequence) + `TryUnprotect` (check SPI/replay/integrity rồi giải mã); cửa sổ replay là `AntiReplayWindow` của project Crypto | [EspSession.cs:13](Esp/EspSession.cs#L13) |
 | `EspDataPlane` | Base scaffolding ESP dùng chung 2 mode: `ProtectOutbound`/`TryUnprotectInbound` + `SwapSession`/`DropPreviousInbound` (make-before-break) + watermark `RekeyNeeded` quanh 2³² | [EspDataPlane.cs:9](Esp/EspDataPlane.cs#L9) |
 | `EspTunnelChannel` | ESP **tunnel mode** → `IPacketChannel`: gói IP nguyên gói với NextHeader 4 (IPv4)/41 (IPv6), inbound demux theo NextHeader → `InboundIpPacket` (không PPP/L2TP) — data plane của IKEv2 | [EspTunnelChannel.cs:12](Esp/EspTunnelChannel.cs#L12) |
 | `EspCipherSuite` | Lớp trừu tượng 1 ESP transform + factory `AesCbcHmacSha256` / `AesCbcHmacSha1` / `AesGcm` | [EspCipherSuite.cs:10](Esp/EspCipherSuite.cs#L10) |
@@ -251,18 +252,18 @@ if (ike.ProcessAuthResponse(Recv())) { ChildSaKeys child = ike.ChildKeys!; EspSu
 
 ### IKEv1 Main + Quick Mode (initiator)
 
-1. **MM1/MM2** — gửi SA proposal + Vendor ID NAT-T; đọc responder cookie, transform được chọn, flavour NAT-T. [IkeV1Client.cs:94](Ike/V1/IkeV1Client.cs#L94), [IkeV1Client.cs:108](Ike/V1/IkeV1Client.cs#L108)
-2. **MM3/MM4** — gửi KE + Ni + 2 NAT-D; đọc KEr + Nr → tính `g^xy` → `DeriveMainMode` sinh SKEYID & khóa Phase 1. NAT-D 2 cách: `BuildMainMode3(local, srv)` **khai man** cổng 500 (ép NAT-T) hoặc overload `BuildMainMode3(localIp, localPort, remoteIp, remotePort)` **trung thực**; `ProcessMainMode4` giữ NAT-D của responder để `DetectNat` đọc verdict (honest-first **P0.8b**). [IkeV1Client.cs:137](Ike/V1/IkeV1Client.cs#L137), [IkeV1Client.cs:145](Ike/V1/IkeV1Client.cs#L145), [IkeV1Client.cs:159](Ike/V1/IkeV1Client.cs#L159), [IkeV1Client.cs:183](Ike/V1/IkeV1Client.cs#L183), [IkeV1KeyMaterial.cs:38](Ike/V1/IkeV1KeyMaterial.cs#L38)
-3. **MM5/MM6** — gửi IDi + HASH_I (đã mã hóa); giải mã MM6, verify HASH_R, lưu IV cuối Phase 1. [IkeV1Client.cs:196](Ike/V1/IkeV1Client.cs#L196), [IkeV1Client.cs:211](Ike/V1/IkeV1Client.cs#L211), [IkeV1Auth.cs:13](Ike/V1/IkeV1Auth.cs#L13)
-4. **QM1/QM2/QM3** — IV Quick Mode dẫn từ IV Phase 1 cuối + message id; HASH(1)/(2)/(3) keyed by SKEYID_a; QM2 **xác thực HASH(2)** responder (`prf(SKEYID_a, M-ID‖Ni_b‖payload-sau-HASH)`, hash trên byte gốc nhận — mismatch ⇒ `VpnServerRejectedException`) rồi bắt ESP SPI của peer **và transform server chọn** → set `NegotiatedEsp` (AES-CBC hoặc AES-GCM-16; mặc định khoan dung về CBC+SHA1+256). [IkeV1Client.cs:253](Ike/V1/IkeV1Client.cs#L253), [IkeV1Cipher.cs:53](Ike/V1/IkeV1Cipher.cs#L53), [IkeV1QuickMode.cs:13](Ike/V1/IkeV1QuickMode.cs#L13)
-5. **Phase 2 keys** — `CreatePhase2Keys` → KEYMAT = prf+(SKEYID_d, proto\|SPI\|Ni\|Nr) → keymat ESP hai chiều, độ dài theo `NegotiatedEsp` (CBC: enc ‖ integ-key; GCM: enc ‖ salt 4B); driver gọi `NegotiatedEsp.BuildSuite(...)` để ra `EspCipherSuite`. [IkeV1Client.cs:302](Ike/V1/IkeV1Client.cs#L302), [IkeV1Phase2Keys.cs:30](Ike/V1/IkeV1Phase2Keys.cs#L30), [EspSuiteSelection.cs:15](Esp/EspSuiteSelection.cs#L15)
-6. **Hậu handshake (Informational)** — mọi datagram IKE sau handshake route qua `ProcessInformational`: phân loại DPD request/ack hoặc Delete; build DPD/Delete/rekey dưới message id mới với IV dẫn xuất riêng. [IkeV1Client.cs:435](Ike/V1/IkeV1Client.cs#L435), [IkeV1Client.cs:502](Ike/V1/IkeV1Client.cs#L502)
-   - **Trong handshake (P0.8a)** — driver lọc mỗi reply qua `static TryReadRejectNotify`: Informational clear-text mang NOTIFY lỗi (type 1–16383, vd NO-PROPOSAL-CHOSEN) ⇒ báo từ chối thay vì parse nhầm thành MM/QM reply. [IkeV1Client.cs:471](Ike/V1/IkeV1Client.cs#L471)
+1. **MM1/MM2** — gửi SA proposal + Vendor ID NAT-T; đọc responder cookie, transform được chọn, flavour NAT-T. [IkeV1Client.cs:230](Ike/V1/IkeV1Client.cs#L230), [IkeV1Client.cs:244](Ike/V1/IkeV1Client.cs#L244)
+2. **MM3/MM4** — gửi KE + Ni + 2 NAT-D; đọc KEr + Nr → tính `g^xy` → `DeriveMainMode` sinh SKEYID & khóa Phase 1. NAT-D 2 cách: `BuildMainMode3(local, srv)` **khai man** cổng 500 (ép NAT-T) hoặc overload `BuildMainMode3(localIp, localPort, remoteIp, remotePort)` **trung thực**; `ProcessMainMode4` giữ NAT-D của responder để `DetectNat` đọc verdict (honest-first **P0.8b**). [IkeV1Client.cs:278](Ike/V1/IkeV1Client.cs#L278), [IkeV1Client.cs:286](Ike/V1/IkeV1Client.cs#L286), [IkeV1Client.cs:300](Ike/V1/IkeV1Client.cs#L300), [IkeV1Client.cs:325](Ike/V1/IkeV1Client.cs#L325), [IkeV1KeyMaterial.cs:38](Ike/V1/IkeV1KeyMaterial.cs#L38)
+3. **MM5/MM6** — gửi IDi + HASH_I (đã mã hóa); giải mã MM6, verify HASH_R, lưu IV cuối Phase 1. [IkeV1Client.cs:340](Ike/V1/IkeV1Client.cs#L340), [IkeV1Client.cs:355](Ike/V1/IkeV1Client.cs#L355), [IkeV1Auth.cs:13](Ike/V1/IkeV1Auth.cs#L13)
+4. **QM1/QM2/QM3** — IV Quick Mode dẫn từ IV Phase 1 cuối + message id; HASH(1)/(2)/(3) keyed by SKEYID_a; QM2 **xác thực HASH(2)** responder (`prf(SKEYID_a, M-ID‖Ni_b‖payload-sau-HASH)`, hash trên byte gốc nhận — mismatch ⇒ `VpnServerRejectedException`) rồi bắt ESP SPI của peer **và transform server chọn** → set `NegotiatedEsp` (AES-CBC hoặc AES-GCM-16; mặc định khoan dung về CBC+SHA1+256). [IkeV1Client.cs:401](Ike/V1/IkeV1Client.cs#L401), [IkeV1Cipher.cs:53](Ike/V1/IkeV1Cipher.cs#L53), [IkeV1QuickMode.cs:13](Ike/V1/IkeV1QuickMode.cs#L13)
+5. **Phase 2 keys** — `CreatePhase2Keys` → KEYMAT = prf+(SKEYID_d, proto\|SPI\|Ni\|Nr) → keymat ESP hai chiều, độ dài theo `NegotiatedEsp` (CBC: enc ‖ integ-key; GCM: enc ‖ salt 4B); driver gọi `NegotiatedEsp.BuildSuite(...)` để ra `EspCipherSuite`. [IkeV1Client.cs:453](Ike/V1/IkeV1Client.cs#L453), [IkeV1Phase2Keys.cs:30](Ike/V1/IkeV1Phase2Keys.cs#L30), [EspSuiteSelection.cs:15](Esp/EspSuiteSelection.cs#L15)
+6. **Hậu handshake (Informational)** — mọi datagram IKE sau handshake route qua `ProcessInformational`: phân loại DPD request/ack hoặc Delete; build DPD/Delete/rekey dưới message id mới với IV dẫn xuất riêng. [IkeV1Client.cs:790](Ike/V1/IkeV1Client.cs#L790), [IkeV1Client.cs:773](Ike/V1/IkeV1Client.cs#L773)
+   - **Trong handshake (P0.8a)** — driver lọc mỗi reply qua `static TryReadRejectNotify`: Informational clear-text mang NOTIFY lỗi (type 1–16383, vd NO-PROPOSAL-CHOSEN) ⇒ báo từ chối thay vì parse nhầm thành MM/QM reply. [IkeV1Client.cs:844](Ike/V1/IkeV1Client.cs#L844)
 
 ### ESP `Protect` / `TryUnprotect`
 
-- **Protect** — tăng sequence (checked), gọi suite encode `SPI\|Seq\|IV\|ct\|ICV` (hoặc GCM). Property [`OutboundSequence`](Esp/EspSession.cs#L38) lộ sequence hiện tại để driver rekey **trước khi** chạm 2³² (xem note ESP suite bên dưới). [EspSession.cs:41](Esp/EspSession.cs#L41), [EspCbcHmacSuite.cs:37](Esp/EspCbcHmacSuite.cs#L37)
-- **TryUnprotect** — check độ dài → SPI → `AntiReplayWindow.Check` → integrity → giải mã → strip trailer → `Commit`. Replay window **chỉ advance sau khi gói qua integrity**. [EspSession.cs:52](Esp/EspSession.cs#L52), [AntiReplayWindow.cs:21](../TqkLibrary.VpnClient.Crypto/AntiReplayWindow.cs#L21)
+- **Protect** — tăng sequence (checked), gọi suite encode `SPI\|Seq\|IV\|ct\|ICV` (hoặc GCM). Property [`OutboundSequence`](Esp/EspSession.cs#L53) lộ sequence hiện tại để driver rekey **trước khi** chạm 2³² (xem note ESP suite bên dưới). [EspSession.cs:56](Esp/EspSession.cs#L56), [EspCbcHmacSuite.cs:37](Esp/EspCbcHmacSuite.cs#L37)
+- **TryUnprotect** — check độ dài → SPI → `AntiReplayWindow.Check` → integrity → giải mã → strip trailer → `Commit`. Replay window **chỉ advance sau khi gói qua integrity**. [EspSession.cs:67](Esp/EspSession.cs#L67), [AntiReplayWindow.cs:21](../TqkLibrary.VpnClient.Crypto/AntiReplayWindow.cs#L21)
 
 ## Trạng thái & ghi chú
 
@@ -273,4 +274,4 @@ if (ike.ProcessAuthResponse(Recv())) { ChildSaKeys child = ike.ChildKeys!; EspSu
 - **IKEv1 PFS:** Quick Mode rekey **không có PFS** (KEYMAT chỉ từ SKEYID_d + nonce mới, không trao đổi KE mới) — phù hợp interop L2TP/IPsec phổ biến.
 - **netstandard2.0 vs net8.0:** cùng codebase; `record`/`init` khả dụng cả 2 TFM nhờ polyfill `TqkLibrary.CompilerServices` (`IsExternalInit`). Primitive crypto khác biệt nằm ở `TqkLibrary.VpnClient.Crypto` (BouncyCastle trên netstandard2.0), không phải project này.
 - **Phạm vi:** `Ike/`+`Esp/` chỉ logic giao thức (build/process/encode/decode/derive); socket UDP NAT-T nay thuộc `Nat/` của chính project này. Điều phối handshake (retransmit, thời điểm `SwitchToNatTPort`) và vòng đời SA vẫn do driver bên ngoài sở hữu.
-- **Logging tầng protocol sâu (Q.2):** [`IkeV1Client`](Ike/V1/IkeV1Client.cs#L18) và [`EspSession`](Esp/EspSession.cs#L9) nhận tham số ctor cuối `ILogger? logger = null` (mặc định `NullLogger` ⇒ **no-op, không đổi hành vi**). IkeV1Client log per-step Main/Quick Mode/NAT-D/rekey/informational; EspSession log SA-install + drop phân loại trong `TryUnprotect` (Malformed/Replay/DecryptFailed qua `VpnDropReason`; SPI-mismatch không log — là demux). Tất cả ở `LogLevel.Trace`/`Debug` qua seam `VpnEventIds.ProtocolStep`/`VpnLogExtensions.LogProtocolStep` (`Abstractions/Diagnostics`); hot-path guard `IsEnabled`. Driver `Drivers.L2tpIpsec`/`Drivers.Ikev2` truyền `Logger` (base supervisor) xuống.
+- **Logging tầng protocol sâu (Q.2):** [`IkeV1Client`](Ike/V1/IkeV1Client.cs#L21) và [`EspSession`](Esp/EspSession.cs#L13) nhận tham số ctor cuối `ILogger? logger = null` (mặc định `NullLogger` ⇒ **no-op, không đổi hành vi**). IkeV1Client log per-step Main/Quick Mode/NAT-D/rekey/informational; EspSession log SA-install + drop phân loại trong `TryUnprotect` (Malformed/Replay/DecryptFailed qua `VpnDropReason`; SPI-mismatch không log — là demux). Tất cả ở `LogLevel.Trace`/`Debug` qua seam `VpnEventIds.ProtocolStep`/`VpnLogExtensions.LogProtocolStep` (`Abstractions/Diagnostics`); hot-path guard `IsEnabled`. Driver `Drivers.L2tpIpsec`/`Drivers.Ikev2` truyền `Logger` (base supervisor) xuống.

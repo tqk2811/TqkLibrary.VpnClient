@@ -64,14 +64,14 @@ TqkLibrary.VpnClient.Tailscale/
 | Type | Vai trò |
 |------|---------|
 | [`TailscaleKey`](Keys/TailscaleKey.cs#L18) | codec text key: `<prefix>` + lowercase hex 32B; `nodekey:` = WG pubkey nguyên |
-| [`Ts2021NoiseHandshake`](Control/Noise/Ts2021NoiseHandshake.cs#L34) | Noise IK initiator: pre-message `<- s`, msg1 `e,es,s,ss`, msg2 `e,ee,se`, prologue `Tailscale Control Protocol v<N>` |
-| [`Ts2021Transport`](Control/Noise/Ts2021Transport.cs#L20) | record cipher 1 chiều: ChaCha20-Poly1305, nonce `0^4‖counter(BE)` từ 0, AAD rỗng, max plaintext 4077B |
-| [`Ts2021NoiseStream`](Control/Noise/Ts2021NoiseStream.cs#L24) | `Stream` duplex: write chia record ≤4077B, read ghép record; `SkipEarlyNoiseAsync` nuốt header 9B `\xff\xff\xffTS` |
-| [`Ts2021FrameCodec`](Control/Noise/Ts2021FrameCodec.cs#L18) | khung big-endian: initiation `[ver u16][type=1][len u16]`, khác `[type][len u16]` |
-| [`Ts2021Connector`](Control/Ts2021Connector.cs#L23) | `POST /ts2021` (Upgrade + `X-Tailscale-Handshake` base64 init) → 101 → Noise IK → `Ts2021NoiseStream` |
+| [`Ts2021NoiseHandshake`](Control/Noise/Ts2021NoiseHandshake.cs#L31) | Noise IK initiator: pre-message `<- s`, msg1 `e,es,s,ss`, msg2 `e,ee,se`, prologue `Tailscale Control Protocol v<N>` |
+| [`Ts2021Transport`](Control/Noise/Ts2021Transport.cs#L17) | record cipher 1 chiều: ChaCha20-Poly1305, nonce `0^4‖counter(BE)` từ 0, AAD rỗng, max plaintext 4077B |
+| [`Ts2021NoiseStream`](Control/Noise/Ts2021NoiseStream.cs#L19) | `Stream` duplex: write chia record ≤4077B, read ghép record; `SkipEarlyNoiseAsync` nuốt header 9B `\xff\xff\xffTS` |
+| [`Ts2021FrameCodec`](Control/Noise/Ts2021FrameCodec.cs#L15) | khung big-endian: initiation `[ver u16][type=1][len u16]`, khác `[type][len u16]` |
+| [`Ts2021Connector`](Control/Ts2021Connector.cs#L19) | `POST /ts2021` (Upgrade + `X-Tailscale-Handshake` base64 init) → 101 → Noise IK → `Ts2021NoiseStream` |
 | [`TailscaleControlClient`](Control/TailscaleControlClient.cs) | (net5+) `/key` → noise → `/machine/register` (preauth) → `/machine/map` long-poll, đọc khung `[len LE u32][JSON]` |
-| [`NetmapToWireGuardConfig`](Netmap/NetmapToWireGuardConfig.cs#L33) | self `Addresses`→tun IP; peer `Key`→WG pubkey, `AllowedIPs`→allowed-ips, `Endpoints`→endpoint (no-endpoint = skip) |
-| [`RegisterRequest`](Control/Messages/RegisterRequest.cs#L13)/[`MapResponse`](Control/Messages/MapResponse.cs)/[`TailscaleNode`](Control/Messages/TailscaleNode.cs#L21) | DTO JSON PascalCase (Node.DERP rename) |
+| [`NetmapToWireGuardConfig`](Netmap/NetmapToWireGuardConfig.cs#L24) | self `Addresses`→tun IP; peer `Key`→WG pubkey, `AllowedIPs`→allowed-ips, `Endpoints`→endpoint (no-endpoint = skip) |
+| [`RegisterRequest`](Control/Messages/RegisterRequest.cs#L11)/[`MapResponse`](Control/Messages/MapResponse.cs#L14)/[`TailscaleNode`](Control/Messages/TailscaleNode.cs#L17) | DTO JSON PascalCase (Node.DERP rename) |
 
 ## Bảng chuẩn / RFC
 
@@ -87,10 +87,10 @@ TqkLibrary.VpnClient.Tailscale/
 ## Luồng nội bộ (control login)
 
 1. [`TailscaleControlClient.LoginAsync`](Control/TailscaleControlClient.cs) → `GET /key?v=113` → `mkey:` của control.
-2. [`Ts2021Connector.ConnectAsync`](Control/Ts2021Connector.cs#L60): TCP → `POST /ts2021` (base64 [initiation](Control/Noise/Ts2021NoiseHandshake.cs#L91)) → 101 → đọc [response frame](Control/Noise/Ts2021FrameCodec.cs#L18) → [`ConsumeResponse`](Control/Noise/Ts2021NoiseHandshake.cs#L122) → [`Split`](Control/Noise/Ts2021NoiseHandshake.cs#L150) → `Ts2021NoiseStream` (+ skip EarlyNoise).
-3. `HttpClient` (h2c qua `ConnectCallback`) → `POST /machine/register` ([RegisterRequest](Control/Messages/RegisterRequest.cs#L13), `Auth.AuthKey`) → `MachineAuthorized`.
-4. `POST /machine/map` ([MapRequest](Control/Messages/MapRequest.cs#L13) Stream=true) → đọc khung `[len LE u32][JSON]` → [MapResponse](Control/Messages/MapResponse.cs).
-5. [`NetmapToWireGuardConfig.Build`](Netmap/NetmapToWireGuardConfig.cs#L42) → `WireGuardConfig` đa-peer (driver dùng).
+2. [`Ts2021Connector.ConnectAsync`](Control/Ts2021Connector.cs#L47): TCP → `POST /ts2021` (base64 [initiation](Control/Noise/Ts2021NoiseHandshake.cs#L102)) → 101 → đọc [response frame](Control/Noise/Ts2021FrameCodec.cs#L15) → [`ConsumeResponse`](Control/Noise/Ts2021NoiseHandshake.cs#L126) → [`Split`](Control/Noise/Ts2021NoiseHandshake.cs#L152) → `Ts2021NoiseStream` (+ skip EarlyNoise).
+3. `HttpClient` (h2c qua `ConnectCallback`) → `POST /machine/register` ([RegisterRequest](Control/Messages/RegisterRequest.cs#L11), `Auth.AuthKey`) → `MachineAuthorized`.
+4. `POST /machine/map` ([MapRequest](Control/Messages/MapRequest.cs#L11) Stream=true) → đọc khung `[len LE u32][JSON]` → [MapResponse](Control/Messages/MapResponse.cs#L14).
+5. [`NetmapToWireGuardConfig.Build`](Netmap/NetmapToWireGuardConfig.cs#L41) → `WireGuardConfig` đa-peer (driver dùng).
 
 ## Trạng thái & ghi chú
 

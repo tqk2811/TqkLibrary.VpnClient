@@ -11,7 +11,9 @@ Trước F.1, mỗi driver tự nhúng một bản TCP/TLS-over-TCP gần trùng
 - **Tầng:** TRANSPORT (concrete) — ngang hàng `Transport.Dtls`/`Transport.RawIp`; dưới tầng DRIVER, chỉ phụ thuộc `Abstractions`.
 - **Target frameworks:** `netstandard2.0; net8.0` (kế thừa [src/Directory.Build.props](../Directory.Build.props)).
 - **Phụ thuộc (ProjectReference) — CHỈ Abstractions** (`IByteStreamTransport` + `IHostResolver`/`AddressFamilyPreference`); **không package ngoài** (chỉ `System.Net.Sockets` của BCL).
-- **Được dùng bởi:** [`Transport.Tls`](../TqkLibrary.VpnClient.Transport.Tls) (`TlsByteStream` bọc `TcpByteStream`) và driver **OpenVPN** ([`Drivers.OpenVpn`](../TqkLibrary.VpnClient.Drivers.OpenVpn) — `proto tcp` qua `OpenVpnSocketTransportFactory`).
+- **Được dùng bởi:**
+  - [`Transport.Tls`](../TqkLibrary.VpnClient.Transport.Tls) — `TlsByteStream`/`BouncyCastleTlsByteStream` bọc `TcpByteStream`.
+  - Driver chạy thẳng TCP qua một `*SocketTransportFactory` cầm `TcpByteStream`: [`Drivers.OpenVpn`](../TqkLibrary.VpnClient.Drivers.OpenVpn) (`proto tcp` — `OpenVpnSocketTransportFactory`), [`Drivers.Ssh`](../TqkLibrary.VpnClient.Drivers.Ssh) (`SshSocketTransportFactory`), [`Drivers.Tinc`](../TqkLibrary.VpnClient.Drivers.Tinc) (`TincSocketTransportFactory`), [`Drivers.Vtun`](../TqkLibrary.VpnClient.Drivers.Vtun) (`VtunSocketTransportFactory`).
 
 ## Cấu trúc thư mục
 

@@ -15,6 +15,7 @@ Thư viện **protocol WireGuard** thuần .NET — hiện thực handshake `Noi
 | Dùng | [Crypto](../TqkLibrary.VpnClient.Crypto) | [`NoiseSymmetricState`](../TqkLibrary.VpnClient.Crypto/Noise/NoiseSymmetricState.cs) (V3.a), [`Curve25519DhGroup`](../TqkLibrary.VpnClient.Crypto/Noise/Curve25519DhGroup.cs)/[`HmacBlake2sPrf`](../TqkLibrary.VpnClient.Crypto/Noise/HmacBlake2sPrf.cs)/[`Blake2s`](../TqkLibrary.VpnClient.Crypto/Noise/Blake2s.cs)/[`Blake2sKeyedMac`](../TqkLibrary.VpnClient.Crypto/Noise/Blake2sKeyedMac.cs) (F.4), [`ChaCha20Poly1305Cipher`](../TqkLibrary.VpnClient.Crypto/Aead/ChaCha20Poly1305Cipher.cs) (handshake + data channel V3.d), [`XChaCha20Poly1305Cipher`](../TqkLibrary.VpnClient.Crypto/Aead/XChaCha20Poly1305Cipher.cs) (V3.c cookie-reply), [`AntiReplayWindow`](../TqkLibrary.VpnClient.Crypto/AntiReplayWindow.cs) (V3.d anti-replay, dùng chung ESP/OpenVPN) |
 | Dùng | [Abstractions](../TqkLibrary.VpnClient.Abstractions) | `TunnelConfig` (`WireGuardConfig.ToTunnelConfig`), `IPacketChannel`/`LinkMedium` (`WireGuardChannel`) |
 | Được dùng bởi | [`Drivers.WireGuard`](../TqkLibrary.VpnClient.Drivers.WireGuard) (V3.f) | driver lắp ráp control/data plane: UDP transport + handshake loop + timer/rekey/reconnect |
+| Được dùng bởi | [`Tailscale`](../TqkLibrary.VpnClient.Tailscale) (V.7.5) | tái dùng nguyên data plane WireGuard (handshake Noise_IKpsk2 + transport type-4 + multi-peer channel); netmap → `WireGuardConfig` đa-peer (`NetmapToWireGuardConfig`), Tailscale chỉ là control plane |
 
 ## Cấu trúc thư mục
 

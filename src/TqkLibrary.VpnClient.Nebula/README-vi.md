@@ -12,7 +12,7 @@ data-plane lifecycle, re-handshake) là phase (b) — **XONG** ở [`Drivers.Neb
 > [`NoiseSymmetricState`](../TqkLibrary.VpnClient.Crypto/Noise/NoiseSymmetricState.cs#L20) (V3.a, KHÔNG refactor — SHA-256 +
 > HMAC-SHA-256 + AES-256-GCM đều pass validate 32/12/16) + [`Curve25519DhGroup`](../TqkLibrary.VpnClient.Crypto/Noise/Curve25519DhGroup.cs#L15)
 > + [`AesGcmCipher`](../TqkLibrary.VpnClient.Crypto/Aead/AesGcmCipher.cs#L18). **Mới ở Crypto cho V.7.1**:
-> [`Ed25519Signer`](../TqkLibrary.VpnClient.Crypto/Noise/Ed25519Signer.cs#L17) + [`Sha256Hash`](../TqkLibrary.VpnClient.Crypto/Sha256Hash.cs#L13).
+> [`Ed25519Signer`](../TqkLibrary.VpnClient.Crypto/Noise/Ed25519Signer.cs#L15) + [`Sha256Hash`](../TqkLibrary.VpnClient.Crypto/Sha256Hash.cs#L11).
 
 ## Vị trí kiến trúc
 
@@ -25,7 +25,7 @@ hash SHA-256 vs BLAKE2s, cipher AES-256-GCM mặc định) + danh tính bằng *
 
 | Hướng | Project | Lý do |
 |-------|---------|-------|
-| Dùng | [Crypto](../TqkLibrary.VpnClient.Crypto) | [`NoiseSymmetricState`](../TqkLibrary.VpnClient.Crypto/Noise/NoiseSymmetricState.cs#L20) (symmetric IX), [`Curve25519DhGroup`](../TqkLibrary.VpnClient.Crypto/Noise/Curve25519DhGroup.cs#L15) (X25519 DH), [`AesGcmCipher`](../TqkLibrary.VpnClient.Crypto/Aead/AesGcmCipher.cs#L18)/[`ChaCha20Poly1305Cipher`](../TqkLibrary.VpnClient.Crypto/Aead/ChaCha20Poly1305Cipher.cs#L18) (AEAD), [`HmacPrf.Sha256`](../TqkLibrary.VpnClient.Crypto/HmacPrf.cs#L29) (KDF PRF), [`Sha256Hash`](../TqkLibrary.VpnClient.Crypto/Sha256Hash.cs#L13) (transcript hash), [`Ed25519Signer`](../TqkLibrary.VpnClient.Crypto/Noise/Ed25519Signer.cs#L17) (verify chữ ký cert) |
+| Dùng | [Crypto](../TqkLibrary.VpnClient.Crypto) | [`NoiseSymmetricState`](../TqkLibrary.VpnClient.Crypto/Noise/NoiseSymmetricState.cs#L20) (symmetric IX), [`Curve25519DhGroup`](../TqkLibrary.VpnClient.Crypto/Noise/Curve25519DhGroup.cs#L15) (X25519 DH), [`AesGcmCipher`](../TqkLibrary.VpnClient.Crypto/Aead/AesGcmCipher.cs#L18)/[`ChaCha20Poly1305Cipher`](../TqkLibrary.VpnClient.Crypto/Aead/ChaCha20Poly1305Cipher.cs#L18) (AEAD), [`HmacPrf.Sha256`](../TqkLibrary.VpnClient.Crypto/HmacPrf.cs#L29) (KDF PRF), [`Sha256Hash`](../TqkLibrary.VpnClient.Crypto/Sha256Hash.cs#L11) (transcript hash), [`Ed25519Signer`](../TqkLibrary.VpnClient.Crypto/Noise/Ed25519Signer.cs#L15) (verify chữ ký cert) |
 | Được dùng bởi | [`Drivers.Nebula`](../TqkLibrary.VpnClient.Drivers.Nebula) (V.7.1 phase b) | driver lắp ráp UDP transport + data-plane lifecycle + re-handshake quanh các codec/handshake này |
 
 ## Cấu trúc thư mục
@@ -57,13 +57,13 @@ TqkLibrary.VpnClient.Nebula/
 
 | Type | Vai trò |
 |------|---------|
-| [`NebulaNoiseIxHandshake`](Handshake/NebulaNoiseIxHandshake.cs#L20) | Chạy 1 phía Noise IX: `msg1 = e, s` (plaintext + MixHash, vì chưa có key) → `msg2 = e, ee, se, s, es` (s + payload AEAD sau khi MixKey 3 DH). `Split()` → cặp transport key crossed theo role. Tái dùng `NoiseSymmetricState` + `Curve25519DhGroup` + `AesGcmCipher`. |
-| [`NebulaCertificateCodec`](Certificate/NebulaCertificateCodec.cs#L17) | Marshal/Unmarshal `RawNebulaCertificate(Details)`. **`MarshalDetails`** ghi proto3-đúng (field tăng dần, bỏ default: Curve25519/IsCa-false/bytes-rỗng) ⇒ tái-marshal cho ra **đúng byte CA đã ký**; `UnmarshalCertificate` giữ raw signed-details để verify chính xác. |
-| [`NebulaCertificateValidator`](Certificate/NebulaCertificateValidator.cs#L13) | `VerifySignature` (Ed25519 of details against CA pubkey, chỉ path Curve25519) + `ComputeFingerprint` (SHA-256 of marshaled cert = giá trị `Issuer`). |
-| [`NebulaPem`](Certificate/NebulaPem.cs#L13) | Decode PEM block của `nebula-cert` (cert + X25519/Ed25519 key); `DecodeEd25519Seed` lấy 32B seed từ private 64B. |
-| [`ProtobufReader`](Certificate/ProtobufReader.cs#L11)/[`ProtobufWriter`](Certificate/ProtobufWriter.cs#L9) | Codec protobuf tối thiểu (varint, length-delimited, packed uint32) — đủ cho cert/handshake Nebula, không kéo package protobuf nặng. |
-| [`NebulaHeaderCodec`](Packet/NebulaHeaderCodec.cs#L13) | Encode/decode 16-byte header BE (`b0=Ver<<4\|Type`, sub, reserved2, remoteIndex4, counter8) + `EncodePacket`. |
-| [`NebulaHandshakePayloadCodec`](Handshake/NebulaHandshakePayloadCodec.cs#L11) | Marshal/Unmarshal `NebulaHandshake{Details, Hmac}` + `NebulaHandshakeDetails{Cert, InitiatorIndex, ResponderIndex, Time}`. |
+| [`NebulaNoiseIxHandshake`](Handshake/NebulaNoiseIxHandshake.cs#L21) | Chạy 1 phía Noise IX: `msg1 = e, s` (plaintext + MixHash, vì chưa có key) → `msg2 = e, ee, se, s, es` (s + payload AEAD sau khi MixKey 3 DH). `Split()` → cặp transport key crossed theo role. Tái dùng `NoiseSymmetricState` + `Curve25519DhGroup` + `AesGcmCipher`. |
+| [`NebulaCertificateCodec`](Certificate/NebulaCertificateCodec.cs#L16) | Marshal/Unmarshal `RawNebulaCertificate(Details)`. **`MarshalDetails`** ghi proto3-đúng (field tăng dần, bỏ default: Curve25519/IsCa-false/bytes-rỗng) ⇒ tái-marshal cho ra **đúng byte CA đã ký**; `UnmarshalCertificate` giữ raw signed-details để verify chính xác. |
+| [`NebulaCertificateValidator`](Certificate/NebulaCertificateValidator.cs#L14) | `VerifySignature` (Ed25519 of details against CA pubkey, chỉ path Curve25519) + `ComputeFingerprint` (SHA-256 of marshaled cert = giá trị `Issuer`). |
+| [`NebulaPem`](Certificate/NebulaPem.cs#L11) | Decode PEM block của `nebula-cert` (cert + X25519/Ed25519 key); `DecodeEd25519Seed` lấy 32B seed từ private 64B. |
+| [`ProtobufReader`](Certificate/ProtobufReader.cs#L8)/[`ProtobufWriter`](Certificate/ProtobufWriter.cs#L9) | Codec protobuf tối thiểu (varint, length-delimited, packed uint32) — đủ cho cert/handshake Nebula, không kéo package protobuf nặng. |
+| [`NebulaHeaderCodec`](Packet/NebulaHeaderCodec.cs#L12) | Encode/decode 16-byte header BE (`b0=Ver<<4\|Type`, sub, reserved2, remoteIndex4, counter8) + `EncodePacket`. |
+| [`NebulaHandshakePayloadCodec`](Handshake/NebulaHandshakePayloadCodec.cs#L10) | Marshal/Unmarshal `NebulaHandshake{Details, Hmac}` + `NebulaHandshakeDetails{Cert, InitiatorIndex, ResponderIndex, Time}`. |
 
 ## Bảng chuẩn / RFC
 
@@ -79,9 +79,9 @@ TqkLibrary.VpnClient.Nebula/
 ## Luồng nội bộ (handshake initiator)
 
 1. [`CreateInitiation`](Handshake/NebulaNoiseIxHandshake.cs#L82): `InitializeSymmetric(name)` + `MixHash(empty)` (prologue) → token `e` (gen ephemeral, `MixHash`) → token `s` (`EncryptAndHash(staticPub)` = plaintext + MixHash) → payload (`EncryptAndHash` = plaintext). Trả `e.pub ‖ s.pub ‖ payload`.
-2. Driver bọc header `Type=Handshake` ([`NebulaHeaderCodec.EncodePacket`](Packet/NebulaHeaderCodec.cs#L37)) + gửi UDP.
-3. Nhận stage-2, [`ConsumeResponse`](Handshake/NebulaNoiseIxHandshake.cs#L139): token `e` (`MixHash`) → `ee`/`se` (`MixKey` DH) → token `s` (`DecryptAndHash` = static responder, AEAD) → `es` (`MixKey` DH) → payload (`DecryptAndHash`).
-4. [`Split`](Handshake/NebulaNoiseIxHandshake.cs#L177) → `(send, receive)` crossed; recombine + verify cert responder ([`NebulaCertificateValidator.VerifySignature`](Certificate/NebulaCertificateValidator.cs#L37)).
+2. Driver bọc header `Type=Handshake` ([`NebulaHeaderCodec.EncodePacket`](Packet/NebulaHeaderCodec.cs#L36)) + gửi UDP.
+3. Nhận stage-2, [`ConsumeResponse`](Handshake/NebulaNoiseIxHandshake.cs#L152): token `e` (`MixHash`) → `ee`/`se` (`MixKey` DH) → token `s` (`DecryptAndHash` = static responder, AEAD) → `es` (`MixKey` DH) → payload (`DecryptAndHash`).
+4. [`Split`](Handshake/NebulaNoiseIxHandshake.cs#L185) → `(send, receive)` crossed; recombine + verify cert responder ([`NebulaCertificateValidator.VerifySignature`](Certificate/NebulaCertificateValidator.cs#L37)).
 
 ## Trạng thái & ghi chú
 

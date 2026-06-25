@@ -45,9 +45,9 @@ TqkLibrary.VpnClient.Drivers.Vtun/
 
 ## Luồng nội bộ (connect)
 
-1. `VtunDriver.ConnectAsync` → `VtunConnection.ConnectAsync` → `EstablishAsync` ([`VtunConnection.cs`](VtunConnection.cs#L103)).
+1. `VtunDriver.ConnectAsync` → `VtunConnection.ConnectAsync` → `EstablishAsync` ([`VtunConnection.cs`](VtunConnection.cs#L110)).
 2. `IVtunTransportFactory.ConnectAsync` → TCP byte-stream (`TcpByteStream`); dựng `VtunControlChannel`.
-3. `VtunControlChannel.AuthenticateAsync` ([`VtunControlChannel.cs`](VtunControlChannel.cs#L44)): đọc greeting `VTUN…` → gửi `HOST: <name>` → đọc `OK CHAL:` (decode a..p) → gửi `CHAL:` (Blowfish(MD5(pwd)) challenge) → parse `OK FLAGS:` (cờ server) / `ERR` (ném `VpnAuthenticationException`).
+3. `VtunControlChannel.AuthenticateAsync` ([`VtunControlChannel.cs`](VtunControlChannel.cs#L51)): đọc greeting `VTUN…` → gửi `HOST: <name>` → đọc `OK CHAL:` (decode a..p) → gửi `CHAL:` (Blowfish(MD5(pwd)) challenge) → parse `OK FLAGS:` (cờ server) / `ERR` (ném `VpnAuthenticationException`).
 4. Kiểm cờ: phải (`type tun` HOẶC `type ether`) + `proto tcp` + KHÔNG zlib/lzo (ném `VpnConnectionException` — chưa hỗ trợ pipe/tty/udp/compress). Nếu `encrypt` bật: resolve cipher từ `ServerCipherId` (`E<n>`) → `VtunFrameTransformFactory.TryCreate` (chỉ BF128ECB; cipher khác ⇒ `VpnConnectionException` nêu rõ tên) → cài `VtunControlChannel.DataTransform`.
 5. Bind data plane theo link type: **tun** → `BindTunChannel` (`VtunPacketChannel` L3 thẳng facade); **tap** → `BindTapChannel` (`VtunEthernetChannel` L2 + `ArpResolver` + `VirtualHost` → `Facade.SetInner(virtualHost)`, MTU = link−14). `MarkRunning`; khởi receive loop + keepalive timer.
 6. `MarkConnected`. Data: `WriteIpPacketAsync` → frame length-prefix → TCP; inbound frame → `Deliver` (data → `InboundIpPacket`; ECHO_REQ → ECHO_REP; CONN_CLOSE/EOF → link-loss). Keepalive: idle ≥30s → gửi ECHO_REQ; im >30×4s → link-loss → reconnect (F.6).

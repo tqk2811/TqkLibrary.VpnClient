@@ -12,7 +12,7 @@ data, bảng route, `IPacketChannel`/`IEthernetChannel`, supervisor F.6) là pha
 > record meta đầu của server (ACK request) qua record layer mã hóa. Lab + harness ở [`lab/tinc`](../../lab/tinc).
 > **4 bug interop self-pair offline KHÔNG bắt đã được phát hiện & sửa qua live** (xem mục Trạng thái cuối file).
 > **Tái dùng** [`Ed25519Signer`](../TqkLibrary.VpnClient.Crypto/Noise/Ed25519Signer.cs#L15) (KEX SIG) +
-> BouncyCastle `Ed25519`/`X25519` (ECDH có khóa Ed25519, qua [`SptpsEcdh`](Sptps/SptpsEcdh.cs#L33)) +
+> BouncyCastle `Ed25519`/`X25519` (ECDH có khóa Ed25519, qua [`SptpsEcdh`](Sptps/SptpsEcdh.cs#L26)) +
 > [`AntiReplayWindow`](../TqkLibrary.VpnClient.Crypto/AntiReplayWindow.cs#L8) (data plane). Cipher ChaCha-Poly1305
 > biến thể tinc tự viết trên BouncyCastle `ChaChaEngine` + `Poly1305` (nền cipher đã KAT chuẩn djb/RFC 8439).
 
@@ -29,7 +29,7 @@ wire, shared qua ladder Montgomery — KHÔNG phải X25519 thuần), cipher **C
 
 | Hướng | Project | Lý do |
 |-------|---------|-------|
-| Dùng | [Crypto](../TqkLibrary.VpnClient.Crypto) | [`ISignatureAlgo`](../TqkLibrary.VpnClient.Crypto/Interfaces/ISignatureAlgo.cs)/[`Ed25519Signer`](../TqkLibrary.VpnClient.Crypto/Noise/Ed25519Signer.cs#L15) (ký/verify SIG), [`IDhGroup`](../TqkLibrary.VpnClient.Crypto/Interfaces/IDhGroup.cs) (interface ECDH cho [`SptpsEcdh`](Sptps/SptpsEcdh.cs#L33)), [`AntiReplayWindow`](../TqkLibrary.VpnClient.Crypto/AntiReplayWindow.cs#L8) (replay UDP data), `BouncyCastle` `Ed25519`/`X25519` (ECDH có khóa Ed25519), `ChaChaEngine`/`Poly1305` (record cipher), `HMACSHA512` BCL (PRF) |
+| Dùng | [Crypto](../TqkLibrary.VpnClient.Crypto) | [`ISignatureAlgo`](../TqkLibrary.VpnClient.Crypto/Interfaces/ISignatureAlgo.cs)/[`Ed25519Signer`](../TqkLibrary.VpnClient.Crypto/Noise/Ed25519Signer.cs#L15) (ký/verify SIG), [`IDhGroup`](../TqkLibrary.VpnClient.Crypto/Interfaces/IDhGroup.cs) (interface ECDH cho [`SptpsEcdh`](Sptps/SptpsEcdh.cs#L26)), [`AntiReplayWindow`](../TqkLibrary.VpnClient.Crypto/AntiReplayWindow.cs#L8) (replay UDP data), `BouncyCastle` `Ed25519`/`X25519` (ECDH có khóa Ed25519), `ChaChaEngine`/`Poly1305` (record cipher), `HMACSHA512` BCL (PRF) |
 | Được dùng bởi | [`Drivers.Tinc`](../TqkLibrary.VpnClient.Drivers.Tinc) (V.7.2 phase b — XONG) | driver lắp ráp TCP meta + data-plane SPTPS + UDP data quanh các codec/handshake này (`BuildMetaLabel`/`BuildUdpLabel`, `SptpsRecordLayer` meta, `SptpsDatagramRecordLayer` data + handshake framing, `TincMetaRequest`, `TincHostConfig`/`TincBase64`) |
 
 ## Cấu trúc thư mục
@@ -61,15 +61,15 @@ TqkLibrary.VpnClient.Tinc/
 | Type | Vai trò |
 |------|---------|
 | [`SptpsHandshake`](Sptps/SptpsHandshake.cs#L20) | KEX→SIG→derive: tạo/đọc KEX, ký/verify SIG (transcript `fill_msg`), seed KDF, tách khóa hướng |
-| [`SptpsEcdh`](Sptps/SptpsEcdh.cs#L33) | ECDH có khóa Ed25519 kiểu tinc (`IDhGroup`): public = Ed25519 Edwards, shared = X25519 ladder trên Edwards→Montgomery-x |
-| [`SptpsPrf`](Sptps/SptpsPrf.cs#L29) | TLS-1.0 P_hash XOR HMAC-SHA-512 — expand shared secret + seed → 128B key material |
+| [`SptpsEcdh`](Sptps/SptpsEcdh.cs#L26) | ECDH có khóa Ed25519 kiểu tinc (`IDhGroup`): public = Ed25519 Edwards, shared = X25519 ladder trên Edwards→Montgomery-x |
+| [`SptpsPrf`](Sptps/SptpsPrf.cs#L19) | TLS-1.0 P_hash XOR HMAC-SHA-512 — expand shared secret + seed → 128B key material |
 | [`TincChaChaPoly1305`](Sptps/TincChaChaPoly1305.cs#L21) | cipher record (Encrypt/Decrypt theo seqno; biến thể tinc, không RFC 8439) |
-| [`SptpsRecordLayer`](Sptps/SptpsRecordLayer.cs#L14) | record TCP stream (handshake plaintext + app encrypted, seqno đếm cả handshake record) |
+| [`SptpsRecordLayer`](Sptps/SptpsRecordLayer.cs#L16) | record TCP stream (handshake plaintext + app encrypted, seqno đếm cả handshake record) |
 | [`SptpsDatagramRecordLayer`](Sptps/SptpsDatagramRecordLayer.cs#L22) | record UDP data plane (seqno prefix + replay window) + handshake framing plaintext (`EncodeHandshake`/`DecodeHandshake`) cho data-plane SPTPS |
 | [`SptpsKex`](Sptps/Models/SptpsKex.cs#L8) | codec KEX 65B |
 | [`TincMetaRequest`](Meta/TincMetaRequest.cs#L13) | codec request line meta (ID/ADD_EDGE/…) |
-| [`TincBase64`](Hosts/TincBase64.cs#L15) | base64 little-endian phi chuẩn của tinc (encode/decode khóa host file) |
-| [`TincHostConfig`](Hosts/TincHostConfig.cs#L11) | parse host file (Ed25519PublicKey/Address/Subnet) qua [`TincBase64`](Hosts/TincBase64.cs#L15) |
+| [`TincBase64`](Hosts/TincBase64.cs#L14) | base64 little-endian phi chuẩn của tinc (encode/decode khóa host file) |
+| [`TincHostConfig`](Hosts/TincHostConfig.cs#L11) | parse host file (Ed25519PublicKey/Address/Subnet) qua [`TincBase64`](Hosts/TincBase64.cs#L14) |
 
 ## Bảng chuẩn / behavior tinc (clean-room — đọc spec + behavior, KHÔNG copy GPL)
 
@@ -93,11 +93,11 @@ TqkLibrary.VpnClient.Tinc/
 
 ## Luồng SPTPS handshake (initiator = client của ta)
 
-1. [`CreateKex`](Sptps/SptpsHandshake.cs#L77) → ephemeral **Ed25519** (Edwards public) + nonce → gửi KEX (record handshake plaintext).
-2. Nhận KEX server → [`ConsumeKex`](Sptps/SptpsHandshake.cs#L92): [`SptpsEcdh`](Sptps/SptpsEcdh.cs#L33) shared secret (Edwards→Montgomery ladder) + [`SptpsPrf.Expand`](Sptps/SptpsPrf.cs#L29) → 128B key material.
-3. [`CreateSig`](Sptps/SptpsHandshake.cs#L104) → Ed25519 ký transcript `[1‖my_kex‖his_kex‖label]` → gửi SIG.
-4. Nhận SIG server → [`ConsumeSig`](Sptps/SptpsHandshake.cs#L116): verify `[0‖server_kex‖client_kex‖label]` bằng pubkey server.
-5. [`EnableEncryption`](Sptps/SptpsRecordLayer.cs#L30) với [`OutCipherKey`](Sptps/SptpsHandshake.cs#L128)/[`InCipherKey`](Sptps/SptpsHandshake.cs#L131) → record app mã hóa 2 chiều (record đầu = seqno 2, sau KEX+SIG).
+1. [`CreateKex`](Sptps/SptpsHandshake.cs#L92) → ephemeral **Ed25519** (Edwards public) + nonce → gửi KEX (record handshake plaintext).
+2. Nhận KEX server → [`ConsumeKex`](Sptps/SptpsHandshake.cs#L107): [`SptpsEcdh`](Sptps/SptpsEcdh.cs#L26) shared secret (Edwards→Montgomery ladder) + [`SptpsPrf.Expand`](Sptps/SptpsPrf.cs#L27) → 128B key material.
+3. [`CreateSig`](Sptps/SptpsHandshake.cs#L119) → Ed25519 ký transcript `[1‖my_kex‖his_kex‖label]` → gửi SIG.
+4. Nhận SIG server → [`ConsumeSig`](Sptps/SptpsHandshake.cs#L131): verify `[0‖server_kex‖client_kex‖label]` bằng pubkey server.
+5. [`EnableEncryption`](Sptps/SptpsRecordLayer.cs#L30) với [`OutCipherKey`](Sptps/SptpsHandshake.cs#L143)/[`InCipherKey`](Sptps/SptpsHandshake.cs#L146) → record app mã hóa 2 chiều (record đầu = seqno 2, sau KEX+SIG).
 
 ## Trạng thái & ghi chú
 
@@ -110,14 +110,14 @@ TqkLibrary.VpnClient.Tinc/
   [`lab/tinc`](../../lab/tinc) build tinc 1.1pre18 từ source (apt chỉ có 1.0.36 không SPTPS).
 - **4 bug interop self-pair offline KHÔNG bắt — phát hiện & sửa qua live** (đối chiếu source tinc, không copy GPL):
   1. **`TincBase64`** — tinc dùng base64 **little-endian per-quad** (`utils.c`), KHÁC RFC 4648. Dùng `Convert.*Base64*`
-     làm `tincd` decode pubkey ra khóa khác ⇒ `Failed to verify SIG`. Sửa: codec [`TincBase64`](Hosts/TincBase64.cs#L15).
+     làm `tincd` decode pubkey ra khóa khác ⇒ `Failed to verify SIG`. Sửa: codec [`TincBase64`](Hosts/TincBase64.cs#L14).
   2. **`SptpsEcdh`** — KEX KHÔNG phải X25519 thuần mà là **ECDH có khóa Ed25519** (public Edwards trên wire, shared qua
      ladder Montgomery với scalar `clamp(SHA512(seed))`; `ecdh.c`/`key_exchange.c`). X25519 thuần cho shared secret khác
-     ⇒ record cipher fail (SIG vẫn pass vì không đụng shared). Sửa: [`SptpsEcdh`](Sptps/SptpsEcdh.cs#L33).
+     ⇒ record cipher fail (SIG vẫn pass vì không đụng shared). Sửa: [`SptpsEcdh`](Sptps/SptpsEcdh.cs#L26).
   3. **`SptpsPrf`** — key expansion là **TLS-1.0 P_hash XOR-fold** (`prf_xor`, 2 HMAC/khối), KHÔNG phải TLS-1.2 (1 HMAC,
-     copy). Sửa: [`SptpsPrf`](Sptps/SptpsPrf.cs#L29).
+     copy). Sửa: [`SptpsPrf`](Sptps/SptpsPrf.cs#L19).
   4. **seqno record TCP** — `send_record_priv` tăng seqno cho **MỌI** record kể cả KEX/SIG plaintext ⇒ record mã hóa đầu
-     = seqno 2. Sửa: [`SptpsRecordLayer`](Sptps/SptpsRecordLayer.cs#L14) đếm seqno cả handshake record.
+     = seqno 2. Sửa: [`SptpsRecordLayer`](Sptps/SptpsRecordLayer.cs#L16) đếm seqno cả handshake record.
   - Ghi chú key: `tinc generate-ed25519-keys` ghi `ed25519_key.priv` **96B = expanded(64) ‖ public(32)** (KHÔNG có seed);
     harness/driver tự sinh **seed 32B** của mình rồi đăng ký public key (chuẩn driver-realistic) — orlp ed25519 = RFC 8032,
     nên `Ed25519Signer` (sign từ seed) tương thích `tincd` verify.

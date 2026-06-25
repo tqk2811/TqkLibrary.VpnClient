@@ -5,7 +5,7 @@ Driver **Cisco IPsec / EzVPN** remote-access — kết nối trực tiếp tới
 với **group PSK** (gateway chọn PSK theo group name gửi rõ ở message 1), rồi **XAUTH** (user name/password)
 + **Mode-Config** (kéo virtual IP/DNS), kết thúc bằng **Quick Mode** cài ESP **tunnel-mode** CHILD SA đẩy
 thẳng gói IP vào userspace stack. Khác [Drivers.Ikev2](../TqkLibrary.VpnClient.Drivers.Ikev2) (IKEv2 PSK/EAP +
-CP) ở chỗ dùng **IKEv1 Aggressive + XAUTH + Mode-Config**; tái dùng cùng [`IkeV1Client`](../TqkLibrary.VpnClient.Ipsec/Ike/V1/IkeV1Client.cs#L72)
+CP) ở chỗ dùng **IKEv1 Aggressive + XAUTH + Mode-Config**; tái dùng cùng [`IkeV1Client`](../TqkLibrary.VpnClient.Ipsec/Ike/V1/IkeV1Client.cs#L21)
 với driver [L2TP/IPsec](../TqkLibrary.VpnClient.Drivers.L2tpIpsec) (L2TP dùng IKEv1 Main Mode; Aggressive/XAUTH
 là **nhánh thêm**, không vỡ Main Mode).
 
@@ -18,7 +18,7 @@ là **nhánh thêm**, không vỡ Main Mode).
 
 `PROTOCOL`-layer driver, hiện thực [`IVpnProtocolDriver`](../TqkLibrary.VpnClient.Abstractions/Drivers/Interfaces/IVpnProtocolDriver.cs). Lắp ráp các khối protocol thuần từ [`Ipsec`](../TqkLibrary.VpnClient.Ipsec) thành 1 tunnel sống:
 
-- **Control plane**: [`IkeV1Client`](../TqkLibrary.VpnClient.Ipsec/Ike/V1/IkeV1Client.cs#L72) (Aggressive Mode group PSK + XAUTH + Mode-Config + tunnel-mode Quick Mode + DPD + Delete + Phase 2 rekey).
+- **Control plane**: [`IkeV1Client`](../TqkLibrary.VpnClient.Ipsec/Ike/V1/IkeV1Client.cs#L21) (Aggressive Mode group PSK + XAUTH + Mode-Config + tunnel-mode Quick Mode + DPD + Delete + Phase 2 rekey).
 - **NAT-T**: [`NatTraversalChannel`](../TqkLibrary.VpnClient.Ipsec/Nat/NatTraversalChannel.cs#L13) (UDP/500→4500, non-ESP marker) — dùng chung với driver L2TP/IPsec + IKEv2.
 - **Data plane**: [`EspTunnelChannel`](../TqkLibrary.VpnClient.Ipsec/Esp/EspTunnelChannel.cs#L12) — ESP tunnel mode (NextHeader 4/41) → `IPacketChannel` (không PPP/L2TP).
 
@@ -48,8 +48,8 @@ TqkLibrary.VpnClient.Drivers.CiscoIpsec/
 
 | Type | Vai trò | Vị trí |
 |------|---------|--------|
-| `CiscoIpsecDriver` | `IVpnProtocolDriver`: capabilities (L3Ip, **không PPP**, ESP, **PSK\|UserPassword**, ConfigPush), `ConnectAsync` dựng `CiscoIpsecConnection`; **group name qua ctor** (`UseCiscoIpsec(groupName)`), group PSK = `VpnCredentials.PreSharedKey`, XAUTH user/pass = `Username`/`Password` (thiếu PSK hoặc thiếu một nửa XAUTH ⇒ `ArgumentException`) | [CiscoIpsecDriver.cs:17](CiscoIpsecDriver.cs#L17) |
-| `CiscoIpsecConnection` | Bộ điều phối, **kế thừa** [`ReconnectingVpnConnection<CiscoIpsecConnectionState>`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L25) (F.6): override `EstablishAsync` (forced NAT-T 500→4500 → Aggressive AG1/AG2/AG3 group PSK → XAUTH `RunXAuthAsync` → Mode-Config virtual IP → Quick Mode ESP tunnel → `EspTunnelChannel` bind sau `Facade`) + `CleanupAttemptResourcesAsync`/`StopAttemptLoop` + ánh xạ 4 state + `OnReconnected`. **Phần IKEv1-riêng giữ ngoài supervisor trên timer riêng**: keepalive DPD (IKE R-U-THERE), rekey Phase 2 ESP CHILD SA make-before-break, **Delete SA khi teardown**; `DisconnectAsync` gửi Delete ESP + ISAKMP trước teardown base | [CiscoIpsecConnection.cs:35](CiscoIpsecConnection.cs#L35) |
+| `CiscoIpsecDriver` | `IVpnProtocolDriver`: capabilities (L3Ip, **không PPP**, ESP, **PSK\|UserPassword**, ConfigPush), `ConnectAsync` dựng `CiscoIpsecConnection`; **group name qua ctor** (`UseCiscoIpsec(groupName)`), group PSK = `VpnCredentials.PreSharedKey`, XAUTH user/pass = `Username`/`Password` (thiếu PSK hoặc thiếu một nửa XAUTH ⇒ `ArgumentException`) | [CiscoIpsecDriver.cs:18](CiscoIpsecDriver.cs#L18) |
+| `CiscoIpsecConnection` | Bộ điều phối, **kế thừa** [`ReconnectingVpnConnection<CiscoIpsecConnectionState>`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L24) (F.6): override `EstablishAsync` (forced NAT-T 500→4500 → Aggressive AG1/AG2/AG3 group PSK → XAUTH `RunXAuthAsync` → Mode-Config virtual IP → Quick Mode ESP tunnel → `EspTunnelChannel` bind sau `Facade`) + `CleanupAttemptResourcesAsync`/`StopAttemptLoop` + ánh xạ 4 state + `OnReconnected`. **Phần IKEv1-riêng giữ ngoài supervisor trên timer riêng**: keepalive DPD (IKE R-U-THERE), rekey Phase 2 ESP CHILD SA make-before-break, **Delete SA khi teardown**; `DisconnectAsync` gửi Delete ESP + ISAKMP trước teardown base | [CiscoIpsecConnection.cs:37](CiscoIpsecConnection.cs#L37) |
 | `CiscoIpsecVpnConnection` | `IVpnConnection`: 1 session; `OpenSessionAsync` ⇒ `NotSupportedException` (1 ESP CHILD SA / 1 IP ảo ở driver này) | [CiscoIpsecVpnConnection.cs:6](CiscoIpsecVpnConnection.cs#L6) |
 | `CiscoIpsecVpnSession` | `IVpnSession`: `PacketChannel` (facade) + `Config`; `ApplyReconnect` cập nhật IP/DNS sau reconnect | [CiscoIpsecVpnSession.cs:10](CiscoIpsecVpnSession.cs#L10) |
 | `CiscoIpsecReconnectOptions` | **kế thừa** [`VpnReconnectOptions`](../TqkLibrary.VpnClient.Drivers.Core/Models/VpnReconnectOptions.cs#L14) (F.6): `Enabled`/`MaxAttempts`/backoff/jitter — Cisco IPsec không thêm knob, giữ named type cho public API | [CiscoIpsecReconnectOptions.cs:12](CiscoIpsecReconnectOptions.cs#L12) |

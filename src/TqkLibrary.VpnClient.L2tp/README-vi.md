@@ -119,7 +119,7 @@ await l2tp.SendStopControlConnectionAsync();         // teardown tunnel (StopCCN
 
 [`ConnectAsync`](L2tpClient.cs#L62) chạy tuần tự: dựng tunnel rồi gọi `OpenSessionInternalAsync` cho session chính:
 
-1. **Tunnel:** gửi **SCCRQ** ([`SendSccrqAsync`](L2tpClient.cs#L147)) với các AVP ProtocolVersion/Framing/Bearer/HostName/AssignedTunnelId/ReceiveWindowSize → chờ [`_tunnelUp`](L2tpClient.cs#L19).
+1. **Tunnel:** gửi **SCCRQ** ([`SendSccrqAsync`](L2tpClient.cs#L147)) với các AVP ProtocolVersion/Framing/Bearer/HostName/VendorName/AssignedTunnelId/ReceiveWindowSize → chờ [`_tunnelUp`](L2tpClient.cs#L18).
 2. Khi nhận **SCCRP** trong [`OnControl`](L2tpClient.cs#L180): lấy `AssignedTunnelId` của server làm `PeerTunnelId`, gán cho control channel, gửi **SCCCN** ([`SendScccnAsync`](L2tpClient.cs#L160)), rồi `_tunnelUp.TrySetResult(true)`.
 3. **Session:** mỗi session sinh `LocalSessionId` riêng ([`NewSessionId`](L2tpClient.cs#L306), đảm bảo khác mọi session đang mở), đăng ký vào `_sessions` + `_pendingSession`, gửi **ICRQ** ([`SendIcrqAsync`](L2tpClient.cs#L163)) với AssignedSessionId/CallSerialNumber → chờ TCS [`L2tpSession.Up`](L2tpSession.cs#L14).
 4. Khi nhận **ICRP** ([`OnControl`](L2tpClient.cs#L195)): tương quan về session đang mở theo session id ở header (fallback `_pendingSession` khi peer trả 0), lấy `AssignedSessionId` của server làm `PeerSessionId`, gửi **ICCN** ([`SendIccnAsync`](L2tpClient.cs#L171)), rồi hoàn tất `Up`. Session đã established.

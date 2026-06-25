@@ -23,7 +23,7 @@ TqkLibrary.VpnClient.Transport.RawIp/
 ├── NativeRawSocket.cs                      Mở raw socket cho protocol tùy ý: Unix qua libc socket() (P/Invoke) vì .NET managed Socket từ chối proto lạ; Windows/ns2.0 fallback managed ctor
 ├── RawIpTransportFactory.cs               IRawIpTransportFactory production: probe quyền thật + mở raw socket (qua NativeRawSocket), ném RawIpNotPermittedException khi thiếu
 ├── RawIpPrivilegeChecker.cs               IPrivilegeChecker mặc định: Windows Admin / Linux geteuid (chỉ để soạn message lỗi)
-├── RawIpProtocols.cs                      hằng IANA: Esp=50, Gre=47
+├── RawIpProtocols.cs                      hằng IANA: Esp=50, Gre=47, IpIp=4, Sit=41
 ├── Helpers/
 │   └── RawIpv4.cs                         codec thuần: PayloadOffset (IHL, validate) / IsFragment / Protocol / SourceAddress
 ├── Interfaces/
@@ -40,18 +40,20 @@ TqkLibrary.VpnClient.Transport.RawIp/
 | `IRawIpTransportFactory` | (Abstractions) seam tạo transport: `IsAvailable` (probe quyền thật) + `Create(remote, ipProtocol, localBind?)` | [IRawIpTransportFactory.cs:12](../TqkLibrary.VpnClient.Abstractions/Transport/Interfaces/IRawIpTransportFactory.cs#L12) |
 | `RawIpTransportFactory` | Production: `IsAvailable` mở+đóng thử raw socket (mở được = đủ quyền thực tế, **không** đoán từ uid); `Create` mở socket qua `NativeRawSocket.Create(family, ipProtocol)` + `Bind(localBind)` (đồng bộ source với IKE), thất bại ⇒ `RawIpNotPermittedException` (message dùng `IPrivilegeChecker`) | [RawIpTransportFactory.cs:18](RawIpTransportFactory.cs#L18) |
 | `NativeRawSocket` | Mở `Socket` cho IP protocol tùy ý. **Trên Unix**: `new Socket(InterNetwork, Raw, (ProtocolType)50)` của .NET ném `SocketError.ProtocolNotSupported` (errno EPROTONOSUPPORT 93) **kể cả khi root** — tầng chuyển-đổi-protocol của .NET từ chối protocol number lạ, DÙ kernel hỗ trợ (libc `socket(AF_INET,SOCK_RAW,50)` chạy OK) → mở fd qua libc `socket()` ([DllImport]) rồi bọc `new Socket(SafeSocketHandle)`. **Windows + netstandard2.0**: fallback managed ctor (ns2.0 không có public `SafeSocketHandle(IntPtr,bool)` ctor → guard `#if NETSTANDARD2_0`; runtime ship native-ESP là net8.0). Phát hiện + sửa qua **validate live P0.8c** — TRƯỚC fix native-ESP/GRE 100% hỏng trên Linux | [NativeRawSocket.cs:15](NativeRawSocket.cs#L15) |
-| `RawIpDatagramTransport` | `IDatagramTransport`: `SendAsync` → `SendTo` (OS gắn IP header, không HDRINCL); `ReceiveAsync` → poll `ReceiveFrom` (timeout 250ms để honor cancel), **lọc source==gateway**, **strip IPv4 header** (`RawIpv4`), **drop fragment**; `DisposeAsync` đóng socket (unblock blocking-receive trên ns2.0) | [RawIpDatagramTransport.cs:20](RawIpDatagramTransport.cs#L20) |
+| `RawIpDatagramTransport` | `IDatagramTransport`: ctor nhận `Socket` + `remoteAddress` + `ILogger? logger` (optional); `SendAsync` → `SendTo` (OS gắn IP header, không HDRINCL); `ReceiveAsync` → poll `ReceiveFrom` (timeout 250ms để honor cancel), **lọc source==gateway**, **strip IPv4 header** (`RawIpv4`), **drop fragment** (log `LogDebug`); `DisposeAsync` đóng socket (unblock blocking-receive trên ns2.0) | [RawIpDatagramTransport.cs:20](RawIpDatagramTransport.cs#L20) |
 | `RawIpv4` | codec thuần (pure): `PayloadOffset` (IHL×4, validate `ihl≥20` & `len≥ihl`), `IsFragment` (MF flag/offset≠0), `Protocol` (byte 9), `SourceAddress` (byte 12-15) | [Helpers/RawIpv4.cs:11](Helpers/RawIpv4.cs#L11) |
 | `RawIpPrivilegeChecker` | `IPrivilegeChecker` mặc định: Windows `WindowsPrincipal.IsInRole(Administrator)` (net5+), Linux/macOS `geteuid()==0` qua một P/Invoke libc (không Mono.Posix) — **chỉ best-effort cho message**, không phải cổng quyết định | [RawIpPrivilegeChecker.cs:14](RawIpPrivilegeChecker.cs#L14) |
 | `RawIpNotPermittedException` | ném khi raw socket không mở được; message nêu cần elevate + cảnh báo Windows có thể nuốt proto-50 | [Exceptions/RawIpNotPermittedException.cs:9](Exceptions/RawIpNotPermittedException.cs#L9) |
-| `RawIpProtocols` | hằng IANA: `Esp=50`, `Gre=47` | [RawIpProtocols.cs:4](RawIpProtocols.cs#L4) |
+| `RawIpProtocols` | hằng IANA: `Esp=50`, `Gre=47`, `IpIp=4` (RFC 2003), `Sit=41` (6in4, RFC 4213) | [RawIpProtocols.cs:4](RawIpProtocols.cs#L4) |
 
 ## Chuẩn / RFC tuân thủ
 
 | Chuẩn | Class áp dụng | Vị trí | Ghi chú |
 |-------|---------------|--------|---------|
 | RFC 791 (IPv4 header) | `RawIpv4` | [Helpers/RawIpv4.cs:11](Helpers/RawIpv4.cs#L11) | IHL (byte 0 nibble thấp ×4), flags/offset (byte 6-7: MF=0x2000, offset mask 0x1FFF), protocol (byte 9), source (byte 12-15) |
-| IANA Protocol Numbers | `RawIpProtocols` | [RawIpProtocols.cs:4](RawIpProtocols.cs#L4) | ESP=50, GRE=47 |
+| IANA Protocol Numbers | `RawIpProtocols` | [RawIpProtocols.cs:4](RawIpProtocols.cs#L4) | ESP=50, GRE=47, IP-in-IP=4, SIT/6in4=41 |
+| RFC 2003 (IP-in-IP) | `RawIpProtocols` | [RawIpProtocols.cs:13](RawIpProtocols.cs#L13) | `IpIp=4` (IPv4-in-IPv4) |
+| RFC 4213 (6in4/SIT) | `RawIpProtocols` | [RawIpProtocols.cs:16](RawIpProtocols.cs#L16) | `Sit=41` (IPv6-in-IPv4) |
 
 ## API / cách dùng
 

@@ -18,7 +18,7 @@ WireGuard**.
 
 `DRIVER`-layer (ngang hàng [Drivers.WireGuard](../TqkLibrary.VpnClient.Drivers.WireGuard)/[Drivers.Nebula](../TqkLibrary.VpnClient.Drivers.Nebula)):
 kế thừa [`ReconnectingVpnConnection`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs) (supervisor F.6
-dùng chung). Khác mọi driver mesh khác: data plane **tái dùng cả 1 driver khác** ([`WireGuardConnection`](../TqkLibrary.VpnClient.Drivers.WireGuard/WireGuardConnection.cs#L45))
+dùng chung). Khác mọi driver mesh khác: data plane **tái dùng cả 1 driver khác** ([`WireGuardConnection`](../TqkLibrary.VpnClient.Drivers.WireGuard/WireGuardConnection.cs#L53))
 làm con bên trong — control plane Tailscale chỉ sinh `WireGuardConfig` đa-peer từ netmap rồi giao cho WireGuard.
 
 ## Phụ thuộc
@@ -27,8 +27,8 @@ làm con bên trong — control plane Tailscale chỉ sinh `WireGuardConfig` đa
 |-------|---------|-------|
 | Dùng | [Abstractions](../TqkLibrary.VpnClient.Abstractions) | `IVpnProtocolDriver`/`IVpnConnection`/`TunnelConfig`/capabilities |
 | Dùng | [Drivers.Core](../TqkLibrary.VpnClient.Drivers.Core) | [`ReconnectingVpnConnection`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs) (supervisor + facade + reconnect) |
-| Dùng | [Drivers.WireGuard](../TqkLibrary.VpnClient.Drivers.WireGuard) | [`WireGuardConnection`](../TqkLibrary.VpnClient.Drivers.WireGuard/WireGuardConnection.cs#L45) (data plane), [`WireGuardSocketTransportFactory`](../TqkLibrary.VpnClient.Drivers.WireGuard/Transport/WireGuardSocketTransportFactory.cs) (UDP, fixed localPort) |
-| Dùng | [Tailscale](../TqkLibrary.VpnClient.Tailscale) | [`TailscaleControlClient`](../TqkLibrary.VpnClient.Tailscale/Control/TailscaleControlClient.cs)/[`NetmapToWireGuardConfig`](../TqkLibrary.VpnClient.Tailscale/Netmap/NetmapToWireGuardConfig.cs#L33) (control + mapping) |
+| Dùng | [Drivers.WireGuard](../TqkLibrary.VpnClient.Drivers.WireGuard) | [`WireGuardConnection`](../TqkLibrary.VpnClient.Drivers.WireGuard/WireGuardConnection.cs#L53) (data plane), [`WireGuardSocketTransportFactory`](../TqkLibrary.VpnClient.Drivers.WireGuard/Transport/WireGuardSocketTransportFactory.cs) (UDP, fixed localPort) |
+| Dùng | [Tailscale](../TqkLibrary.VpnClient.Tailscale) | [`TailscaleControlClient`](../TqkLibrary.VpnClient.Tailscale/Control/TailscaleControlClient.cs)/[`NetmapToWireGuardConfig`](../TqkLibrary.VpnClient.Tailscale/Netmap/NetmapToWireGuardConfig.cs#L24) (control + mapping) |
 | Được dùng bởi | [`VpnClientBuilder.UseTailscale`](../TqkLibrary.VpnClient/VpnClientBuilder.cs) + demo `.tailscale` | đăng ký driver |
 
 ## Cấu trúc thư mục
@@ -51,17 +51,17 @@ TqkLibrary.VpnClient.Drivers.Tailscale/
 
 | Type | Vai trò |
 |------|---------|
-| [`TailscaleConfig`](Config/TailscaleConfig.cs#L20) | static profile; `Generate()` sinh 2 key X25519; `WireGuardLocalPort`/`AdvertisedEndpoints` cho disco-stand-in |
-| [`TailscaleConnection`](TailscaleConnection.cs#L33) | `EstablishAsync`: `LoginAsync`→netmap→[`NetmapToWireGuardConfig.Build`](../TqkLibrary.VpnClient.Tailscale/Netmap/NetmapToWireGuardConfig.cs#L42)→[`WireGuardConnection`](../TqkLibrary.VpnClient.Drivers.WireGuard/WireGuardConnection.cs#L45) con→`Facade.SetInner(wg.PacketChannel)` |
+| [`TailscaleConfig`](Config/TailscaleConfig.cs#L18) | static profile; `Generate()` sinh 2 key X25519; `WireGuardLocalPort`/`AdvertisedEndpoints` cho disco-stand-in |
+| [`TailscaleConnection`](TailscaleConnection.cs#L34) | `EstablishAsync`: `LoginAsync`→netmap→[`NetmapToWireGuardConfig.Build`](../TqkLibrary.VpnClient.Tailscale/Netmap/NetmapToWireGuardConfig.cs#L41)→[`WireGuardConnection`](../TqkLibrary.VpnClient.Drivers.WireGuard/WireGuardConnection.cs#L53) con→`Facade.SetInner(wg.PacketChannel)` |
 | [`TailscaleControlClientAdapter`](TailscaleControlClientAdapter.cs) | `ITailscaleControlClient` → `TailscaleControlClient` thật (net5+); seam `controlClientFactory` cho fake netmap offline |
-| [`TailscaleDriver`](TailscaleDriver.cs#L20) | `Name="tailscale"`, caps L3Ip/Udp/Noise/PreSharedKey/RoutedPrefixes/OutOfBand |
+| [`TailscaleDriver`](TailscaleDriver.cs#L19) | `Name="tailscale"`, caps L3Ip/Udp/Noise/PreSharedKey/RoutedPrefixes/OutOfBand |
 
 ## Luồng nội bộ (establish)
 
-1. [`TailscaleConnection.EstablishAsync`](TailscaleConnection.cs#L84): tạo [`ITailscaleControlClient`](../TqkLibrary.VpnClient.Tailscale/Control/ITailscaleControlClient.cs) (mặc định [adapter](TailscaleControlClientAdapter.cs) → `TailscaleControlClient` thật).
+1. [`TailscaleConnection.EstablishAsync`](TailscaleConnection.cs#L83): tạo [`ITailscaleControlClient`](../TqkLibrary.VpnClient.Tailscale/Control/ITailscaleControlClient.cs) (mặc định [adapter](TailscaleControlClientAdapter.cs) → `TailscaleControlClient` thật).
 2. `control.LoginAsync(preauthKey)` → [`MapResponse`](../TqkLibrary.VpnClient.Tailscale/Control/Messages/MapResponse.cs) (netmap: self + peers).
-3. [`NetmapToWireGuardConfig.Build`](../TqkLibrary.VpnClient.Tailscale/Netmap/NetmapToWireGuardConfig.cs#L42) → `WireGuardConfig` đa-peer; peer không có endpoint trực tiếp bị skip (DERP = future).
-4. tạo [`WireGuardConnection`](../TqkLibrary.VpnClient.Drivers.WireGuard/WireGuardConnection.cs#L45) (fixed `localPort` khớp endpoint quảng bá, **`acceptInbound: true`** — mesh peer-to-peer) + `ConnectAsync` → WG handshake với peer (initiate hoặc respond theo tie-break static pubkey).
+3. [`NetmapToWireGuardConfig.Build`](../TqkLibrary.VpnClient.Tailscale/Netmap/NetmapToWireGuardConfig.cs#L41) → `WireGuardConfig` đa-peer; peer không có endpoint trực tiếp bị skip (DERP = future).
+4. tạo [`WireGuardConnection`](../TqkLibrary.VpnClient.Drivers.WireGuard/WireGuardConnection.cs#L53) (fixed `localPort` khớp endpoint quảng bá, **`acceptInbound: true`** — mesh peer-to-peer) + `ConnectAsync` → WG handshake với peer (initiate hoặc respond theo tie-break static pubkey).
 5. `Facade.SetInner(wg.PacketChannel)` → `MarkConnected`. WireGuard con giữ auto-reconnect data-plane (đã proven).
 
 ## Trạng thái & ghi chú
