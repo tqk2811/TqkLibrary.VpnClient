@@ -64,6 +64,8 @@ TqkLibrary.VpnClient.Crypto/
 ├── HmacUtil.cs            # helper internal chọn HMAC theo HashAlgorithmName
 ├── PrfPlus.cs             # IKEv2 prf+ key expansion (static)
 ├── Tls1Prf.cs             # PRF TLS 1.0/1.1 (RFC 2246 §5) = P_MD5 XOR P_SHA1 — OpenVPN key-method-2 (static)
+├── Speck.cs               # SPECK-128/128 ARX block cipher (ECB + CTR, LE-word) — n2n -H header-enc (V.7.4); KAT libn2n.a + NSA
+├── PearsonHash.cs         # n2n block-Pearson 64/128 (Mix13, no-table) — n2n -H key-derive + checksum (V.7.4); KAT tests-hashing
 └── AntiReplayWindow.cs    # cửa sổ chống replay trượt 64 gói trên seq 32-bit (RFC 4303 §3.4.3) — ESP + OpenVPN AEAD
 ```
 
@@ -93,6 +95,8 @@ TqkLibrary.VpnClient.Crypto/
 | `AesCtr` | AES-CTR `static Transform(...)` dựng từ AES-ECB, counter big-endian | [AesCtr.cs:9](AesCtr.cs#L9) |
 | `Rc4` | RC4 stream cipher (KSA/PRGA), `Process`/`GenerateKeystream` + `static Apply(key, data)`; key 1..256B; **broken** (RFC 7465) — chỉ MPPE/PPTP + SoftEther `use_encrypt` | [Rc4.cs:13](Rc4.cs#L13) |
 | `Salsa20` | Salsa20 stream cipher (Bernstein/eSTREAM), **rounds tham số** (Salsa20/20 chuẩn + **Salsa20/12** ZeroTier), key 32B / nonce 8B; `Transform`/`GenerateKeystream` (counter=0 mỗi lần) + **`CreateStream`/`Stream`** (keystream stateful, counter giữ qua nhiều `Process` — cho memory-hard hash CBC-like ZeroTier); trên BouncyCastle `Salsa20Engine(rounds)` cả 2 TFM; **KAT ECRYPT byte-exact** (Set 1 vec 0 + all-zero, cả 12 & 20 rounds) — nền VL1 ZeroTier (V.7.3, KAT live vs zerotier-one) + memory-hard identity hash | [Salsa20.cs:24](Salsa20.cs#L24) |
+| `Speck` | **SPECK-128/128** ARX block cipher (NSA), `EncryptBlock`/`DecryptBlock` (ECB 1 block 16B) + `Ctr` (CTR, IV 16B); key 16B; **little-endian word** byte order khớp n2n; 32 rounds `R(x,y,k)=ror(x,8)+y; ^k; rol(y,3)^x`. Chỉ cho **n2n `-H` header-enc** (V.7.4) — ⚠️ KHÔNG dùng làm cipher đa dụng. **KAT golden** từ n2n v3.1.1 `libn2n.a` + NSA Speck128/128 vector | [Speck.cs:24](Speck.cs#L24) |
+| `PearsonHash` | n2n **block-Pearson** hash, `Hash64`/`Hash128` — **không bảng 256-byte** mà digest qua Stafford Mix13 finalizer (`permute64`); input 8B LE-word rồi byte lẻ, đảo `~` trước remainder + length. n2n `-H` key-derive (`pearson128(community)`) + checksum (`pearson64`). **KAT golden** từ n2n `tests-hashing` (512B) + community "labnet" (V.7.4) | [PearsonHash.cs:18](PearsonHash.cs#L18) |
 | `AesGcmCipher` | AES-GCM (`IAeadCipher`), nonce 12B / tag 16B; native vs BouncyCastle | [Aead/AesGcmCipher.cs:18](Aead/AesGcmCipher.cs#L18) |
 | `ChaCha20Poly1305Cipher` | ChaCha20-Poly1305 (`IAeadCipher`, RFC 8439), key 32B / nonce 12B / tag 16B; native vs BouncyCastle | [Aead/ChaCha20Poly1305Cipher.cs:18](Aead/ChaCha20Poly1305Cipher.cs#L18) |
 | `XChaCha20Poly1305Cipher` | XChaCha20-Poly1305 (`IAeadCipher`, draft-irtf-cfrg-xchacha), key 32B / **nonce 24B** / tag 16B; `HChaCha20` (pure, public) suy subkey rồi ủy quyền `ChaCha20Poly1305Cipher` (WireGuard cookie-reply V3.c) | [Aead/XChaCha20Poly1305Cipher.cs:14](Aead/XChaCha20Poly1305Cipher.cs#L14) |

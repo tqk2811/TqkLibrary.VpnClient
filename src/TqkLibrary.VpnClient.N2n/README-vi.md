@@ -7,7 +7,7 @@ null-pad)`, packet-type nằm ở 5 bit thấp của `flags`) nối với body t
 project protocol-level cho driver **V.7.4** (xem [`.docs/11`](../../.docs/11-todo-roadmap.md) §V.7.4).
 Driver runtime (UDP transport, REGISTER_SUPER lifecycle, `IEthernetChannel` ghép L2 fabric, supervisor F.6, `UseN2n`) là
 phase (b) — **XONG**, VALIDATE LIVE L2 full-tunnel ICMP 2 chiều ([`Drivers.N2n`](../TqkLibrary.VpnClient.Drivers.N2n)).
-P2P UDP hole-punching + header encryption (`-H`) còn lại (future).
+Header encryption (`-H`) **XONG + VALIDATE LIVE** ([`N2nHeaderEncryption`](N2nHeaderEncryption.cs) — SPECK + Pearson từ Crypto). P2P UDP hole-punching còn lại (future).
 
 > **Trạng thái:** **phase (a) protocol XONG — REGISTER_SUPER VALIDATE LIVE** (2026-06-24) — 21 test offline xanh,
 > build xanh ns2.0 + net8. **Đối chiếu với `n2n` v3.1.1 thật** (lab [`lab/n2n`](../../lab/n2n)): supernode thật **CHẤP
@@ -23,9 +23,10 @@ P2P UDP hole-punching + header encryption (`-H`) còn lại (future).
 khối codec thuần, **không** I/O socket. Codec là **encode/decode đối xứng** cho từng message type (driver bơm datagram
 vào/ra UDP). Giống ZeroTier, n2n là **overlay L2** — PACKET chở khung Ethernet để driver ghép vào
 [Ethernet fabric](../TqkLibrary.VpnClient.Ethernet) (`IEthernetChannel`). Khác ZeroTier (Salsa20/Poly1305 trên từng
-gói): n2n tách rời — **control message không mã hóa** (registration/ACK là cleartext khi `-H` off), chỉ **payload
-PACKET** được transform (NULL/AES-CBC/ChaCha20/Speck) bảo vệ. Bản này hiện thực **header-encryption OFF** + transform
-**NULL** và **AES-CBC**.
+gói): n2n tách rời — **control message không mã hóa khi `-H` off** (registration/ACK cleartext), chỉ **payload
+PACKET** được transform (NULL/AES-CBC/ChaCha20/Speck) bảo vệ. Bản này hiện thực transform **NULL** và **AES-CBC**, và
+**header-encryption (`-H`) ON** qua [`N2nHeaderEncryption`](N2nHeaderEncryption.cs) (SPECK + Pearson, key từ community) —
+mã hóa + checksum + chống replay phần common header (validate live vs n2n v3.1.1 `-H`).
 
 ## Phụ thuộc
 
@@ -56,6 +57,7 @@ TqkLibrary.VpnClient.N2n/
 │     ├─ N2nRegisterAck.cs             body REGISTER_ACK edge↔edge (cookie/src/dstMac/sock?)
 │     ├─ N2nPeerInfo.cs                body PEER_INFO (aflags/mac/sock/preferredSock/load/uptime)
 │     └─ N2nPacket.cs                  body PACKET (src/dstMac/sock?/compression/transform + payload Ethernet frame)
+├─ N2nHeaderEncryption.cs            header-encryption (-H): SPECK + Pearson (key từ community) mã hóa/checksum common header
 └─ Transform/
    ├─ Interfaces/IN2nTransform.cs      Encode/Decode payload PACKET + Id
    ├─ N2nNullTransform.cs              transform NULL (identity, frame clear)
@@ -67,7 +69,8 @@ TqkLibrary.VpnClient.N2n/
 | Type | Kind | Vai trò |
 |------|------|---------|
 | [`N2nPacketCodec`](N2nPacketCodec.cs#L19) | class | Encode/Decode tất cả message type; stateless, dùng lại |
-| [`N2nCommonHeader`](Wire/Models/N2nCommonHeader.cs#L16) | class | Header 24B clear (cleartext-header form, `-H` off) |
+| [`N2nCommonHeader`](Wire/Models/N2nCommonHeader.cs#L16) | class | Header 24B (cleartext khi `-H` off; SPECK-encrypted khi `-H` on) |
+| [`N2nHeaderEncryption`](N2nHeaderEncryption.cs) | class | header-encryption `-H`: `Encrypt`/`Decrypt` common header (SPECK + Pearson, key từ community) |
 | [`N2nSock`](Wire/Models/N2nSock.cs#L13) | class | sock v4/v6, `FromEndPoint`/`ToEndPoint` |
 | [`N2nAuth`](Wire/Models/N2nAuth.cs#L14) | class | auth block; `SimpleIdRandom()` token 16B |
 | [`N2nIpSubnet`](Wire/Models/N2nIpSubnet.cs#L13) | struct | subnet (addr 4B + bitlen 1B), `Unset` |
@@ -93,6 +96,7 @@ TqkLibrary.VpnClient.N2n/
 | sock | `family(2 BE: 0=v4, 0x8000=v6) ‖ port(2 BE) ‖ addr(4 v4 / 16 v6)` |
 | auth | `scheme(2 BE) ‖ token_size(2 BE) ‖ token(token_size)`; simple-id (1) + 16B token |
 | Transform AES (id 3) | `AES-CBC(null IV)` của `random preamble(16) ‖ frame ‖ zero-pad→block`; output = ciphertext (preamble = IV ngầm) |
+| Header encryption (`-H`) | key SPECK = `pearson128(community pad-20)`, IV key = `pearson128(key)`. Encrypt: checksum Pearson-64(toàn packet) → pre-IV (`b0..7`=checksum, `b4..7`⊕high-stamp, `b8..11`=low-stamp, `b12..15`=rand) → SPECK-128 ECB(IV key) → magic `n2__`+header_len ở `b16..19` → SPECK-CTR(key, IV=`b0..15`) từ offset 16. header_len = full (control) / header-only (PACKET). timestamp = left-bound `(s<<32)\|(µs<<12)` |
 
 ## Luồng nội bộ (REGISTER_SUPER → ACK)
 
@@ -105,16 +109,18 @@ TqkLibrary.VpnClient.N2n/
 
 ## Trạng thái & ghi chú
 
-- **Phase (a) protocol XONG + REGISTER_SUPER validate live** (2026-06-24). Build xanh **ns2.0 + net8**; 21 test offline
-  (round-trip mọi pkt-type + wire-layout invariants + AES self-pair 2 chiều + 3 KAT golden live).
-- **Header encryption (`-H`) KHÔNG hiện thực**: n2n v3 dùng **Speck** + **Pearson-256 hash** key-derivation cho header
-  encryption — cả hai chưa có trong Crypto, và byte-exact rủi ro cao. Validate live chạy với header-enc OFF (supernode/
-  edge không truyền `-H`). Nếu sau cần header-enc: thêm Speck + Pearson-256 vào Crypto, hiện thực framing
-  `header_encryption.c` (magic `n2__` + checksum Pearson-64 + SPECK-CTR từ offset 16).
+- **Phase (a) protocol XONG + REGISTER_SUPER validate live** (2026-06-24). Build xanh **ns2.0 + net8**; 26 test offline
+  (round-trip mọi pkt-type + wire-layout invariants + AES self-pair 2 chiều + 3 KAT golden live + 6 header-enc).
+- **Header encryption (`-H`) XONG + VALIDATE LIVE** (2026-06-25) qua [`N2nHeaderEncryption`](N2nHeaderEncryption.cs): hiện
+  thực `packet_header_encrypt`/`packet_header_decrypt` byte-exact dùng **SPECK-128/128** + **block-Pearson** mới trong
+  [Crypto](../TqkLibrary.VpnClient.Crypto) (key SPECK = `pearson128(community)`, IV key = `pearson128(key)`; **lưu ý n2n
+  dùng Pearson-128 no-table — KHÔNG phải Pearson-256/bảng 256-byte như giả định ban đầu**). **Golden vector từ n2n v3.1.1
+  `libn2n.a` TRƯỚC khi live** (decrypt golden recover cleartext+stamp; encrypt với random captured reproduce golden byte-
+  exact). Validate live vs n2n v3.1.1 `-H`: supernode chấp nhận REGISTER mã hóa + ICMP 2 chiều + header ciphertext on-wire.
 - **Transform key-derivation KHÔNG hiện thực**: `N2nAesTransform` nhận AES key sẵn (16/24/32B); n2n derive key bằng
-  Pearson-256 của password (out of scope đợt này). Validate live dùng transform NULL.
+  Pearson của password (transform stretch out of scope). Validate transform dùng NULL (header-enc đã ON live).
 - **Driver runtime (phase b) XONG** ([`Drivers.N2n`](../TqkLibrary.VpnClient.Drivers.N2n)): UDP transport + REGISTER_SUPER
   lifecycle + keepalive + ghép `IEthernetChannel` vào L2 fabric (ARP + VirtualHost static-IP) + supervisor F.6 + `UseN2n`
-  + demo scheme `.n2n` — **VALIDATE LIVE L2 full-tunnel ICMP 2 chiều** vs n2n v3.1.1 (2 bug interop keepalive-auth +
-  dev_addr-static sửa qua live). **Còn lại (future)**: P2P UDP hole-punching (QUERY_PEER/PEER_INFO) + header encryption (`-H`).
+  + demo scheme `.n2n` + **header-enc `-H`** — **VALIDATE LIVE L2 full-tunnel ICMP 2 chiều** vs n2n v3.1.1 (3 bug interop
+  keepalive-auth + dev_addr-static + timestamp-left-bound sửa qua live). **Còn lại (future)**: P2P UDP hole-punching (QUERY_PEER/PEER_INFO).
 - Mỗi type 1 file; instance method (codec/transform) sau interface (`IN2nTransform`). Codec stateless.
