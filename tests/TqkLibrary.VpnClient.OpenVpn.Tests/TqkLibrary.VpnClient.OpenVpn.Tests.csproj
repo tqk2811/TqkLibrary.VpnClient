@@ -4,4 +4,10 @@
     <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.OpenVpn\TqkLibrary.VpnClient.OpenVpn.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The tls-ekm self-pair test drives a BouncyCastle TLS server harness (TlsServerProtocol) so it can compute the
+         RFC 5705 exporter and check it matches the client's derived data-channel keys. -->
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.4.0" />
+  </ItemGroup>
+
 </Project>

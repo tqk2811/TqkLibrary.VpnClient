@@ -55,6 +55,21 @@ namespace TqkLibrary.VpnClient.OpenVpn.Helpers
             return LoadFromPem(certPem, keyPem);
         }
 
+        /// <summary>
+        /// Returns the profile's client cert + key as raw PEM text (inline or read from the referenced file), or
+        /// <c>(null, null)</c> when the profile carries no cert/key. Used by the tls-ekm BouncyCastle control channel,
+        /// which builds its TLS credential straight from PEM (no <see cref="X509Certificate2"/> round-trip). Throws if only
+        /// one of the pair is present.
+        /// </summary>
+        public static (string? CertPem, string? KeyPem) ReadPem(OpenVpnProfile profile)
+        {
+            if (profile is null) throw new ArgumentNullException(nameof(profile));
+            if (profile.Cert is null && profile.Key is null) return (null, null);
+            if (profile.Cert is null || profile.Key is null)
+                throw new ArgumentException("OpenVPN client-certificate auth needs both a 'cert' and a 'key'; the profile carries only one.");
+            return (ReadMaterial(profile.Cert), ReadMaterial(profile.Key));
+        }
+
         /// <summary>Builds an <see cref="X509Certificate2"/> with its private key from the cert + key PEM text.</summary>
         public static X509Certificate2 LoadFromPem(string certPem, string keyPem)
         {

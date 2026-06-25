@@ -103,6 +103,11 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             // cert/key (inline PEM or file path) so a parsed .ovpn needs no manual wiring.
             X509CertificateCollection? clientCertificates = OpenVpnClientCertificate.Resolve(_profile, _clientCertificates);
 
+            // tls-ekm: the BouncyCastle control channel builds its TLS credential from raw PEM, not an X509Certificate2.
+            (string? clientCertPem, string? clientKeyPem) = _profile.KeyDerivation == OpenVpnKeyDerivationMode.TlsEkm
+                ? OpenVpnClientCertificate.ReadPem(_profile)
+                : (null, null);
+
             var factory = new OpenVpnSocketTransportFactory(_profile.Protocol);
             var connection = new OpenVpnConnection(endpoint.Host, endpoint.Port, factory,
                 optionsString: BuildOccOptions(_profile),
@@ -111,6 +116,9 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
                 password: credentials.Password,
                 clientCertificates: clientCertificates,
                 serverCertificateValidation: _serverCertificateValidation,
+                keyDerivation: _profile.KeyDerivation,
+                clientCertPem: clientCertPem,
+                clientKeyPem: clientKeyPem,
                 controlWrap: _controlWrap ?? BuildControlWrap(_profile),
                 reconnectOptions: _reconnectOptions,
                 addressFamilyPreference: endpoint.AddressFamilyPreference,

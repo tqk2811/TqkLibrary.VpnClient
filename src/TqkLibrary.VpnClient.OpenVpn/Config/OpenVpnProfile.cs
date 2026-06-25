@@ -69,6 +69,13 @@ namespace TqkLibrary.VpnClient.OpenVpn.Config
         /// <summary>HMAC for CBC data mode / control auth (<c>auth</c>), e.g. <c>SHA256</c>.</summary>
         public string? Auth { get; set; }
 
+        /// <summary>
+        /// Data-channel key derivation (<c>key-derivation</c>, OpenVPN 2.6). Default <see cref="OpenVpnKeyDerivationMode.Tls1Prf"/>
+        /// (key-method-2 PRF over <see cref="System.Net.Security.SslStream"/>); <see cref="OpenVpnKeyDerivationMode.TlsEkm"/>
+        /// routes the control channel through BouncyCastle and exports the keys via RFC 5705 (<c>tls-ekm</c>).
+        /// </summary>
+        public OpenVpnKeyDerivationMode KeyDerivation { get; set; } = OpenVpnKeyDerivationMode.Tls1Prf;
+
         // ---- misc options ----
 
         /// <summary>True when <c>remote-cert-tls server</c> is set (verify the peer cert is a server cert).</summary>

@@ -130,6 +130,11 @@ namespace TqkLibrary.VpnClient.OpenVpn.Config
 
                 case "cipher": profile.Cipher = Arg(1); break;
                 case "auth": profile.Auth = Arg(1); break;
+                case "key-derivation":
+                    // OpenVPN 2.6: "tls-ekm" derives the data keys via RFC 5705; anything else keeps the key-method-2 PRF.
+                    if (string.Equals(Arg(1), "tls-ekm", StringComparison.OrdinalIgnoreCase))
+                        profile.KeyDerivation = OpenVpnKeyDerivationMode.TlsEkm;
+                    break;
                 case "data-ciphers":
                 case "data-ciphers-fallback":
                     if (Arg(1) is string list)

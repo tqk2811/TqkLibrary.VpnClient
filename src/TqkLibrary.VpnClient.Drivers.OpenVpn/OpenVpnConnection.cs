@@ -52,7 +52,10 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
         readonly string? _username;
         readonly string? _password;
         readonly X509CertificateCollection? _clientCertificates;
+        readonly string? _clientCertPem;      // tls-ekm only: the BC control channel builds its TLS credential from PEM
+        readonly string? _clientKeyPem;
         readonly RemoteCertificateValidationCallback? _serverCertificateValidation;
+        readonly OpenVpnKeyDerivationMode _keyDerivation;
         readonly IOpenVpnControlWrap? _controlWrap;
         readonly OpenVpnReliabilityOptions? _reliabilityOptions;
         readonly IOpenVpnTransportFactory _transportFactory;
@@ -124,6 +127,9 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             string? username = null, string? password = null,
             X509CertificateCollection? clientCertificates = null,
             RemoteCertificateValidationCallback? serverCertificateValidation = null,
+            OpenVpnKeyDerivationMode keyDerivation = OpenVpnKeyDerivationMode.Tls1Prf,
+            string? clientCertPem = null,
+            string? clientKeyPem = null,
             IOpenVpnControlWrap? controlWrap = null,
             OpenVpnReconnectOptions? reconnectOptions = null,
             AddressFamilyPreference addressFamilyPreference = AddressFamilyPreference.Auto,
@@ -148,7 +154,10 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             _username = username;
             _password = password;
             _clientCertificates = clientCertificates;
+            _clientCertPem = clientCertPem;
+            _clientKeyPem = clientKeyPem;
             _serverCertificateValidation = serverCertificateValidation;
+            _keyDerivation = keyDerivation;
             _controlWrap = controlWrap;
             _reliabilityOptions = reliabilityOptions;
             _addressFamilyPreference = addressFamilyPreference;
@@ -244,7 +253,8 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             // Opcode demux: P_DATA_V2 packets come here; the control channel ignores them and consumes control opcodes.
             transport.DatagramReceived += OnTransportDatagram;
 
-            var control = new OpenVpnControlChannel(transport, keyId: 0, options: _reliabilityOptions, controlWrap: _controlWrap);
+            var control = new OpenVpnControlChannel(transport, keyId: 0, options: _reliabilityOptions, controlWrap: _controlWrap,
+                keyDerivation: _keyDerivation);
             _control = control;
 
             // Start the receive pump (UDP/TCP socket transports) once both handlers are wired; loopback transports self-pump.
@@ -252,8 +262,11 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
                 _receiveTask = Task.Run(() => handle.ReceivePump(loopToken));
 
             // --- reset → TLS handshake (inside the reliability layer) ---
-            Logger.LogHandshake(DriverName, "HARD_RESET -> TLS handshake on the control channel");
-            await control.ConnectAsync(_host, _clientCertificates, _serverCertificateValidation, cancellationToken).ConfigureAwait(false);
+            // tls-ekm runs the control TLS over BouncyCastle (exposes the RFC 5705 exporter); cert auth then comes from PEM.
+            string engine = _keyDerivation == OpenVpnKeyDerivationMode.TlsEkm ? "BouncyCastle (tls-ekm)" : "SslStream";
+            Logger.LogHandshake(DriverName, $"HARD_RESET -> TLS handshake on the control channel ({engine})");
+            await control.ConnectAsync(_host, _clientCertificates, _serverCertificateValidation,
+                clientCertPem: _clientCertPem, clientKeyPem: _clientKeyPem, cancellationToken: cancellationToken).ConfigureAwait(false);
 
             // --- key-method-2 over TLS (peer-info advertises IV_CIPHERS for NCP, plus IV_MTU and informational IV_*) ---
             Logger.LogHandshake(DriverName, "key-method-2 key exchange over TLS (peer-info IV_CIPHERS for NCP)");
@@ -264,6 +277,9 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
                 {
                     IvProto = OpenVpnPeerInfo.IvProtoDataV2 | OpenVpnPeerInfo.IvProtoRequestPush | OpenVpnPeerInfo.IvProtoCcExitNotify,
                 };
+            // tls-ekm: advertise the tls-key-export capability so the server may negotiate it (and reply key-derivation tls-ekm).
+            if (_keyDerivation == OpenVpnKeyDerivationMode.TlsEkm && (peerInfoOptions.IvProto & OpenVpnPeerInfo.IvProtoTlsKeyExport) == 0)
+                peerInfoOptions = peerInfoOptions with { IvProto = peerInfoOptions.IvProto | OpenVpnPeerInfo.IvProtoTlsKeyExport };
             if (peerInfoOptions.Mtu is null) peerInfoOptions = peerInfoOptions with { Mtu = _tunMtu };
             string peerInfo = OpenVpnPeerInfo.Build(peerInfoOptions);
             OpenVpnKeyMaterial keyMaterial = await control
