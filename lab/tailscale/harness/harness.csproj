@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    V.7.5 Tailscale full-tunnel live harness: join Headscale via preauth key (ts2021 control), take the netmap,
+    bring a real WireGuard data plane up via the responder role (two .NET nodes hand-shake each other), then
+    either ping a peer's overlay IP or hold the tunnel up (TcpIpStack answers inbound ICMP echo automatically).
+    NOT in the solution (a live driver-validation harness only).
+    Publish:  dotnet publish -c Release -r linux-x64 -o publish
+    Run:      ./harness <config.tailscale> [pingTargetOverlayIp] [holdSeconds]
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\TqkLibrary.VpnClient.Drivers.Tailscale\TqkLibrary.VpnClient.Drivers.Tailscale.csproj" />
+    <ProjectReference Include="..\..\..\src\TqkLibrary.VpnClient.IpStack\TqkLibrary.VpnClient.IpStack.csproj" />
+  </ItemGroup>
+</Project>

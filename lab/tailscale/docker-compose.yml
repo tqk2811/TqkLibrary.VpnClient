@@ -1,11 +1,13 @@
-# V.7.5 Tailscale live lab: Headscale (control server) + a real tailscale node (peer) + a .NET client container.
-# All on one bridge so peers are directly reachable (DERP relay / disco NAT-traversal are future work).
+# V.7.5 Tailscale FULL-TUNNEL live lab: Headscale (control server) + two .NET client containers on one bridge.
+# The two .NET nodes register with Headscale (ts2021 control) and then hand-shake EACH OTHER over WireGuard via the
+# responder role (one initiates per a static-key tie-break, the other answers) — no real tailscale node, no disco —
+# so a real WireGuard tunnel comes up and ICMP flows both ways between the two overlay IPs (100.64.0.1 <-> 100.64.0.2).
 #
-#   headscale  100.64.0.x   control server (ts2021 + netmap)
-#   ts-peer    100.64.0.y   real tailscale node, advertises its CGNAT IP as a peer
-#   client     (runs the .NET demo, joins via preauth key, pings ts-peer over the overlay)
+#   ts-headscale  172.30.0.2   control server (ts2021 + netmap)
+#   ts-client1    172.30.0.10  .NET node 1 (overlay 100.64.0.1), advertises 172.30.0.10:41641
+#   ts-client2    172.30.0.11  .NET node 2 (overlay 100.64.0.2), advertises 172.30.0.11:41641
 #
-# Bring up: docker compose up -d headscale ts-peer ; then create a user + preauth keys (see README-vi.md).
+# Bring up + run: see README-vi.md (create a user + 2 preauth keys, publish the harness, run both nodes together).
 services:
   headscale:
     image: headscale/headscale:latest
@@ -17,45 +19,27 @@ services:
     networks:
       tsnet:
         ipv4_address: 172.30.0.2
-    ports:
-      - "8080:8080"
     restart: unless-stopped
 
-  ts-peer:
-    image: tailscale/tailscale:latest
-    container_name: ts-peer
-    hostname: ts-peer
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    devices:
-      - /dev/net/tun
-    environment:
-      - TS_AUTHKEY=${TS_PEER_AUTHKEY:-}
-      - TS_EXTRA_ARGS=--login-server=http://172.30.0.2:8080 --hostname=ts-peer
-      - TS_STATE_DIR=/var/lib/tailscale
-      - TS_USERSPACE=false
-    volumes:
-      - ts-peer-state:/var/lib/tailscale
-    networks:
-      tsnet:
-        ipv4_address: 172.30.0.3
-    depends_on:
-      - headscale
-    restart: unless-stopped
-
-  client:
+  client1:
     image: debian:bookworm-slim
-    container_name: ts-client
+    container_name: ts-client1
     command: ["sleep", "infinity"]
-    cap_add:
-      - NET_ADMIN
+    cap_add: [NET_ADMIN]
     networks:
       tsnet:
         ipv4_address: 172.30.0.10
-    depends_on:
-      - headscale
-    restart: unless-stopped
+    depends_on: [headscale]
+
+  client2:
+    image: debian:bookworm-slim
+    container_name: ts-client2
+    command: ["sleep", "infinity"]
+    cap_add: [NET_ADMIN]
+    networks:
+      tsnet:
+        ipv4_address: 172.30.0.11
+    depends_on: [headscale]
 
 networks:
   tsnet:
@@ -66,4 +50,3 @@ networks:
 
 volumes:
   hs-lib:
-  ts-peer-state:
