@@ -32,7 +32,8 @@ TqkLibrary.VpnClient.Crypto/
 │   ├── IAeadCipher.cs     # cipher AEAD Seal/Open (AES-GCM...)
 │   ├── IDhGroup.cs        # nhóm Diffie-Hellman (MODP) cho IKE
 │   ├── IPrf.cs            # pseudo-random function (HMAC-*) cho key derivation
-│   └── IIntegrityAlgo.cs  # MAC toàn vẹn với ICV (thường bị cắt ngắn) cho ESP/IKE
+│   ├── IIntegrityAlgo.cs  # MAC toàn vẹn với ICV (thường bị cắt ngắn) cho ESP/IKE
+│   └── ISignatureAlgo.cs  # lược đồ chữ ký khóa-công-khai (Ed25519/ECDSA) — verify cert Nebula
 ├── Aead/
 │   ├── AesGcmCipher.cs           # AES-GCM: native net8.0 / BouncyCastle netstandard2.0
 │   ├── ChaCha20Poly1305Cipher.cs # ChaCha20-Poly1305 (RFC 8439): native net5+ / BouncyCastle netstandard2.0

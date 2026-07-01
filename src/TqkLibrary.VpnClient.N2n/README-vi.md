@@ -9,7 +9,7 @@ Driver runtime (UDP transport, REGISTER_SUPER lifecycle, `IEthernetChannel` ghé
 phase (b) — **XONG**, VALIDATE LIVE L2 full-tunnel ICMP 2 chiều ([`Drivers.N2n`](../TqkLibrary.VpnClient.Drivers.N2n)).
 Header encryption (`-H`) **XONG + VALIDATE LIVE** ([`N2nHeaderEncryption`](N2nHeaderEncryption.cs#L24) — SPECK + Pearson từ Crypto). P2P UDP hole-punching còn lại (future).
 
-> **Trạng thái:** **phase (a) protocol XONG — REGISTER_SUPER VALIDATE LIVE** (2026-06-24) — 21 test offline xanh,
+> **Trạng thái:** **phase (a) protocol XONG — REGISTER_SUPER VALIDATE LIVE** (2026-06-24) — 26 test offline xanh,
 > build xanh ns2.0 + net8. **Đối chiếu với `n2n` v3.1.1 thật** (lab [`lab/n2n`](../../lab/n2n)): supernode thật **CHẤP
 > NHẬN REGISTER_SUPER** của client .NET (community `labnet`, transform NULL, header-enc OFF) — supernode log
 > `Rx REGISTER_SUPER` + `created edge` + `Tx REGISTER_SUPER_ACK`; client **decode REGISTER_SUPER_ACK** thật: cookie
@@ -113,7 +113,7 @@ TqkLibrary.VpnClient.N2n/
 ## Trạng thái & ghi chú
 
 - **Phase (a) protocol XONG + REGISTER_SUPER validate live** (2026-06-24). Build xanh **ns2.0 + net8**; 26 test offline
-  (round-trip mọi pkt-type + wire-layout invariants + AES self-pair 2 chiều + 3 KAT golden live + 6 header-enc).
+  (round-trip mọi pkt-type + wire-layout invariants + AES self-pair 2 chiều + 3 KAT golden live + 5 header-enc).
 - **Header encryption (`-H`) XONG + VALIDATE LIVE** (2026-06-25) qua [`N2nHeaderEncryption`](N2nHeaderEncryption.cs#L24): hiện
   thực `packet_header_encrypt`/`packet_header_decrypt` byte-exact dùng **SPECK-128/128** + **block-Pearson** mới trong
   [Crypto](../TqkLibrary.VpnClient.Crypto) (key SPECK = `pearson128(community)`, IV key = `pearson128(key)`; **lưu ý n2n

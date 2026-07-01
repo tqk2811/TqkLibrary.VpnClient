@@ -7,7 +7,7 @@ Thư viện **protocol ZeroTier V1 (x25519)** thuần .NET — hiện thực hai
 ([`Drivers.ZeroTier`](../TqkLibrary.VpnClient.Drivers.ZeroTier) đã hiện thực — xem [`.docs/11`](../../.docs/11-todo-roadmap.md) §V.7.3).
 
 > **Trạng thái:** **phase (a) + codec phase (b) XONG — VL1 OK peering + VL2 network join VALIDATE LIVE** (2026-06-24)
-> — 46 test offline xanh, build xanh ns2.0 + net8. **(a)** Đối chiếu byte-exact với `zerotier-one` 1.16.2: address
+> — 48 test offline xanh, build xanh ns2.0 + net8. **(a)** Đối chiếu byte-exact với `zerotier-one` 1.16.2: address
 > derivation **KAT 8 identity `zerotier-idtool` thật KHỚP** + VL1 **dearmor/re-seal HELLO thật BYTE-EXACT**. **(b)** vs
 > `zerotier-one` **1.4.6** (Salsa20/12, pre-AES-GMAC-SIV): **HELLO⇄OK timestamp echo + NETWORK_CONFIG_REQUEST →
 > controller-assigned IP + COM** (network join). **3 bug live** sửa qua phase b (Salsa20 block-boundary + OK(HELLO)

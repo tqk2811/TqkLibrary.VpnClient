@@ -3,8 +3,8 @@
 > **Mục tiêu dài hạn: clone lại mọi VPN opensource** thành driver userspace thuần .NET trong thư viện này
 > (đối chiếu plan gốc `wild-stargazing-spark.md` + as-built [`10-codebase-architecture-and-flow.md`](10-codebase-architecture-and-flow.md)).
 > Lộ trình **đã chạy gần hết**: **P1 (ĐÓNG — SSTP + L2TP/IPsec client 100%, kể cả IPv6)** + **F** nền dùng chung
-> + **L2** tầng Ethernet + **17 driver V.x as-built** (Sstp, L2tpIpsec, Pptp, IpEncap, Ikev2, CiscoIpsec, OpenVpn,
-> WireGuard, Nebula, Tailscale, Tinc, N2n, Vtun, Ssh, ZeroTier, OpenConnect, SoftEther — **phần lớn đã VALIDATE LIVE**)
+> + **L2** tầng Ethernet + **19 driver V.x as-built** (Sstp, L2tpIpsec, Pptp, IpEncap, GreInUdp, Ikev2, CiscoIpsec, OpenVpn,
+> WireGuard, Nebula, Tailscale, Tinc, N2n, Vtun, Ssh, ZeroTier, OpenConnect, SoftEther, Vxlan — **phần lớn đã VALIDATE LIVE**)
 > → **còn residual từng driver + tính năng tương lai + Q chất lượng/hạ tầng** (liệt kê dưới đây).
 > Ngoài ra **vài giao thức trong taxonomy [`02`](02-protocol-taxonomy.md) CHƯA khởi động** (chưa có driver): SSL-VPN doanh nghiệp
 > (V.9 Fortinet/F5/GlobalProtect/Array, **V.13** Juniper oNCP / Pulse IF-T), V.8(c) EtherIP/L2TPv3.
@@ -45,7 +45,7 @@
 
 ### Ma trận tái dùng (driver × thành phần)
 
-> 17 driver V.x đều **as-built + wire qua `VpnClientBuilder.Use*`**; cột "trạng thái" ✓ = đã VALIDATE LIVE.
+> 19 driver V.x đều **as-built + wire qua `VpnClientBuilder.Use*`**; cột "trạng thái" ✓ = đã VALIDATE LIVE.
 > Bảng chỉ giữ để tra cứu thành phần tái dùng — không phải việc cần làm.
 
 | Driver | Trạng thái | Transport | Bảo mật data plane | Framing | PPP | L2 fabric |
@@ -60,6 +60,7 @@
 | OpenConnect | live ✓ | TLS + DTLS 1.2 PSK (`Transport.Dtls`) | TLS/DTLS | CSTP 8-byte | — | — |
 | PPTP | live (tới MPPE) | RawIP/GRE (`Transport.RawIp`) | MPPE | Enhanced GRE | ✅ | — |
 | IpEncap (GRE/IPIP/SIT) | live ✓ | RawIP proto-num | none (trần) | GRE v0 / passthrough | — | — |
+| GreInUdp | offline (chờ live) | UDP/4754 | none (trần) | GRE v0 in UDP | — | — |
 | Nebula | live ✓ | UDP | Noise IX + AES-GCM | Nebula packet codec | — | — |
 | Tinc 1.1 | live ✓ | TCP meta + UDP data | SPTPS | bare-IP router-mode | — | — |
 | ZeroTier | live (VL1/VL2 join) | UDP | Salsa20/Poly1305 | EXT_FRAME L2 | — | ✅ Ethernet fabric |
@@ -67,6 +68,7 @@
 | Tailscale | live ✓ | UDP (WG data) + TLS (control) | Noise IK + WG data | WG header | — | — |
 | SSH (-w tun) | live ✓ | TCP (`Transport.Tcp`) | SSH transport (chacha20/aes-gcm) | tun@openssh.com | — | — |
 | vtun | live ✓ | TCP | Blowfish-128-ECB | vtun 2-byte header | — | ✅ tap ether |
+| VXLAN | offline (chờ live) | UDP/4789 | none (trần) | VXLAN 8-byte + VNI | — | ✅ Ethernet fabric |
 
 > Điểm tái dùng lớn: **PPP** phục vụ 3 driver (SSTP/L2TP/PPTP); **ESP + Nat (NAT-T)** phục vụ 3 (L2TP/IPsec, IKEv2, Cisco IPsec);
 > **TLS transport** phục vụ 5 (SSTP/OpenVPN-TCP/SoftEther/OpenConnect/Tailscale-control); **DTLS** (OpenConnect);
@@ -100,7 +102,6 @@
 - [ ] **V.10 — VPN-over-SSH (residual stretch)**. SSH-2 transport tự viết clean-room (RFC 4251/4253/4252/4254 + OpenSSH PROTOCOL): protocol [`Ssh`](../src/TqkLibrary.VpnClient.Ssh) + driver [`Drivers.Ssh`](../src/TqkLibrary.VpnClient.Drivers.Ssh) as-built + VALIDATE LIVE ✓ full-tunnel ICMP 2 chiều vs OpenSSH 9.6p1 (curve25519-sha256 + ed25519 + chacha20-poly1305/aes256-gcm + publickey/password + `tun@openssh.com`) — chi tiết [`10`](10-codebase-architecture-and-flow.md) §5/§9 + README + lab [`ssh`](../lab/ssh). **Ràng buộc live**: OpenSSH gắn tun vào uid phiên ⇒ client phải đăng nhập bằng uid mở được tun (root trong lab). **Còn lại (stretch)**: **(a)** thêm thuật toán KEX/cipher/auth (hostkey rsa/ecdsa, KEX `diffie-hellman-group*`, cipher aes-ctr+hmac EtM, auth keyboard-interactive); **(b)** parse khóa riêng OpenSSH PEM trong demo (hiện chỉ seed ed25519 32-byte trần); **(c)** rekey giữa phiên (`SSH_MSG_KEXINIT` mid-session); **(d)** tap mode L2 (`SSH_TUNMODE_ETHERNET` → `IEthernetChannel`). **sshuttle** = **ngoài phạm vi** (proxy, không phải tunnel L3 thật; cần admin local).
 - [ ] **V.11 — vtun (residual stretch, tunnel daemon legacy)**. Protocol [`Vtun`](../src/TqkLibrary.VpnClient.Vtun) + driver [`Drivers.Vtun`](../src/TqkLibrary.VpnClient.Drivers.Vtun) as-built + VALIDATE LIVE ✓ full-tunnel vs vtund 3.0.4 (TCP; `type tun` + `type ether`/tap; `encrypt no` + `encrypt yes`/Blowfish-128-ECB; ICMP 2 chiều, 0 bug client) — chi tiết [`10`](10-codebase-architecture-and-flow.md) §5/§9 + README + lab [`vtun`](../lab/vtun). **Còn lại (stretch, tùy nhu cầu interop)**: **(a)** cipher khác BF128ECB (Blowfish/AES mode CBC/CFB/OFB + key 256-bit — cần `lfd_encrypt` sideband IV-exchange `ivec`/`seq#` per-packet framing; AES tái dùng `AesCbcCipher`/`AesCtr`, key 32-byte đã có [`VtunKeyDerivation.DeriveKey32`](../src/TqkLibrary.VpnClient.Vtun/Auth/VtunKeyDerivation.cs)); **(b)** compression (zlib/lzo — `compress yes`, lfd_zlib/lfd_lzo); **(c)** UDP transport (`proto udp` — frame cùng header 2-byte trong mỗi datagram, sanity-check `(rlen-2)==flen`). ⚠️ crypto legacy yếu (Blowfish-ECB/MD5) — chỉ interop. **Ràng buộc env live**: vtund 3.0.4 trên OpenSSL 3.0 cần legacy provider (`OPENSSL_CONF`) để Blowfish chạy.
 - [ ] **V.13 — Juniper Network Connect (oNCP) + Pulse/Ivanti Secure (IF-T/TLS) — họ SSL + ESP-in-UDP doanh nghiệp** (chưa khởi động). Cùng họ openconnect-family như V.5/V.9 nhưng **control protocol riêng**: Juniper NC = **oNCP** (auth HTTPS `/dana-na/` → tunnel oNCP TLV), Pulse/Ivanti = **IF-T/TLS** (TNC); data plane **TLS hoặc ESP-in-UDP (in-band)** + EAP. **KHÔNG cần admin** (ESP-in-UDP chạy userspace như L2TP/IPsec NAT-T). **Tái dùng**: F.1 TLS, F.3 DTLS ([`Transport.Dtls`](../src/TqkLibrary.VpnClient.Transport.Dtls)), ESP ([`EspSession`](../src/TqkLibrary.VpnClient.Ipsec/Esp/EspSession.cs)) + NAT-T ([`NatTraversalChannel`](../src/TqkLibrary.VpnClient.Ipsec/Nat/NatTraversalChannel.cs)), EAP-MSCHAPv2 (đã có cho IKEv2/V.1 trong [`Ipsec`](../src/TqkLibrary.VpnClient.Ipsec)), IpStack, F.6. **Mới cần**: codec oNCP / IF-T (TLV) + HTTP auth từng hãng (dựng lại từ behavior **openconnect** protocol `nc`/`pulse` — đọc spec, KHÔNG copy GPL). Taxonomy [`02`](02-protocol-taxonomy.md) Tier 2. ⚠️ protocol đóng, interop dễ vỡ theo firmware; cần lab/license (Q.1).
-- [ ] **V.14 — VXLAN (RFC 7348) — residual live-validate**. Đóng khung Ethernet trong **UDP/4789** (VXLAN header 8B: flags `0x08` + VNI 24-bit big-endian) → ghép [Ethernet L2 fabric](../src/TqkLibrary.VpnClient.Ethernet) (`IEthernetChannel` + `VirtualHost` + ARP) như SoftEther/n2n/ZeroTier. **Offline XONG** via driver [`Drivers.Vxlan`](../src/TqkLibrary.VpnClient.Drivers.Vxlan) (mirror n2n nhưng **bỏ registration/keepalive/transform/header-encryption** — VXLAN chỉ là header; codec tự chứa [`VxlanCodec`](../src/TqkLibrary.VpnClient.Drivers.Vxlan/VxlanCodec.cs), no-elevation, `UseVxlan`, 16 test offline) — chi tiết [`10`](10-codebase-architecture-and-flow.md) §5/§9 + README. **KHÔNG cần raw socket/admin** (UDP datagram thường). **Crypto: none** (VXLAN trần — mạng tin cậy, hoặc bọc IPsec/DTLS nếu cần riêng tư). **Còn lại**: **validate live** peer Linux `ip link add type vxlan id <VNI> remote <ip> dstport 4789` + `ip addr add <overlay>` → round-trip ICMP thật qua L2 overlay (mô hình lab giống [`n2n`](../lab/n2n)/[`ipencap`](../lab/ipencap); validate on-wire header 8B + fabric ARP). Taxonomy [`02`](02-protocol-taxonomy.md) Tier 2. (Sibling **Geneve** RFC 8926 / **VXLAN-GPE** / **NVGRE** ở V.22 — làm sau nếu có nhu cầu thật.)
 ---
 
 ## V★ — Backlog phủ TOÀN BỘ giao thức VPN opensource / public-doc (RFC)
@@ -135,12 +136,11 @@
 - [ ] **Teredo** (RFC 4380/5991/6081, IPv6-in-UDP/IPv4, prefix `2001::/32` + qualification cone/restricted-NAT ⚠️ MS server công cộng đã ngừng), **AYIYA** (SixXS `draft-massar-v6ops-ayiya`, `aiccu` — SHA-hash+timestamp, ⚠️ SixXS đóng 2017), **TSP** (RFC 5572, Gogo6 `gogoc` — signaling XML + SASL) + TIC/heartbeat (RFC 3053). Tái dùng `IDatagramTransport` + IpStack + keepalive F.6 + Crypto SHA/HMAC. Feasible high. Tier 2–3.
 
 ### V.21 — Generic X-over-UDP encapsulation (UDP — KHÔNG admin; **bù đúng hạn chế raw-IP của V.8**)
-- [ ] **GRE-in-UDP (RFC 8086) — residual live-validate**. Driver [`Drivers.GreInUdp`](../src/TqkLibrary.VpnClient.Drivers.GreInUdp) as-built OFFLINE (code + 7 test: UDP loopback thật + GRE-in-UDP v4/v6 + caps no-elevation/no-raw + port 4754 + factory-inject) — tái dùng nguyên GreTunnelChannel/GreCodec của [`IpEncap`](../src/TqkLibrary.VpnClient.IpEncap), chở header GRE trong UDP/4754, KHÔNG admin. Chi tiết as-built ở [`10`](10-codebase-architecture-and-flow.md) §5/§9 + README. **Còn lại**: validate live với peer Linux (`ip link add type gre ... encap fou` + `ip fou add port 4754 ipproto 47`, hoặc `gretap`) — cần IP reachable qua UDP/4754.
-- [ ] **FOU** (Linux foo-over-UDP — IP-proto suy từ UDP dest-port), **GUE** (draft-ietf-intarea-gue — header mang proto + flags/security). Tái dùng codec GRE/IPIP + `IDatagramTransport`. Feasible high. Tier 2.
+- [ ] **FOU** (Linux foo-over-UDP — IP-proto suy từ UDP dest-port), **GUE** (draft-ietf-intarea-gue — header mang proto + flags/security). Tái dùng codec GRE/IPIP + `IDatagramTransport` (nền GRE-in-UDP/RFC 8086 đã as-built ở [`Drivers.GreInUdp`](../src/TqkLibrary.VpnClient.Drivers.GreInUdp)). Feasible high. Tier 2.
 - [ ] **MPLS-in-UDP** (RFC 7510 UDP/6635 — ⚠️ cần control plane nhãn), **GTP-U** (3GPP TS 29.281, UDP/2152, TEID — lab cellular 4G/5G), **AMT** (RFC 7450 UDP/2268 — multicast tunneling). Feasible medium. Tier 3.
 
-### V.22 — Overlay datacenter L2/L3 (tái dùng [Ethernet L2 fabric](../src/TqkLibrary.VpnClient.Ethernet) như VXLAN V.14 / SoftEther / n2n / ZeroTier)
-- [ ] **Geneve** (RFC 8926, UDP/6081 — sibling trực tiếp VXLAN V.14 + parser TLV options; KHÔNG admin), **VXLAN-GPE** (draft, UDP/4790 — mở rộng next-proto của codec VXLAN), **GRE-in-UDP TEB** (đã ở V.21, protocol-type Ethernet). Feasible high. Tier 2.
+### V.22 — Overlay datacenter L2/L3 (tái dùng [Ethernet L2 fabric](../src/TqkLibrary.VpnClient.Ethernet) như VXLAN [`Drivers.Vxlan`](../src/TqkLibrary.VpnClient.Drivers.Vxlan) / SoftEther / n2n / ZeroTier)
+- [ ] **Geneve** (RFC 8926, UDP/6081 — sibling trực tiếp VXLAN [`Drivers.Vxlan`](../src/TqkLibrary.VpnClient.Drivers.Vxlan) + parser TLV options; KHÔNG admin), **VXLAN-GPE** (draft, UDP/4790 — mở rộng next-proto của codec VXLAN), **GRE-in-UDP TEB** (đã ở V.21, protocol-type Ethernet). Feasible high. Tier 2.
 - [ ] **GRETAP / EoGRE** (GRE proto-47 + protocol-type 0x6558 Ethernet → L2 fabric; **gần free** từ codec GRE V.8 + payload Ethernet; ⚠️ raw + IP public), **NVGRE** (RFC 7637 = GRETAP + VSID-24bit trong GRE Key). Feasible high (GRETAP) / medium (NVGRE). Tier 2–3.
 - [ ] **MPLS-in-IP / MPLS-in-GRE** (RFC 4023, proto-137 / GRE — ⚠️ cần control plane nhãn LDP/BGP), **NSH** (RFC 8300 service-chaining — niche, không phải VPN endpoint). Tier 3.
 
@@ -198,7 +198,7 @@
 
 ## Q — Chất lượng / hạ tầng (chạy song song mọi giai đoạn)
 
-- [ ] **Q.1 — Lab server Docker (còn lại: job integration CI + validate driver chưa kiểm live)**. Lab đã dựng + chạy ở [`lab/`](../lab/README-vi.md) cho phần lớn driver (P1 + 17 driver V.x đa số validate live). **Còn lại**: (1) job **integration lab trong CI** (Q.5); (2) lab/validate cho residual chưa kiểm live của từng driver (đã liệt kê ở V.x). ⚠️ **accel-ppp L2TP cũng IPv4-only** (`socket(PF_INET)`/`sockaddr_in`, 0 `sockaddr_in6` ở `l2tp.c`) — như xl2tpd ⇒ **không dùng được để validate full L2TP-over-IPv6** (external-infeasible).
+- [ ] **Q.1 — Lab server Docker (còn lại: job integration CI + validate driver chưa kiểm live)**. Lab đã dựng + chạy ở [`lab/`](../lab/README-vi.md) cho phần lớn driver (P1 + 19 driver V.x đa số validate live). **Còn lại**: (1) job **integration lab trong CI** (Q.5); (2) lab/validate cho residual chưa kiểm live của từng driver (đã liệt kê ở V.x). ⚠️ **accel-ppp L2TP cũng IPv4-only** (`socket(PF_INET)`/`sockaddr_in`, 0 `sockaddr_in6` ở `l2tp.c`) — như xl2tpd ⇒ **không dùng được để validate full L2TP-over-IPv6** (external-infeasible).
 - [ ] **Q.2 — Logging/diagnostics: tầng Ethernet/L2 + IKEv2 deep (còn lại)**. Seam `Abstractions/Diagnostics` + luồng `ILoggerFactory?` đã làm cho **tất cả driver runtime** và **tầng PROTOCOL sâu IKE/ESP/PPP/IpStack-TCP**. **Còn lại**: luồn logger xuống tầng **Ethernet/L2 fabric** (`EthernetSwitch`/`VirtualHost`/ARP·NDISC·DHCP resolver) khi cần trace L2; và IKEv2-native deep (`IkeClient` V2/`IkeSaInitiator`) per-message trace nếu cần (hiện chỉ `Ikev2Connection` log handshake-step cấp cao).
 - [ ] **Q.4 — Hiệu năng data plane (zero-alloc + backpressure, còn lại)**: design `09` đặt mục tiêu `ArrayPool`/`IMemoryOwner`/span không-alloc-mỗi-gói + `System.Threading.Channels`/Pipe để backpressure. Hiện data plane copy `byte[]` mỗi gói (`System.IO.Pipelines` mới chỉ ref ở [Directory.Build.props](../src/Directory.Build.props), chưa dùng) — **đo + tối ưu khi cần throughput**. (Bug TCP send-window stall "1 byte/segment" đã SỬA + VALIDATE LIVE — sender SWS avoidance [`ShouldSendNow`](../src/TqkLibrary.VpnClient.IpStack/Tcp/TcpConnection.cs#L569) RFC 9293 §3.8.6.2.1; chi tiết bảng "Khác biệt" [`10`](10-codebase-architecture-and-flow.md).)
 - [ ] **Q.5 — CI: job integration lab (còn lại)**. CI đa OS as-built — workflow [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) build 2 TFM + offline suite matrix 3 OS (ubuntu/windows/macos). **Còn lại**: (sau Q.1) **job integration lab** chạy validate live trong CI.
@@ -209,11 +209,11 @@
 
 ## Gợi ý thứ tự cho việc CÒN LẠI
 
-> P1 + F + L2 + 17 driver V.x (kể cả V.12 Cisco IPsec/EzVPN) đã as-built, phần lớn VALIDATE LIVE — as-built ở
+> P1 + F + L2 + 19 driver V.x (kể cả V.12 Cisco IPsec/EzVPN) đã as-built, phần lớn VALIDATE LIVE — as-built ở
 > [`10`](10-codebase-architecture-and-flow.md) §5/§9 + README từng project. Dưới đây là thứ tự ưu tiên cho **residual + tính năng mới**:
 
 1. **Giao thức mới chưa khởi động**: **V.9 SSL-VPN dialects** (Fortinet/F5/GlobalProtect/**Array** — họ TLS+DTLS mở rộng V.5, tái dùng F.1/F.3/PPP); **V.13 Juniper oNCP / Pulse IF-T** (TLS + ESP-in-UDP + EAP, tái dùng Ipsec/ESP + EAP); **V.8(c) EtherIP/L2TPv3** (mở rộng IpEncap, cần F.9 RawIp + IP public). **+ backlog mở rộng V.15–V.29** (mục **V★**) — toàn bộ họ giao thức opensource/RFC còn lại; đòn bẩy cao nhất: V.26 innernet (WG control-plane Tier 1), V.28 OpenVPN-over-TCP + V.29 AmneziaWG/stunnel (chống-DPI rẻ), V.21 FOU/GUE (GRE-in-UDP đã as-built offline — residual live), V.22 Geneve/GRETAP, V.15 IKEv2 Fragmentation+MOBIKE + IPsec-over-TCP (RFC 8229), V.16 EAP-TLS/TTLS, V.19 SIIT engine.
 2. **Residual data-plane đáng giá**: V.2 OpenVPN soft-reset make-before-break; V.3 WireGuard roaming endpoint; V.7.3 ZeroTier COM-exchange (VL2 ICMP); V.7.4 n2n transform key-derivation + P2P hole-punching; V.7.1 Nebula lighthouse/relay.
-3. **Validate live còn thiếu** (cần lab/server đặc thù — Q.1): **V.14 VXLAN** (offline+16 test XONG — chỉ chờ peer Linux `ip link add type vxlan … dstport 4789`); V.6 PPTP full ICMP (server poptop/RRAS/MikroTik); V.4 SoftEther TCP-internet/multi-connection/IPv6; V.2 tap server-bridge IPv6/multi-host; V.1 live-rekey timer-dài + cert-trên-EAP; F.9 raw socket trên Windows + IPv6 receive.
+3. **Validate live còn thiếu** (cần lab/server đặc thù — Q.1): **VXLAN** ([`Drivers.Vxlan`](../src/TqkLibrary.VpnClient.Drivers.Vxlan) offline+16 test XONG — chỉ chờ peer Linux `ip link add type vxlan … dstport 4789`); **GRE-in-UDP** ([`Drivers.GreInUdp`](../src/TqkLibrary.VpnClient.Drivers.GreInUdp) offline+7 test XONG — chỉ chờ peer Linux `ip fou add port 4754 ipproto 47`); V.6 PPTP full ICMP (server poptop/RRAS/MikroTik); V.4 SoftEther TCP-internet/multi-connection/IPv6; V.2 tap server-bridge IPv6/multi-host; V.1 live-rekey timer-dài + cert-trên-EAP; F.9 raw socket trên Windows + IPv6 receive.
 4. **Tính năng tương lai/stretch**: V.7.5 Tailscale disco + DERP; V.10 SSH thêm KEX/cipher + rekey + tap; V.11 vtun cipher/compression/UDP; F.2 trừu tượng hóa `IPacketEncapsulator`/`ISecuritySession`.
 5. **Q chất lượng/hạ tầng** chạy song song theo nhu cầu: Q.4 zero-alloc data plane; Q.2 logger L2/IKEv2-deep; Q.5 job integration lab CI; Q.6 tách proxy project; Q.7 NuGet packaging.
