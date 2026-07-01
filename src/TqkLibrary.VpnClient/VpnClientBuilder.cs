@@ -25,6 +25,8 @@ using TqkLibrary.VpnClient.Drivers.Tinc;
 using TqkLibrary.VpnClient.Drivers.Tinc.Config;
 using TqkLibrary.VpnClient.Drivers.Vtun;
 using TqkLibrary.VpnClient.Drivers.Vtun.Config;
+using TqkLibrary.VpnClient.Drivers.Vxlan;
+using TqkLibrary.VpnClient.Drivers.Vxlan.Config;
 using TqkLibrary.VpnClient.Drivers.WireGuard;
 using TqkLibrary.VpnClient.Drivers.ZeroTier;
 using TqkLibrary.VpnClient.Drivers.ZeroTier.Config;
@@ -312,6 +314,20 @@ namespace TqkLibrary.VpnClient
         /// </summary>
         public VpnClientBuilder UseSoftEther(string hubName, bool enableIpv6)
             => AddDriver(new SoftEtherDriver(hubName, enableIpv6: enableIpv6));
+
+        /// <summary>
+        /// Registers the VXLAN (RFC 7348) driver: L2-over-UDP that carries full Ethernet frames behind an 8-byte VXLAN
+        /// header over UDP/4789 to a static unicast remote VTEP, plugged into the Ethernet fabric (ARP + VirtualHost) down
+        /// to a stable L3 packet channel — like n2n but with <b>no control plane</b> (no registration, keepalive,
+        /// transform or encryption). The static <see cref="VxlanConfig"/> (VNI, this endpoint's static overlay IP + MAC,
+        /// MTU) maps straight to a <c>TunnelConfig</c> (no DHCP); the remote VTEP host comes from the connect-time
+        /// endpoint. No elevation required. Auto-reconnect is enabled by default.
+        /// </summary>
+        public VpnClientBuilder UseVxlan(VxlanConfig config) => AddDriver(new VxlanDriver(config));
+
+        /// <summary>Registers the VXLAN driver with explicit auto-reconnect options (e.g. to disable it).</summary>
+        public VpnClientBuilder UseVxlan(VxlanConfig config, VxlanReconnectOptions reconnectOptions)
+            => AddDriver(new VxlanDriver(config, reconnectOptions));
 
         /// <summary>Builds the client.</summary>
         public VpnClient Build() => new VpnClient(_drivers);

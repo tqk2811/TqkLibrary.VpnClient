@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>VXLAN (RFC 7348) L2-over-UDP protocol driver: an 8-byte VXLAN header + a full Ethernet frame carried over UDP/4789 to a static unicast remote VTEP. The data session is an L2 IEthernetChannel that plugs into the userspace Ethernet fabric (ARP + VirtualHost), bridged down to a stable L3 packet channel — mirroring the n2n driver but WITHOUT registration, transform, keepalive or a control plane (VXLAN is a pure header, no signalling). No encryption, no elevation. Static config (VNI, overlay IP/prefix, local MAC, MTU) maps to a TunnelConfig (no DHCP); the remote VTEP host:port comes from the connect-time VpnEndpoint. Teardown and auto-reconnect via the shared supervisor.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.Core\TqkLibrary.VpnClient.Drivers.Core.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Ethernet\TqkLibrary.VpnClient.Ethernet.csproj" />
+  </ItemGroup>
+
+</Project>
