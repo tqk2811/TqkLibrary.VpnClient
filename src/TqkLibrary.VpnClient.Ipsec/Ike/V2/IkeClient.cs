@@ -216,7 +216,7 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
 
                 byte[] expected = IkePskAuth.ComputeResponderAuth(
                     _prf, _preSharedKey, _initiator.InitResponseBytes, _initiator.Nonce, _initiator.Keys!.SkPr, restOfIdR);
-                return FixedTimeEquals(expected, auth.Data);
+                return CryptoBytes.FixedTimeEquals(expected, auth.Data);
             }
 
             // Digital-signature responder auth requires a configured trust anchor and a CERT payload to verify against.
@@ -325,7 +325,7 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
 
                 byte[] expected = IkePskAuth.ComputeResponderAuth(
                     _prf, _preSharedKey, _initiator.InitResponseBytes, _initiator.Nonce, _initiator.Keys.SkPr, idR.BodyBytes());
-                if (!FixedTimeEquals(expected, auth.Data)) return Fail();
+                if (!CryptoBytes.FixedTimeEquals(expected, auth.Data)) return Fail();
 
                 _eapResponderIdBody = idR.BodyBytes();
                 _eapStarted = true;
@@ -373,7 +373,7 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
 
             byte[] expected = IkePskAuth.ComputeResponderAuth(
                 _prf, _eap.Msk, _initiator.InitResponseBytes, _initiator.Nonce, _initiator.Keys.SkPr, _eapResponderIdBody);
-            if (!FixedTimeEquals(expected, auth.Data)) return false;
+            if (!CryptoBytes.FixedTimeEquals(expected, auth.Data)) return false;
 
             IkeProposal? proposal = sa.Proposals.FirstOrDefault();
             if (proposal is null || proposal.Spi.Length == 0) return false;
@@ -685,14 +685,6 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             using var rng = RandomNumberGenerator.Create();
             rng.GetBytes(nonce);
             return nonce;
-        }
-
-        static bool FixedTimeEquals(byte[] a, byte[] b)
-        {
-            if (a.Length != b.Length) return false;
-            int diff = 0;
-            for (int i = 0; i < a.Length; i++) diff |= a[i] ^ b[i];
-            return diff == 0;
         }
     }
 }

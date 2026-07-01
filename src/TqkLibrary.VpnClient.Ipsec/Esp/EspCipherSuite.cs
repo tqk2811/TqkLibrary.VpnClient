@@ -36,16 +36,6 @@ namespace TqkLibrary.VpnClient.Ipsec.Esp
             rng.GetBytes(buffer);
         }
 
-        /// <summary>Constant-time comparison of two equal-length spans (avoids MAC-timing leaks).</summary>
-        private protected static bool ConstantTimeEquals(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
-        {
-            if (a.Length != b.Length) return false;
-            int diff = 0;
-            for (int i = 0; i < a.Length; i++)
-                diff |= a[i] ^ b[i];
-            return diff == 0;
-        }
-
         /// <summary>
         /// Strips ESP trailer padding from decrypted plaintext (… Pad | PadLength | NextHeader) per RFC 4303 §2.4,
         /// validating the monotonic 1..PadLength pattern. Returns false on malformed padding.

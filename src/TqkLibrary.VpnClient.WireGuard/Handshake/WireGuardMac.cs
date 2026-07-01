@@ -1,4 +1,5 @@
 using System.Text;
+using TqkLibrary.VpnClient.Crypto;
 using TqkLibrary.VpnClient.Crypto.Abstractions.Interfaces;
 using TqkLibrary.VpnClient.Crypto.Noise;
 
@@ -77,7 +78,7 @@ namespace TqkLibrary.VpnClient.WireGuard.Handshake
             if (received.Length != WireGuardConstants.MacLength) return false;
             Span<byte> expected = stackalloc byte[WireGuardConstants.MacLength];
             ComputeMac1(content, expected);
-            return FixedTimeEquals(expected, received);
+            return CryptoBytes.FixedTimeEquals(expected, received);
         }
 
         /// <summary>
@@ -108,7 +109,7 @@ namespace TqkLibrary.VpnClient.WireGuard.Handshake
             if (received.Length != WireGuardConstants.MacLength) return false;
             Span<byte> expected = stackalloc byte[WireGuardConstants.MacLength];
             ComputeMac2(cookie, content, expected);
-            return FixedTimeEquals(expected, received);
+            return CryptoBytes.FixedTimeEquals(expected, received);
         }
 
         // HASH(label || publicKey) using the running BLAKE2s digest — 8-byte ASCII label then the 32-byte key.
@@ -121,16 +122,6 @@ namespace TqkLibrary.VpnClient.WireGuard.Handshake
             byte[] output = new byte[hash.HashSizeInBytes];
             hash.ComputeHash(input, output);
             return output;
-        }
-
-        // Constant-time comparison (avoid leaking how many leading bytes matched). CryptographicOperations
-        // is only on net5+, so do it by hand for netstandard2.0 too.
-        static bool FixedTimeEquals(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
-        {
-            if (a.Length != b.Length) return false;
-            int diff = 0;
-            for (int i = 0; i < a.Length; i++) diff |= a[i] ^ b[i];
-            return diff == 0;
         }
     }
 }

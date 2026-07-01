@@ -135,7 +135,7 @@ namespace TqkLibrary.VpnClient.Ssh.Cipher
 
             byte[] expectedTag = ComputeTag(polyKey, wirePacket.Slice(0, total));
             ReadOnlySpan<byte> actualTag = wirePacket.Slice(total, TagBytes);
-            if (!FixedTimeEquals(expectedTag, actualTag)) return false;
+            if (!CryptoBytes.FixedTimeEquals(expectedTag, actualTag)) return false;
 
             // Decrypt the length (K_1) and the body (K_2 from counter 1) into the plaintext binary packet.
             byte[] plainLen = new byte[4];
@@ -148,14 +148,6 @@ namespace TqkLibrary.VpnClient.Ssh.Cipher
             payloadStream.Process(body);              // counter 1+ → decrypt body
             body.CopyTo(plaintext.Slice(4));
             return true;
-        }
-
-        static bool FixedTimeEquals(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
-        {
-            if (a.Length != b.Length) return false;
-            int diff = 0;
-            for (int i = 0; i < a.Length; i++) diff |= a[i] ^ b[i];
-            return diff == 0;
         }
     }
 }

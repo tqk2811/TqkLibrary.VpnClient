@@ -201,7 +201,7 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
             byte[] expected = IkeV1Auth.ComputeHashR(_prf, _keys.Skeyid, _keInitiator, _keResponder,
                 InitiatorCookie, ResponderCookie, _saInitiatorBody, _idResponderBody);
             byte[] hashR = message.FindRaw(IsakmpPayloadType.Hash)?.Body ?? Array.Empty<byte>();
-            bool ok = hashR.Length > 0 && FixedTimeEquals(expected, hashR);
+            bool ok = hashR.Length > 0 && CryptoBytes.FixedTimeEquals(expected, hashR);
             _logger.LogProtocolStep(Layer, ok
                 ? "AG2: SKEYID* derived, responder HASH_R verified — Aggressive Mode Phase 1 established"
                 : "AG2: responder HASH_R mismatch (wrong group PSK or tampered reply)");
@@ -362,7 +362,7 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
             byte[] expected = IkeV1Auth.ComputeHashR(_prf, _keys!.Skeyid, _keInitiator, _keResponder,
                 InitiatorCookie, ResponderCookie, _saInitiatorBody, idR.Body);
             _phase1LastIv = _phase1Cipher!.CurrentIv;
-            bool ok = FixedTimeEquals(expected, hashR.Body);
+            bool ok = CryptoBytes.FixedTimeEquals(expected, hashR.Body);
             _logger.LogProtocolStep(Layer, ok
                 ? "MM6: responder HASH_R verified — Phase 1 (Main Mode) established"
                 : "MM6: responder HASH_R mismatch (wrong PSK or tampered reply)");
@@ -998,7 +998,7 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
             IsakmpRawPayload? hash = payloads.OfType<IsakmpRawPayload>().FirstOrDefault(p => p.Type == IsakmpPayloadType.Hash);
             byte[] afterHash = PayloadChainAfterFirst(plaintext, IsakmpPayloadType.Hash);
             byte[] expected = IkeV1QuickMode.ComputeHash2(_prf, _keys!.SkeyidA, messageId, nonceInitiator, afterHash);
-            if (hash is null || !FixedTimeEquals(expected, hash.Body))
+            if (hash is null || !CryptoBytes.FixedTimeEquals(expected, hash.Body))
                 throw new VpnServerRejectedException("IKEv1 Quick Mode HASH(2) authentication failed (wrong PSK or tampered reply).");
         }
 
@@ -1063,14 +1063,6 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
             if (a.Length != b.Length) return false;
             for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
             return true;
-        }
-
-        static bool FixedTimeEquals(byte[] a, byte[] b)
-        {
-            if (a.Length != b.Length) return false;
-            int diff = 0;
-            for (int i = 0; i < a.Length; i++) diff |= a[i] ^ b[i];
-            return diff == 0;
         }
 
         static byte[] RandomBytes(int length)

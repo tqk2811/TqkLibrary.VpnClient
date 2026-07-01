@@ -87,7 +87,7 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             int macLength = data.Length - icvSize;
             Span<byte> expected = stackalloc byte[icvSize];
             _integrity.ComputeIcv(_receiveIntegrityKey, data.AsSpan(0, macLength), expected);
-            if (!ConstantTimeEquals(expected, data.AsSpan(macLength, icvSize))) return null;
+            if (!CryptoBytes.FixedTimeEquals(expected, data.AsSpan(macLength, icvSize))) return null;
 
             var firstInner = (IkePayloadType)data[IkeMessage.HeaderSize];
             int o = IkeMessage.HeaderSize + 4;
@@ -131,14 +131,6 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             buffer[25] = (byte)(totalLength >> 16);
             buffer[26] = (byte)(totalLength >> 8);
             buffer[27] = (byte)totalLength;
-        }
-
-        static bool ConstantTimeEquals(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
-        {
-            if (a.Length != b.Length) return false;
-            int diff = 0;
-            for (int i = 0; i < a.Length; i++) diff |= a[i] ^ b[i];
-            return diff == 0;
         }
     }
 }

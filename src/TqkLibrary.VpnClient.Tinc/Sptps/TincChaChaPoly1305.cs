@@ -1,6 +1,7 @@
 using Org.BouncyCastle.Crypto.Engines;
 using Org.BouncyCastle.Crypto.Macs;
 using Org.BouncyCastle.Crypto.Parameters;
+using TqkLibrary.VpnClient.Crypto;
 
 namespace TqkLibrary.VpnClient.Tinc.Sptps
 {
@@ -88,7 +89,7 @@ namespace TqkLibrary.VpnClient.Tinc.Sptps
             byte[] ct = input.Slice(0, ctLen).ToArray();
             Span<byte> expected = stackalloc byte[TagLength];
             ComputeTag(polyKey, ct, expected);
-            if (!ConstantTimeEquals(expected, input.Slice(ctLen, TagLength)))
+            if (!CryptoBytes.FixedTimeEquals(expected, input.Slice(ctLen, TagLength)))
                 return false;
 
             byte[] pt = new byte[ctLen];
@@ -116,14 +117,6 @@ namespace TqkLibrary.VpnClient.Tinc.Sptps
             byte[] mac = new byte[TagLength];
             poly.DoFinal(mac, 0);
             mac.AsSpan(0, TagLength).CopyTo(tag);
-        }
-
-        static bool ConstantTimeEquals(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
-        {
-            if (a.Length != b.Length) return false;
-            int diff = 0;
-            for (int i = 0; i < a.Length; i++) diff |= a[i] ^ b[i];
-            return diff == 0;
         }
     }
 }

@@ -69,7 +69,8 @@ TqkLibrary.VpnClient.Crypto/
 ├── Tls1Prf.cs             # PRF TLS 1.0/1.1 (RFC 2246 §5) = P_MD5 XOR P_SHA1 — OpenVPN key-method-2 (static)
 ├── Speck.cs               # SPECK-128/128 ARX block cipher (ECB + CTR, LE-word) — n2n -H header-enc (V.7.4); KAT libn2n.a + NSA
 ├── PearsonHash.cs         # n2n block-Pearson 64/128 (Mix13, no-table) — n2n -H key-derive + checksum (V.7.4); KAT tests-hashing
-└── AntiReplayWindow.cs    # cửa sổ chống replay trượt 64 gói trên seq 32-bit (RFC 4303 §3.4.3) — ESP + OpenVPN AEAD
+├── AntiReplayWindow.cs    # cửa sổ chống replay trượt 64 gói trên seq 32-bit (RFC 4303 §3.4.3) — ESP + OpenVPN AEAD
+└── CryptoBytes.cs         # so sánh byte hằng-thời-gian (FixedTimeEquals) — gom bản trùng IKE/ESP/WG/ZeroTier/Tinc/OpenVPN/SSH
 ```
 
 ## Thành phần chính
@@ -111,6 +112,7 @@ TqkLibrary.VpnClient.Crypto/
 | `PrfPlus` | IKEv2 `prf+` key expansion, `static Expand(IPrf, key, seed, length)` | [PrfPlus.cs:9](PrfPlus.cs#L9) |
 | `Tls1Prf` | PRF TLS 1.0/1.1 (RFC 2246 §5 / RFC 4346) = `P_MD5(S1, label‖seed) XOR P_SHA1(S2, label‖seed)`, secret cắt đôi S1/S2 (chia byte giữa khi lẻ); pure static `Compute(...)`; OpenVPN key-method-2 khi không `tls-ekm` | [Tls1Prf.cs:11](Tls1Prf.cs#L11) |
 | `AntiReplayWindow` | cửa sổ chống replay trượt 64 gói trên seq/packet-id 32-bit (RFC 4303 §3.4.3); `Check` (kiểm thuần, không ghi) + `Commit` (ghi sau khi integrity pass) + `Highest`; gói đầu = seq 1; dùng cho ESP + OpenVPN AEAD | [AntiReplayWindow.cs:8](AntiReplayWindow.cs#L8) |
+| `CryptoBytes` | So sánh byte **hằng-thời-gian** `static FixedTimeEquals(ReadOnlySpan<byte>, ReadOnlySpan<byte>)` — net5+ ủy nhiệm `CryptographicOperations.FixedTimeEquals`, netstandard2.0 vòng XOR-accumulate; gom 11 bản trùng lặp trước đây rải ở IKE/ESP/WireGuard/ZeroTier/Tinc/OpenVPN/SSH | [CryptoBytes.cs:12](CryptoBytes.cs#L12) |
 | `MsChapV2` | Codec MS-CHAPv2 client-side (RFC 2759): NT hash (MD4), challenge hash (SHA-1), NT-Response (3×DES), Authenticator-Response §8.7 (`GenerateAuthenticatorResponse`) + dẫn xuất HLAK/MPPE (RFC 3079) & EAP-MSK 64B (`DeriveMsk`) + **MPPE start keys** (`DeriveMppeMasterKey`/`DeriveMppeSendStartKey`/`DeriveMppeReceiveStartKey`, có cờ `isServer` chọn Magic2/Magic3); dùng chung cho PPP auth, IKEv2 EAP & MPPE/PPTP | [MsChapV2.cs:10](MsChapV2.cs#L10) |
 | `MppeKeyDerivation` | MPPE key schedule (RFC 3078 §7 + RFC 3079): `GetNewKeyFromSha` + `DeriveInitialSessionKey` (SHA-only) + `DeriveNextSessionKey` (SHA→RC4(self) re-key) + `ReduceStrength` (40→0xD126 9E / 56→0xD1 / 128 nguyên); dùng SHA-1 BCL (không phải SHA-0) | [Mppe/MppeKeyDerivation.cs:19](Mppe/MppeKeyDerivation.cs#L19) |
 | `MppeSession` | 1 chiều MPPE-encrypted PPP (RFC 3078): RC4 state + 12-bit coherency count + framing header A/B/C/D; `Encrypt`/`Decrypt`; **stateless** = re-key (`mppe_rekey(0)`) + FLUSHED **mỗi gói KỂ CẢ gói đầu** (khớp kernel `ppp_mppe.c`; bug live V.6 đã sửa — bỏ rekey gói-0 làm key lệch 1 bước ⇒ peer giải mã rác) vs **stateful** = re-key mỗi 256 gói khi low-octet=0xFF | [Mppe/MppeSession.cs:16](Mppe/MppeSession.cs#L16) |
@@ -224,5 +226,6 @@ integ.ComputeIcv(key, data, icv);
 - **MD4, DES & SHA-0** cố ý dùng thuật toán đã "vỡ" về mặt mật mã — MD4/DES vì MS-CHAPv2 bắt buộc, SHA-0 vì SoftEther auth bắt buộc; **không** dùng cho mục đích bảo mật mới.
 - **SHA-1/256/384/512** vẫn được dùng gián tiếp qua HMAC của BCL ([HmacUtil.cs:24-32](HmacUtil.cs#L24-L32)) — không có file SHA-1/2 độc lập (BCL đã có); chỉ **SHA-0** mới cần file riêng ([Sha0.cs](Sha0.cs)) vì vắng mặt trong BCL.
 - **`HmacPrf`/`HmacIntegrity`** hiện cấp factory cho SHA-256 (PRF, ICV-128) và SHA-1-96 (ICV); họ HMAC khác (MD5/SHA384/SHA512) đã sẵn trong `HmacUtil` nếu cần mở rộng.
+- **`CryptoBytes.FixedTimeEquals` (helper dùng chung — gom trùng lặp):** so sánh byte hằng-thời-gian trước đây bị cài lại y hệt (XOR-accumulate) ở **11 nơi** (IKE V1/V2 + EAP-MSCHAPv2, ESP, WireGuard mac1/mac2, ZeroTier VL1, Tinc SPTPS, OpenVPN tls-auth/tls-crypt + CBC data channel, SSH ChaCha20-Poly1305) — nay gom về một `static` trong Crypto; net5+ ủy nhiệm `CryptographicOperations.FixedTimeEquals` (BCL). Không đổi hành vi (build xanh + test các consumer pass).
 - Không có khoá/khử cấp phát: nhiều API dùng `ReadOnlySpan<byte>` ở biên ngoài nhưng bên trong vẫn `ToArray()` (do BCL/BigInteger yêu cầu mảng) — chưa zeroize bộ đệm trung gian; đây là hạn chế đã biết.
 - Tài liệu as-built tổng thể: [10-codebase-architecture-and-flow.md](../../.docs/10-codebase-architecture-and-flow.md).

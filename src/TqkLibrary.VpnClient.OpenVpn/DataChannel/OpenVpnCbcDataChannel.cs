@@ -126,7 +126,7 @@ namespace TqkLibrary.VpnClient.OpenVpn.DataChannel
             // Verify the HMAC over the envelope (constant-time) before touching the ciphertext.
             Span<byte> expected = stackalloc byte[icvLen];
             _integrity.ComputeIcv(_keys.ReceiveHmacKey, envelope, expected);
-            if (!FixedTimeEquals(wire.Slice(hdr, icvLen), expected)) return false;
+            if (!CryptoBytes.FixedTimeEquals(wire.Slice(hdr, icvLen), expected)) return false;
 
             byte[] padded = new byte[ctLen];
             _cipher.Decrypt(_keys.ReceiveCipherKey, envelope.Slice(0, BlockSize), envelope.Slice(BlockSize), padded);
@@ -146,14 +146,6 @@ namespace TqkLibrary.VpnClient.OpenVpn.DataChannel
             lock (_sync) _replay.Commit(packetId);
             plaintext = pt;
             return true;
-        }
-
-        static bool FixedTimeEquals(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
-        {
-            if (a.Length != b.Length) return false;
-            int diff = 0;
-            for (int i = 0; i < a.Length; i++) diff |= a[i] ^ b[i];
-            return diff == 0;
         }
 
         static void WriteUInt24BigEndian(Span<byte> destination, uint value)

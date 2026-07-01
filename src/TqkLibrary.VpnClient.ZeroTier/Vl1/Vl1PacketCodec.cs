@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using TqkLibrary.VpnClient.Crypto;
 using TqkLibrary.VpnClient.ZeroTier.Identity.Models;
 using TqkLibrary.VpnClient.ZeroTier.Vl1.Enums;
 using TqkLibrary.VpnClient.ZeroTier.Vl1.Models;
@@ -125,7 +126,7 @@ namespace TqkLibrary.VpnClient.ZeroTier.Vl1
             // Constant-time-ish MAC check (over the on-wire section) before touching the plaintext.
             byte[] expected = ComputeMac(polyKey, section);
             ReadOnlySpan<byte> got = packet.Slice(Vl1Header.MacOffset, Vl1Header.MacSize);
-            if (!FixedTimeEquals(expected.AsSpan(0, Vl1Header.MacSize), got)) return false;
+            if (!CryptoBytes.FixedTimeEquals(expected.AsSpan(0, Vl1Header.MacSize), got)) return false;
 
             byte[] plain;
             if (encrypt)
@@ -238,14 +239,6 @@ namespace TqkLibrary.VpnClient.ZeroTier.Vl1
             byte[] tag = new byte[16];
             mac.DoFinal(tag, 0);
             return tag;
-        }
-
-        static bool FixedTimeEquals(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
-        {
-            if (a.Length != b.Length) return false;
-            int diff = 0;
-            for (int i = 0; i < a.Length; i++) diff |= a[i] ^ b[i];
-            return diff == 0;
         }
     }
 }

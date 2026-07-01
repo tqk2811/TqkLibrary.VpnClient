@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
+using TqkLibrary.VpnClient.Crypto;
 using TqkLibrary.VpnClient.OpenVpn.Enums;
 
 namespace TqkLibrary.VpnClient.OpenVpn
@@ -84,7 +85,7 @@ namespace TqkLibrary.VpnClient.OpenVpn
             byte[] body = wire.Slice(overhead, bodyLen).ToArray();
 
             byte[] expected = ComputeTag(_inKey, meta, header.ToArray(), 0, body, 0, bodyLen);
-            if (!FixedTimeEquals(tag, expected)) return false;
+            if (!CryptoBytes.FixedTimeEquals(tag, expected)) return false;
 
             byte[] plain = new byte[HeaderSize + bodyLen];
             header.CopyTo(plain);
@@ -115,13 +116,5 @@ namespace TqkLibrary.VpnClient.OpenVpn
             "SHA512" => 64,
             _ => throw new NotSupportedException($"Unsupported tls-auth digest '{hash.Name}'."),
         };
-
-        internal static bool FixedTimeEquals(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
-        {
-            if (a.Length != b.Length) return false;
-            int diff = 0;
-            for (int i = 0; i < a.Length; i++) diff |= a[i] ^ b[i];
-            return diff == 0;
-        }
     }
 }

@@ -143,7 +143,7 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2.Eap
 
             byte[] expected = MsChapV2.GenerateAuthenticatorResponse(
                 _authenticatorChallenge, _peerChallenge, _ntResponse, _userName, _password);
-            if (!FixedTimeEquals(expected, serverDigest)) return EapResult.Failed;
+            if (!CryptoBytes.FixedTimeEquals(expected, serverDigest)) return EapResult.Failed;
 
             Msk = MsChapV2.DeriveMsk(_password, _ntResponse);
             responsePacket = EapPacket.Build(EapCode.Response, id, EapTypeMsChapV2, new byte[] { OpSuccess });
@@ -177,13 +177,5 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2.Eap
              : c >= 'A' && c <= 'F' ? c - 'A' + 10
              : c >= 'a' && c <= 'f' ? c - 'a' + 10
              : -1;
-
-        static bool FixedTimeEquals(byte[] a, byte[] b)
-        {
-            if (a.Length != b.Length) return false;
-            int diff = 0;
-            for (int i = 0; i < a.Length; i++) diff |= a[i] ^ b[i];
-            return diff == 0;
-        }
     }
 }

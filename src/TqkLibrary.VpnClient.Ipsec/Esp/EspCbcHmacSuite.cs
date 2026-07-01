@@ -78,7 +78,7 @@ namespace TqkLibrary.VpnClient.Ipsec.Esp
             int macLength = packet.Length - icvSize;
             Span<byte> expected = stackalloc byte[icvSize];
             _integrity.ComputeIcv(_integrityKey, packet.Slice(0, macLength), expected);
-            if (!ConstantTimeEquals(expected, packet.Slice(macLength, icvSize))) return false;
+            if (!CryptoBytes.FixedTimeEquals(expected, packet.Slice(macLength, icvSize))) return false;
 
             int cipherLength = macLength - EspConstants.HeaderSize - IvSize;
             if (cipherLength <= 0 || cipherLength % BlockSize != 0) return false;

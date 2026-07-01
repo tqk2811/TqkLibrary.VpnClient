@@ -91,7 +91,7 @@ namespace TqkLibrary.VpnClient.OpenVpn
             AesCtr.Transform(_inCipherKey, tag.Slice(0, IvSize), ciphertext, body); // CTR is its own inverse
 
             byte[] expected = ComputeTag(_inHmacKey, header, 0, packetId, body, 0, bodyLen);
-            if (!OpenVpnTlsAuthWrap.FixedTimeEquals(tag, expected)) return false;
+            if (!CryptoBytes.FixedTimeEquals(tag, expected)) return false;
 
             byte[] plain = new byte[HeaderSize + bodyLen];
             Array.Copy(header, 0, plain, 0, HeaderSize);
