@@ -8,7 +8,7 @@ using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
 using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Crypto.Noise;
 using TqkLibrary.VpnClient.Drivers.Ssh.Config;
-using TqkLibrary.VpnClient.Drivers.Ssh.Enums;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.Drivers.Ssh.Transport;
 using Xunit;
 
@@ -141,7 +141,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ssh.Tests
         {
             var conn = new SshConnection("h", 22, new SshConfig { Username = "u", Password = "p" },
                 new LoopbackTransportFactory(LoopbackByteStream.CreatePair().a));
-            Assert.Equal(SshConnectionState.Disconnected, conn.State);
+            Assert.Equal(VpnConnectionState.Disconnected, conn.State);
         }
     }
 }

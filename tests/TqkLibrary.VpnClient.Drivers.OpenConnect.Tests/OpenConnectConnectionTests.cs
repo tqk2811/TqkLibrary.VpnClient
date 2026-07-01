@@ -8,7 +8,7 @@ using TqkLibrary.VpnClient.Abstractions.Drivers;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Enums;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
-using TqkLibrary.VpnClient.Drivers.OpenConnect.Enums;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using Xunit;
 
 namespace TqkLibrary.VpnClient.Drivers.OpenConnect.Tests
@@ -50,7 +50,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenConnect.Tests
             await connection.ConnectAsync(cts.Token);
 
             // In-band config from X-CSTP-* (config-push), bare IP — no PPP.
-            Assert.Equal(OpenConnectConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
             Assert.Equal(IPAddress.Parse("10.10.0.5"), connection.AssignedAddress);
             Assert.Equal(1400, connection.Config.Mtu);
             Assert.Equal(0, connection.PacketChannel.MaxHeaderLength);
@@ -126,7 +126,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenConnect.Tests
             clock.Advance(3000);
             await WaitUntilAsync(() => server.DpdRequestsReceived > 0, cts.Token);
             Assert.True(server.DpdRequestsReceived > 0);
-            Assert.Equal(OpenConnectConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
 
             await connection.DisposeAsync();
             serverCts.Cancel();
@@ -142,11 +142,11 @@ namespace TqkLibrary.VpnClient.Drivers.OpenConnect.Tests
                 new InProcessOpenConnectTransportFactory(link.Client), User, Pass,
                 reconnectOptions: new OpenConnectReconnectOptions { Enabled = false });
             await connection.ConnectAsync(cts.Token);
-            Assert.Equal(OpenConnectConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
 
             await server.SendDisconnectAsync(cts.Token);
-            await WaitUntilAsync(() => connection.State == OpenConnectConnectionState.Disconnected, cts.Token);
-            Assert.Equal(OpenConnectConnectionState.Disconnected, connection.State);
+            await WaitUntilAsync(() => connection.State == VpnConnectionState.Disconnected, cts.Token);
+            Assert.Equal(VpnConnectionState.Disconnected, connection.State);
 
             await connection.DisposeAsync();
             serverCts.Cancel();
@@ -217,7 +217,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenConnect.Tests
 
             // The data plane swapped to DTLS (X-DTLS-* advertised + handshake succeeded).
             Assert.True(connection.IsDtlsDataPlane);
-            Assert.Equal(OpenConnectConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
             Assert.Equal(IPAddress.Parse("10.10.0.5"), connection.AssignedAddress);
             Assert.True((await dtlsServer.Handshaked.Task));
 
@@ -317,7 +317,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenConnect.Tests
             await connection.ConnectAsync(cts.Token);
 
             Assert.False(connection.IsDtlsDataPlane); // DTLS handshake failed ⇒ fell back to CSTP-over-TLS
-            Assert.Equal(OpenConnectConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
             byte[] packet = Encoding.ASCII.GetBytes("falls back to TLS when the DTLS handshake fails");
             await connection.PacketChannel.WriteIpPacketAsync(packet, cts.Token);
             Assert.Equal(packet, await inbound.Reader.ReadAsync(cts.Token));

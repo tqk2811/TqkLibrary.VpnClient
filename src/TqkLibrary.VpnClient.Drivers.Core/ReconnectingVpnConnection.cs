@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using TqkLibrary.VpnClient.Abstractions.Channels;
 using TqkLibrary.VpnClient.Abstractions.Channels.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Diagnostics.Extensions;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.Drivers.Core.Models;
 
 namespace TqkLibrary.VpnClient.Drivers.Core
@@ -16,12 +17,11 @@ namespace TqkLibrary.VpnClient.Drivers.Core
     /// the link-loss → supervisor → reconnect-loop machinery (with capped exponential backoff and ±jitter), the
     /// <c>StateChanged</c> event with structured logging, and the monotonic millisecond clock. A driver subclass keeps
     /// only its protocol logic: <see cref="EstablishAsync"/> (one full tunnel attempt — handshake, bind the data plane
-    /// behind <see cref="Facade"/>, start timers/receive loops) and <see cref="CleanupAttemptResourcesAsync"/> (undo it),
-    /// plus the four state-value mappings so the base can drive the driver's own state enum. The base never invents
-    /// behaviour the originals did not have — it is the same loop, factored once.
+    /// behind <see cref="Facade"/>, start timers/receive loops) and <see cref="CleanupAttemptResourcesAsync"/> (undo it).
+    /// The lifecycle state is the shared <see cref="VpnConnectionState"/> enum. The base never invents behaviour the
+    /// originals did not have — it is the same loop, factored once.
     /// </summary>
-    /// <typeparam name="TState">The driver's own connection-state enum (Disconnected / Connecting / Connected / Reconnecting).</typeparam>
-    public abstract class ReconnectingVpnConnection<TState> where TState : struct
+    public abstract class ReconnectingVpnConnection
     {
         readonly SwappablePacketChannel _facade = new();
         readonly CancellationTokenSource _lifetimeCts = new();
@@ -32,7 +32,7 @@ namespace TqkLibrary.VpnClient.Drivers.Core
         volatile bool _userTeardown;
         bool _supervisorActive;   // guarded by _stateLock
         Task? _supervisor;
-        TState _state;
+        VpnConnectionState _state;
 
         readonly ILogger _logger;
         readonly string _driverName;
@@ -45,7 +45,7 @@ namespace TqkLibrary.VpnClient.Drivers.Core
         /// <see cref="VpnReconnectOptions"/>); <paramref name="clock"/> supplies the millisecond clock (default: the
         /// monotonic system tick clock) — tests inject a deterministic one; <paramref name="loggerFactory"/> receives the
         /// cross-cutting traces (null logs to <see cref="NullLogger"/>, a no-op). The initial state is
-        /// <see cref="DisconnectedState"/>.
+        /// <see cref="VpnConnectionState.Disconnected"/>.
         /// </summary>
         protected ReconnectingVpnConnection(string driverName, VpnReconnectOptions options,
             Func<long>? clock = null, ILoggerFactory? loggerFactory = null)
@@ -54,7 +54,7 @@ namespace TqkLibrary.VpnClient.Drivers.Core
             _options = options ?? throw new ArgumentNullException(nameof(options));
             _clock = clock ?? DefaultClock;
             _logger = (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger("TqkLibrary.VpnClient.Drivers." + driverName);
-            _state = DisconnectedState;
+            _state = VpnConnectionState.Disconnected;
         }
 
         // ---- shared state exposed to the subclass ----
@@ -63,10 +63,10 @@ namespace TqkLibrary.VpnClient.Drivers.Core
         public IPacketChannel PacketChannel => _facade;
 
         /// <summary>The current lifecycle state.</summary>
-        public TState State => _state;
+        public VpnConnectionState State => _state;
 
         /// <summary>Raised whenever the connection state changes (handshake progress, drop, reconnect).</summary>
-        public event Action<TState>? StateChanged;
+        public event Action<VpnConnectionState>? StateChanged;
 
         /// <summary>The stable facade the subclass binds its live channel behind (make-before-break safe).</summary>
         protected SwappablePacketChannel Facade => _facade;
@@ -93,18 +93,6 @@ namespace TqkLibrary.VpnClient.Drivers.Core
         protected long Now() => _clock();
 
         // ---- protocol-specific hooks the subclass implements ----
-
-        /// <summary>Maps to the driver's "not connected" state value.</summary>
-        protected abstract TState DisconnectedState { get; }
-
-        /// <summary>Maps to the driver's "running the handshake" state value.</summary>
-        protected abstract TState ConnectingState { get; }
-
-        /// <summary>Maps to the driver's "tunnel up" state value.</summary>
-        protected abstract TState ConnectedState { get; }
-
-        /// <summary>Maps to the driver's "dropped, a reconnect may follow" state value.</summary>
-        protected abstract TState ReconnectingState { get; }
 
         /// <summary>
         /// Runs one full tunnel attempt: resolve/connect the transport, run the handshake, bind the live channel behind
@@ -133,29 +121,29 @@ namespace TqkLibrary.VpnClient.Drivers.Core
         /// Marks the attempt "running" without changing the public state. Set this once the data plane is bound and the
         /// receive loop is about to start, so a drop detected during the rest of the establish (peer close, fault) is
         /// honoured by <see cref="OnLinkLost"/>. <see cref="MarkConnected"/> finishes the transition to
-        /// <see cref="ConnectedState"/>. (A driver whose establish has no such window can just call MarkConnected.)
+        /// <see cref="VpnConnectionState.Connected"/>. (A driver whose establish has no such window can just call MarkConnected.)
         /// </summary>
         protected void MarkRunning() => _running = true;
 
         /// <summary>Marks the tunnel up: ensures <see cref="IsRunning"/> is true and moves the state to
-        /// <see cref="ConnectedState"/>. Call at the end of a successful <see cref="EstablishAsync"/>.</summary>
+        /// <see cref="VpnConnectionState.Connected"/>. Call at the end of a successful <see cref="EstablishAsync"/>.</summary>
         protected void MarkConnected()
         {
             _running = true;
-            SetState(ConnectedState);
+            SetState(VpnConnectionState.Connected);
         }
 
-        /// <summary>Runs the initial connect: moves to <see cref="ConnectingState"/> then the first
+        /// <summary>Runs the initial connect: moves to <see cref="VpnConnectionState.Connecting"/> then the first
         /// <see cref="EstablishAsync"/>. Throws if the first attempt fails (reconnect only arms after a success).</summary>
         protected async Task ConnectCoreAsync(CancellationToken cancellationToken)
         {
-            SetState(ConnectingState);
+            SetState(VpnConnectionState.Connecting);
             await EstablishAsync(cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
         /// Declares the link dead. Under the state lock: a no-op if not running; otherwise it stops the attempt loop and
-        /// either goes <see cref="DisconnectedState"/> (user teardown or reconnect disabled) or arms the reconnect
+        /// either goes <see cref="VpnConnectionState.Disconnected"/> (user teardown or reconnect disabled) or arms the reconnect
         /// supervisor exactly once. Safe to call from a receive loop, a timer, or a channel fault.
         /// </summary>
         protected void OnLinkLost(string reason)
@@ -178,10 +166,10 @@ namespace TqkLibrary.VpnClient.Drivers.Core
                 }
             }
 
-            if (goDisconnected) { SetState(DisconnectedState); return; }
+            if (goDisconnected) { SetState(VpnConnectionState.Disconnected); return; }
             if (startSupervisor)
             {
-                SetState(ReconnectingState);
+                SetState(VpnConnectionState.Reconnecting);
                 _supervisor = Task.Run(() => ReconnectLoopAsync(_lifetimeCts.Token));
             }
         }
@@ -208,7 +196,7 @@ namespace TqkLibrary.VpnClient.Drivers.Core
                     }
                     if (healthy) { _logger.LogReconnected(_driverName); OnReconnected(); return; }
 
-                    SetState(ReconnectingState);
+                    SetState(VpnConnectionState.Reconnecting);
                     delay = _options.InitialBackoff;
                     failures = 0;
                     continue;
@@ -221,7 +209,7 @@ namespace TqkLibrary.VpnClient.Drivers.Core
             }
 
             lock (_stateLock) { _supervisorActive = false; }
-            if (!_userTeardown) SetState(DisconnectedState);
+            if (!_userTeardown) SetState(VpnConnectionState.Disconnected);
         }
 
         // ---- teardown ----
@@ -229,7 +217,7 @@ namespace TqkLibrary.VpnClient.Drivers.Core
         /// <summary>
         /// Tears the tunnel down permanently (no reconnect): flips <see cref="IsUserTeardown"/>, stops the attempt loop,
         /// cancels any reconnect in flight, awaits the supervisor, then runs the subclass cleanup and goes
-        /// <see cref="DisconnectedState"/>. The subclass overrides <see cref="DisconnectAsync"/> to send a best-effort
+        /// <see cref="VpnConnectionState.Disconnected"/>. The subclass overrides <see cref="DisconnectAsync"/> to send a best-effort
         /// protocol close first, then calls this. Best-effort and time-boxed; safe to call more than once.
         /// </summary>
         protected async Task DisconnectCoreAsync()
@@ -242,7 +230,7 @@ namespace TqkLibrary.VpnClient.Drivers.Core
             if (supervisor != null) { try { await supervisor.ConfigureAwait(false); } catch { } }
 
             await CleanupAttemptResourcesAsync().ConfigureAwait(false);
-            SetState(DisconnectedState);
+            SetState(VpnConnectionState.Disconnected);
         }
 
         /// <summary>Disposes the lifetime cancellation and the facade. Call from the subclass's DisposeAsync after
@@ -277,7 +265,7 @@ namespace TqkLibrary.VpnClient.Drivers.Core
         }
 
         /// <summary>Transitions state, logging the change and raising <see cref="StateChanged"/> (no-op if unchanged).</summary>
-        protected void SetState(TState state)
+        protected void SetState(VpnConnectionState state)
         {
             if (_state.Equals(state)) return;
             _state = state;

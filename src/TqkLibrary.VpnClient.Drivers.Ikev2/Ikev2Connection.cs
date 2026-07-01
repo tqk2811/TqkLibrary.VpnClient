@@ -6,7 +6,6 @@ using TqkLibrary.VpnClient.Abstractions.Diagnostics.Extensions;
 using TqkLibrary.VpnClient.Abstractions.Drivers;
 using TqkLibrary.VpnClient.Abstractions.Net;
 using TqkLibrary.VpnClient.Drivers.Core;
-using TqkLibrary.VpnClient.Drivers.Ikev2.Enums;
 using TqkLibrary.VpnClient.Drivers.Ikev2.Models;
 using TqkLibrary.VpnClient.Ipsec.Esp;
 using TqkLibrary.VpnClient.Ipsec.Ike.V2;
@@ -22,17 +21,17 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
     /// A complete IKEv2-native client (RFC 7296): IKE_SA_INIT + IKE_AUTH (PSK) over UDP/500→4500 NAT-T, a Configuration
     /// Payload that pulls the virtual IP/DNS, and an ESP tunnel-mode data plane that carries bare IP packets straight to
     /// the userspace stack — no PPP, no L2TP. After <see cref="ConnectAsync"/> the tunnel rides the stable
-    /// <see cref="ReconnectingVpnConnection{TState}.PacketChannel"/>.
+    /// <see cref="ReconnectingVpnConnection.PacketChannel"/>.
     /// <para>The link-loss → supervisor → reconnect-loop machinery (backoff/jitter, the stable
     /// <see cref="SwappablePacketChannel"/> facade, the lifetime cancellation, state changes + structured logging, the
-    /// monotonic clock) lives in <see cref="ReconnectingVpnConnection{TState}"/> (roadmap F.6), mirroring the
+    /// monotonic clock) lives in <see cref="ReconnectingVpnConnection"/> (roadmap F.6), mirroring the
     /// OpenConnect / OpenVPN / WireGuard / SoftEther / SSTP drivers. This driver keeps only its protocol logic
     /// (<see cref="EstablishAsync"/> / <see cref="CleanupAttemptResourcesAsync"/> / the per-attempt timers) and — IKEv2's
     /// distinctive part — runs <b>in-place</b> DPD keepalive, CREATE_CHILD_SA + IKE-SA rekey (make-before-break with DELETE)
     /// on its own timers, deliberately <i>outside</i> the supervisor so a rekey refreshes the SA without re-establishing
     /// the tunnel; only a real drop (DPD timeout / a server DELETE) calls the inherited <c>OnLinkLost</c>.</para>
     /// </summary>
-    public sealed class Ikev2Connection : ReconnectingVpnConnection<Ikev2ConnectionState>, IDisposable, IAsyncDisposable
+    public sealed class Ikev2Connection : ReconnectingVpnConnection, IDisposable, IAsyncDisposable
     {
         static readonly TimeSpan DpdInterval = TimeSpan.FromSeconds(20);
         const int DpdMaxMissed = 3;
@@ -117,15 +116,6 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
 
         /// <summary>Raised after a successful auto-reconnect, carrying the new address and whether it changed.</summary>
         public event Action<Ikev2ReconnectInfo>? Reconnected;
-
-        /// <inheritdoc/>
-        protected override Ikev2ConnectionState DisconnectedState => Ikev2ConnectionState.Disconnected;
-        /// <inheritdoc/>
-        protected override Ikev2ConnectionState ConnectingState => Ikev2ConnectionState.Connecting;
-        /// <inheritdoc/>
-        protected override Ikev2ConnectionState ConnectedState => Ikev2ConnectionState.Connected;
-        /// <inheritdoc/>
-        protected override Ikev2ConnectionState ReconnectingState => Ikev2ConnectionState.Reconnecting;
 
         /// <summary>Runs the full handshake and returns once the gateway has assigned a virtual address.</summary>
         public async Task ConnectAsync(CancellationToken cancellationToken = default)

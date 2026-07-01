@@ -16,7 +16,7 @@ Driver **VPN-over-SSH** (OpenSSH `-w` tun) — ráp các codec/handshake thuần
 | Hướng | Project | Lý do |
 |-------|---------|-------|
 | Dùng | [Abstractions](../TqkLibrary.VpnClient.Abstractions) | `IVpnProtocolDriver`/`IVpnConnection`/`IVpnSession`, `IPacketChannel`, `SwappablePacketChannel`, `IByteStreamTransport`, `IHostResolver`, `Diagnostics` (`VpnLogExtensions`) |
-| Dùng | [Drivers.Core](../TqkLibrary.VpnClient.Drivers.Core) | **`ReconnectingVpnConnection<TState>`** (base supervisor F.6) + **`VpnReconnectOptions`** (`SshReconnectOptions` kế thừa) |
+| Dùng | [Drivers.Core](../TqkLibrary.VpnClient.Drivers.Core) | **`ReconnectingVpnConnection`** (base supervisor F.6) + **`VpnReconnectOptions`** (`SshReconnectOptions` kế thừa) |
 | Dùng | [Ssh](../TqkLibrary.VpnClient.Ssh) | `SshClient` + `SshClientOptions` + `SshEd25519HostKey` (handshake + tun channel + data plane) |
 | Dùng | [Transport.Tcp](../TqkLibrary.VpnClient.Transport.Tcp) | `TcpByteStream` (control+data TCP/22, F.1) |
 | Được dùng bởi | [TqkLibrary.VpnClient](../TqkLibrary.VpnClient) (façade) | `VpnClientBuilder.UseSsh(config)` đăng ký driver |
@@ -26,13 +26,12 @@ Driver **VPN-over-SSH** (OpenSSH `-w` tun) — ráp các codec/handshake thuần
 ```
 TqkLibrary.VpnClient.Drivers.Ssh/
 ├─ SshDriver.cs               IVpnProtocolDriver: caps (L3Ip/Tcp/Security=None/Auth=Certificate|UserPassword/OutOfBand) + ConnectAsync → SshConnection
-├─ SshConnection.cs           Điều phối (kế thừa ReconnectingVpnConnection<SshConnectionState> F.6): TCP connect → SshClient.ConnectAsync (handshake+tun) → bind SshPacketChannel → receive loop; supervisor/reconnect ở base; DisconnectAsync gửi CHANNEL_CLOSE
+├─ SshConnection.cs           Điều phối (kế thừa ReconnectingVpnConnection F.6): TCP connect → SshClient.ConnectAsync (handshake+tun) → bind SshPacketChannel → receive loop; supervisor/reconnect ở base; DisconnectAsync gửi CHANNEL_CLOSE
 ├─ SshVpnConnection.cs        IVpnConnection: 1 session point-to-point; OpenSessionAsync ném NotSupportedException
 ├─ SshVpnSession.cs           IVpnSession: PacketChannel ổn định + TunnelConfig tĩnh
 ├─ SshReconnectOptions.cs     Kế thừa VpnReconnectOptions (Drivers.Core, F.6)
 ├─ SshDriverConstants.cs      DriverName "ssh", DefaultPort 22, DefaultMtu 1400
 ├─ Config/SshConfig.cs        user + ed25519 seed/password + RemoteTunUnit + IP tunnel tĩnh/peer + DNS + MTU + HostKeyValidator → ToClientOptions() + ToTunnelConfig() (route peer/32, OutOfBand)
-├─ Enums/SshConnectionState.cs   Disconnected/Connecting/Connected/Reconnecting
 ├─ DataChannel/SshPacketChannel.cs  IPacketChannel L3 (Medium=Ip, MaxHeaderLength=0): WriteIpPacketAsync → SshClient.SendIpPacketAsync; Deliver → InboundIpPacket
 └─ Transport/
    ├─ ISshTransportFactory.cs       Seam dựng 1 byte-stream tới endpoint

@@ -15,7 +15,7 @@ Driver IpEncap ([IpEncapDriver.cs](IpEncapDriver.cs)) chọn kênh theo [`IpEnca
 
 Vì là encap **connectionless**, một mất link âm thầm không phát hiện được nên auto-reconnect không tự kích; máy supervisor vẫn được kế thừa (đối xứng + để dành control-plane keepalive tương lai).
 
-> So với [Drivers.Pptp](../TqkLibrary.VpnClient.Drivers.Pptp): IpEncap là "WireGuard **bỏ** handshake" — toàn bộ máy supervisor/reconnect/facade dùng chung [`ReconnectingVpnConnection<TState>`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L24) (F.6); driver chỉ mở transport + start kênh, không control connection, không PPP, không MPPE.
+> So với [Drivers.Pptp](../TqkLibrary.VpnClient.Drivers.Pptp): IpEncap là "WireGuard **bỏ** handshake" — toàn bộ máy supervisor/reconnect/facade dùng chung [`ReconnectingVpnConnection`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L24) (F.6); driver chỉ mở transport + start kênh, không control connection, không PPP, không MPPE.
 
 ## Vị trí trong kiến trúc
 
@@ -23,7 +23,7 @@ Vì là encap **connectionless**, một mất link âm thầm không phát hiệ
 - **Target frameworks:** `netstandard2.0; net8.0` (kế thừa từ [src/Directory.Build.props](../Directory.Build.props)).
 - **Phụ thuộc (ProjectReference):**
   - [TqkLibrary.VpnClient.Abstractions](../TqkLibrary.VpnClient.Abstractions) — interface/model/enum (`IVpnProtocolDriver`, `IVpnConnection`, `IVpnSession`, `IPacketChannel`, `SwappablePacketChannel`, `TunnelConfig`, [`IRawIpTransportFactory`](../TqkLibrary.VpnClient.Abstractions/Transport/Interfaces/IRawIpTransportFactory.cs#L12), `IHostResolver`/`DnsHostResolver`, `AddressFamilyPreference`...) + **`Diagnostics`** (`VpnLogExtensions` — log handshake/state/reconnect).
-  - [TqkLibrary.VpnClient.Drivers.Core](../TqkLibrary.VpnClient.Drivers.Core) — base supervisor [`ReconnectingVpnConnection<TState>`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L24) + model reconnect chung [`VpnReconnectOptions`](../TqkLibrary.VpnClient.Drivers.Core/Models/VpnReconnectOptions.cs#L14).
+  - [TqkLibrary.VpnClient.Drivers.Core](../TqkLibrary.VpnClient.Drivers.Core) — base supervisor [`ReconnectingVpnConnection`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L24) + model reconnect chung [`VpnReconnectOptions`](../TqkLibrary.VpnClient.Drivers.Core/Models/VpnReconnectOptions.cs#L14).
   - [TqkLibrary.VpnClient.IpEncap](../TqkLibrary.VpnClient.IpEncap) — các kênh data-plane [`GreTunnelChannel`](../TqkLibrary.VpnClient.IpEncap/Gre/GreTunnelChannel.cs#L21) / [`RawIpPassthroughChannel`](../TqkLibrary.VpnClient.IpEncap/RawIpPassthroughChannel.cs#L20) + [`GreTunnelOptions`](../TqkLibrary.VpnClient.IpEncap/Gre/GreTunnelOptions.cs#L9).
   - **Data plane** chỉ phụ thuộc **interface** [`IRawIpTransportFactory`](../TqkLibrary.VpnClient.Abstractions/Transport/Interfaces/IRawIpTransportFactory.cs#L12) (ở `Abstractions`) — driver **không** ProjectReference [`Transport.RawIp`](../TqkLibrary.VpnClient.Transport.RawIp); app tự cấp concrete `RawIpTransportFactory` (kéo project đó vào) khi muốn bật. Số hiệu proto (47/4/41) là const nội bộ trong [`IpEncapConnection`](IpEncapConnection.cs) (mirror const `GreIpProtocol = 47` ở driver PPTP), tránh phụ thuộc thừa.
   - Không có PackageReference đặc thù — chỉ dùng BCL.
@@ -40,8 +40,7 @@ TqkLibrary.VpnClient.Drivers.IpEncap/
 ├── IpEncapOptions.cs               Cấu hình tĩnh: Kind (GRE/IPIP/SIT) + Mtu + GreTunnelOptions (RFC 2890 Key/Seq/Checksum)
 ├── IpEncapReconnectOptions.cs      Named subclass của VpnReconnectOptions (không thêm knob)
 └── Enums/
-    ├── IpEncapKind.cs              Gre / IpIp / Sit (chọn cả proto-number lẫn kênh)
-    └── IpEncapConnectionState.cs   Disconnected / Connecting / Connected / Reconnecting
+    └── IpEncapKind.cs              Gre / IpIp / Sit (chọn cả proto-number lẫn kênh)
 ```
 
 ## Bảng type
@@ -49,13 +48,13 @@ TqkLibrary.VpnClient.Drivers.IpEncap/
 | Type | Vai trò |
 |------|---------|
 | [`IpEncapDriver`](IpEncapDriver.cs) | `IVpnProtocolDriver`. `Name="ipencap"`, `Capabilities` (L3Ip / RawIp / SecurityKinds=None / AuthMethods=None / `AddressAssignment=OutOfBand` / `RequiresElevation`+`RequiresRawIpSocket`), `ConnectAsync` dựng `IpEncapConnection` → `IpEncapVpnConnection`. Ctor nhận `IRawIpTransportFactory` (bắt buộc, null ⇒ `ArgumentNullException`) + `IpEncapOptions`/`IpEncapReconnectOptions` + `ILoggerFactory?`. |
-| [`IpEncapConnection`](IpEncapConnection.cs) | Kế thừa [`ReconnectingVpnConnection<IpEncapConnectionState>`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L24). Override `EstablishAsync`/`CleanupAttemptResourcesAsync`/`StopAttemptLoop` (no-op: encap không keepalive) + 4 ánh xạ state. Phơi `Kind`/`Mtu`. `IDisposable`/`IAsyncDisposable`. |
+| [`IpEncapConnection`](IpEncapConnection.cs) | Kế thừa [`ReconnectingVpnConnection`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L24). Override `EstablishAsync`/`CleanupAttemptResourcesAsync`/`StopAttemptLoop` (no-op: encap không keepalive). Phơi `Kind`/`Mtu`. `IDisposable`/`IAsyncDisposable`. |
 | [`IpEncapVpnConnection`](IpEncapVpnConnection.cs) | Adapter `IVpnConnection` (1 session). `OpenSessionAsync` ⇒ `NotSupportedException` (1 encap / 1 remote). |
 | [`IpEncapVpnSession`](IpEncapVpnSession.cs) | `IVpnSession`: `Config` (TunnelConfig) + `PacketChannel` (facade ổn định). |
 | [`IpEncapOptions`](IpEncapOptions.cs) | Cấu hình tĩnh: `Kind` (mặc định GRE) + `Mtu` (1400) + `Gre` (`GreTunnelOptions?` cho RFC 2890 Key/Sequence/Checksum; bỏ qua với IPIP/SIT). MTU kênh luôn lấy theo `Mtu` bất kể giá trị trên `Gre`. |
 | [`IpEncapReconnectOptions`](IpEncapReconnectOptions.cs) | Named subclass của `VpnReconnectOptions` (chỉ để giữ public API; không thêm knob). |
 | [`IpEncapKind`](Enums/IpEncapKind.cs) | enum Gre(47) / IpIp(4) / Sit(41) — chọn cả proto-number mở transport lẫn kênh data-plane. |
-| [`IpEncapConnectionState`](Enums/IpEncapConnectionState.cs) | enum Disconnected/Connecting/Connected/Reconnecting. |
+| [`VpnConnectionState`](../TqkLibrary.VpnClient.Drivers.Core/Enums/VpnConnectionState.cs) | enum Disconnected/Connecting/Connected/Reconnecting (dùng chung ở [`Drivers.Core`](../TqkLibrary.VpnClient.Drivers.Core/Enums/VpnConnectionState.cs) — state kế thừa từ base). |
 
 ## Bảng chuẩn / RFC
 

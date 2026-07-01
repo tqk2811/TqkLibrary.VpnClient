@@ -17,7 +17,7 @@ Driver **vtun** (Virtual Tunnel daemon legacy) — ráp các codec thuần ở [
 | Hướng | Project | Lý do |
 |-------|---------|-------|
 | Dùng | [Abstractions](../TqkLibrary.VpnClient.Abstractions) | `IVpnProtocolDriver`/`IVpnConnection`/`IVpnSession`, `IPacketChannel`, `SwappablePacketChannel`, `IByteStreamTransport`, exceptions (`VpnAuthenticationException`/`VpnConnectionException`), `IHostResolver`, `Diagnostics` (`VpnLogExtensions`/`VpnDropReason`) |
-| Dùng | [Drivers.Core](../TqkLibrary.VpnClient.Drivers.Core) | **`ReconnectingVpnConnection<TState>`** (base supervisor F.6) + **`VpnReconnectOptions`** (`VtunReconnectOptions` kế thừa) |
+| Dùng | [Drivers.Core](../TqkLibrary.VpnClient.Drivers.Core) | **`ReconnectingVpnConnection`** (base supervisor F.6) + **`VpnReconnectOptions`** (`VtunReconnectOptions` kế thừa) + **`VpnConnectionState`** (enum state dùng chung) |
 | Dùng | [Vtun](../TqkLibrary.VpnClient.Vtun) | `VtunMessageCodec`/`VtunChallengeCodec` (handshake) + `VtunHostFlagsCodec` + `VtunFrameCodec`/`VtunFrameHeader` + `VtunConstants` + enums + **`IVtunFrameTransform`/`VtunFrameTransformFactory`/`VtunCipher`** (data-plane encrypt) |
 | Dùng | [Ethernet](../TqkLibrary.VpnClient.Ethernet) | **`MacAddress`/`ArpResolver`/`VirtualHost`** (tap mode — bridge L2↔L3 cho `type ether`) |
 | Dùng | [Transport.Tcp](../TqkLibrary.VpnClient.Transport.Tcp) | `TcpByteStream` (control+data TCP/5000, F.1) |
@@ -28,14 +28,13 @@ Driver **vtun** (Virtual Tunnel daemon legacy) — ráp các codec thuần ở [
 ```
 TqkLibrary.VpnClient.Drivers.Vtun/
 ├─ VtunDriver.cs               IVpnProtocolDriver: caps (L3Ip/Tcp/Security=None/Auth=PreSharedKey/OutOfBand) + ConnectAsync → VtunConnection
-├─ VtunConnection.cs          Điều phối (kế thừa ReconnectingVpnConnection<…> F.6): TCP connect → AuthenticateAsync → kiểm cờ (tun/tcp/compress no) → nếu encrypt: cài DataTransform theo cipher (chỉ BF128ECB) → bind VtunPacketChannel → receive loop + keepalive; supervisor/reconnect ở base
+├─ VtunConnection.cs          Điều phối (kế thừa ReconnectingVpnConnection F.6): TCP connect → AuthenticateAsync → kiểm cờ (tun/tcp/compress no) → nếu encrypt: cài DataTransform theo cipher (chỉ BF128ECB) → bind VtunPacketChannel → receive loop + keepalive; supervisor/reconnect ở base
 ├─ VtunControlChannel.cs      Sở hữu byte-stream: handshake 50-byte block + frame I/O (reader buffered dùng chung 2 pha) + DataTransform (encrypt/decrypt data-frame payload)
 ├─ VtunVpnConnection.cs       IVpnConnection: 1 session point-to-point; OpenSessionAsync ném NotSupportedException
 ├─ VtunVpnSession.cs          IVpnSession: PacketChannel ổn định + TunnelConfig tĩnh
 ├─ VtunReconnectOptions.cs    Kế thừa VpnReconnectOptions (Drivers.Core, F.6)
 ├─ VtunDriverConstants.cs     DriverName "vtun", DefaultMtu 1450
 ├─ Config/VtunConfig.cs       host name + password + IP tunnel tĩnh/peer + MAC (tap) + MTU → ToTunnelConfig() (route peer/32, OutOfBand)
-├─ Enums/VtunConnectionState.cs  Disconnected/Connecting/Connected/Reconnecting
 ├─ DataChannel/VtunPacketChannel.cs   IPacketChannel L3 (tun): WriteIpPacketAsync → frame; Deliver → InboundIpPacket (bare IP)
 ├─ DataChannel/VtunEthernetChannel.cs IEthernetChannel L2 (tap): WriteFrameAsync → frame; Deliver → InboundFrame (Ethernet trần)
 └─ Transport/

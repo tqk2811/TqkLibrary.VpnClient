@@ -8,7 +8,6 @@ using TqkLibrary.VpnClient.Abstractions.Diagnostics.Extensions;
 using TqkLibrary.VpnClient.Abstractions.Net;
 using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Drivers.Core;
-using TqkLibrary.VpnClient.Drivers.GreInUdp.Enums;
 using TqkLibrary.VpnClient.IpEncap.Gre;
 
 namespace TqkLibrary.VpnClient.Drivers.GreInUdp
@@ -17,16 +16,16 @@ namespace TqkLibrary.VpnClient.Drivers.GreInUdp
     /// A complete GRE-in-UDP tunnel client (RFC 8086): opens a connected UDP transport to the remote gateway on the
     /// configured port (default 4754) and binds the standard GRE data-plane channel — the reused
     /// <see cref="GreTunnelChannel"/> — behind the stable
-    /// <see cref="ReconnectingVpnConnection{TState}.PacketChannel"/> facade so the IP stack above sees one durable L3 link.
+    /// <see cref="ReconnectingVpnConnection.PacketChannel"/> facade so the IP stack above sees one durable L3 link.
     /// <para>GRE-in-UDP carries the very same GRE header (RFC 2784/2890) as raw-IP GRE, but inside a UDP payload rather
     /// than on proto-47 — so it needs <b>no elevation and no raw IP socket</b> and traverses NAT/firewalls that pass
     /// UDP. This is "WireGuard minus the handshake": the link-loss → supervisor → reconnect-loop machinery is reused
-    /// from <see cref="ReconnectingVpnConnection{TState}"/> (roadmap F.6); the driver only opens the transport and starts
+    /// from <see cref="ReconnectingVpnConnection"/> (roadmap F.6); the driver only opens the transport and starts
     /// the channel. Plain encap is <i>connectionless</i> — there is no control plane (no handshake, keepalive or DPD),
     /// so a silent link loss cannot be detected and auto-reconnect does not fire on its own.</para>
     /// <para><b>GRE-in-UDP is UNENCRYPTED</b> — use only on a trusted path or under IPsec ESP.</para>
     /// </summary>
-    public sealed class GreInUdpConnection : ReconnectingVpnConnection<GreInUdpConnectionState>, IDisposable, IAsyncDisposable
+    public sealed class GreInUdpConnection : ReconnectingVpnConnection, IDisposable, IAsyncDisposable
     {
         const string DriverNameConst = "gre-udp";
 
@@ -62,15 +61,6 @@ namespace TqkLibrary.VpnClient.Drivers.GreInUdp
 
         /// <summary>The MTU advertised to the IP stack (from <see cref="GreInUdpOptions.Mtu"/>).</summary>
         public int Mtu => _options.Mtu;
-
-        /// <inheritdoc/>
-        protected override GreInUdpConnectionState DisconnectedState => GreInUdpConnectionState.Disconnected;
-        /// <inheritdoc/>
-        protected override GreInUdpConnectionState ConnectingState => GreInUdpConnectionState.Connecting;
-        /// <inheritdoc/>
-        protected override GreInUdpConnectionState ConnectedState => GreInUdpConnectionState.Connected;
-        /// <inheritdoc/>
-        protected override GreInUdpConnectionState ReconnectingState => GreInUdpConnectionState.Reconnecting;
 
         /// <summary>Opens the UDP transport and brings the GRE-in-UDP channel up; returns once the link is live.</summary>
         public Task ConnectAsync(CancellationToken cancellationToken = default)

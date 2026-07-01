@@ -2,7 +2,7 @@ using System.Net;
 using System.Threading.Channels;
 using TqkLibrary.VpnClient.Abstractions.Drivers;
 using TqkLibrary.VpnClient.Drivers.ZeroTier.Config;
-using TqkLibrary.VpnClient.Drivers.ZeroTier.Enums;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.ZeroTier.Identity;
 using TqkLibrary.VpnClient.ZeroTier.Identity.Models;
 using TqkLibrary.VpnClient.ZeroTier.Vl2.Models;
@@ -83,7 +83,7 @@ namespace TqkLibrary.VpnClient.Drivers.ZeroTier.Tests
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
             await connection.ConnectAsync(cts.Token);
 
-            Assert.Equal(ZeroTierConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
             Assert.True(sim.HelloCount >= 1, "the node must have received a HELLO");
             Assert.True(sim.NetworkConfigRequestCount >= 1, "the controller must have received a NETWORK_CONFIG_REQUEST");
             Assert.Equal(AssignedIp, connection.AssignedAddress);                 // controller-assigned address adopted
@@ -102,7 +102,7 @@ namespace TqkLibrary.VpnClient.Drivers.ZeroTier.Tests
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
             await connection.ConnectAsync(cts.Token);
 
-            Assert.Equal(ZeroTierConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
             Assert.Equal(pinned, connection.AssignedAddress);                     // the pinned address wins
         }
 
@@ -142,7 +142,7 @@ namespace TqkLibrary.VpnClient.Drivers.ZeroTier.Tests
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
             await Assert.ThrowsAsync<VpnConnectionException>(() => connection.ConnectAsync(cts.Token));
-            Assert.Equal(ZeroTierConnectionState.Connecting, connection.State);
+            Assert.Equal(VpnConnectionState.Connecting, connection.State);
         }
     }
 }

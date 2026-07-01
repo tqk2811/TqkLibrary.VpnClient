@@ -7,8 +7,8 @@ using System.Threading.Tasks;
 using TqkLibrary.VpnClient.Abstractions.Drivers;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
 using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.Drivers.Pptp;
-using TqkLibrary.VpnClient.Drivers.Pptp.Enums;
 using TqkLibrary.VpnClient.Ppp.Enums;
 using TqkLibrary.VpnClient.Ppp.Framing.Enums;
 using TqkLibrary.VpnClient.Pptp;
@@ -44,7 +44,7 @@ namespace TqkLibrary.VpnClient.Drivers.Pptp.Tests
     /// <para>
     /// <b>What is DEFERRED to live validation (roadmap Q.1):</b> a full MS-CHAPv2 server authentication exchange,
     /// the CCP/MPPE Opened transition negotiated end-to-end, and the IPCP address assignment that drives the connection
-    /// to <see cref="PptpConnectionState.Connected"/>. The library has no server-side MS-CHAPv2 PPP stack
+    /// to <see cref="VpnConnectionState.Connected"/>. The library has no server-side MS-CHAPv2 PPP stack
     /// (<c>PppEngine</c> is client-auth only; no server <c>IPppAuthenticator</c> exists), so a faithful server cannot
     /// answer the CHAP Challenge offline without reimplementing one. The deterministic plumbing above proves the data
     /// path is wired correctly up to the first LCP exchange; the remainder is verified live in Q.1.
@@ -101,7 +101,7 @@ namespace TqkLibrary.VpnClient.Drivers.Pptp.Tests
 
             // The attempt ultimately fails (timeout) because no faithful auth server answers — assert that cleanly.
             await Assert.ThrowsAnyAsync<Exception>(() => connect);
-            Assert.NotEqual(PptpConnectionState.Connected, connection.State);
+            Assert.NotEqual(VpnConnectionState.Connected, connection.State);
 
             pac.Stop();
             await connection.DisposeAsync();
@@ -140,7 +140,7 @@ namespace TqkLibrary.VpnClient.Drivers.Pptp.Tests
                 controlTransportFactory: (_, _) => Task.FromResult<IByteStreamTransport>(control.Client));
 
             await Assert.ThrowsAnyAsync<Exception>(() => connection.ConnectAsync(User, Pass, cts.Token));
-            Assert.NotEqual(PptpConnectionState.Connected, connection.State);
+            Assert.NotEqual(VpnConnectionState.Connected, connection.State);
 
             pac.Stop();
             await connection.DisposeAsync();

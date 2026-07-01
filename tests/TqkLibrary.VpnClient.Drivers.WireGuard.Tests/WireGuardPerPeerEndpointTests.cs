@@ -4,7 +4,7 @@ using System.Net;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
-using TqkLibrary.VpnClient.Drivers.WireGuard.Enums;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.WireGuard;
 using TqkLibrary.VpnClient.WireGuard.Config;
 using TqkLibrary.VpnClient.WireGuard.Handshake.Models;
@@ -67,7 +67,7 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard.Tests
             connection.PacketChannel.InboundIpPacket += m => inbound.Writer.TryWrite(m.ToArray());
 
             await connection.ConnectAsync(cts.Token);
-            Assert.Equal(WireGuardConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
 
             // The connection opened a transport to each peer's own endpoint (and only those).
             Assert.Contains(endpointA, factory.ConnectedEndpoints);
@@ -124,7 +124,7 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard.Tests
             connection.PacketChannel.InboundIpPacket += m => inbound.Writer.TryWrite(m.ToArray());
 
             await connection.ConnectAsync(cts.Token);
-            Assert.Equal(WireGuardConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
 
             // Both peers resolved to the same endpoint → the factory was asked for exactly one transport (de-dup).
             Assert.Single(factory.ConnectedEndpoints);

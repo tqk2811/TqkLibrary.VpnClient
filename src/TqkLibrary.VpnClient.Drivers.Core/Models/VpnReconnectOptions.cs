@@ -8,7 +8,7 @@ namespace TqkLibrary.VpnClient.Drivers.Core.Models
     /// close, transport fault, rekey watermark — is the driver's concern; the policy here is identical across them).
     /// Enabled by default; set <see cref="Enabled"/> to false to keep single-shot behaviour. Each driver's named
     /// options type (<c>WireGuardReconnectOptions</c>, <c>SstpReconnectOptions</c>, …) derives from this so the shared
-    /// supervisor (<see cref="ReconnectingVpnConnection{TState}"/>) consumes one type while drivers keep their public
+    /// supervisor (<see cref="ReconnectingVpnConnection"/>) consumes one type while drivers keep their public
     /// API; a driver that needs extra knobs (e.g. SSTP's read-timeout) adds them in the subclass.
     /// </summary>
     public class VpnReconnectOptions

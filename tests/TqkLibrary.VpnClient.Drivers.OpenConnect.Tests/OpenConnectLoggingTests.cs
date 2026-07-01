@@ -6,7 +6,7 @@ using System.Threading.Channels;
 using System.Threading.Tasks;
 using TqkLibrary.VpnClient.Abstractions.Diagnostics;
 using TqkLibrary.VpnClient.Abstractions.Drivers;
-using TqkLibrary.VpnClient.Drivers.OpenConnect.Enums;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using Xunit;
 
 namespace TqkLibrary.VpnClient.Drivers.OpenConnect.Tests
@@ -49,7 +49,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenConnect.Tests
             Assert.True(logger.Captured(VpnEventIds.Handshake), "expected Handshake events (config-auth + CONNECT)");
             Assert.True(logger.Captured(VpnEventIds.HandshakeCompleted), "expected a HandshakeCompleted event");
             Assert.True(logger.Captured(VpnEventIds.StateChanged), "expected a StateChanged event");
-            Assert.Contains(OpenConnectConnectionState.Connected.ToString(),
+            Assert.Contains(VpnConnectionState.Connected.ToString(),
                 string.Join("|", logger.MessagesFor(VpnEventIds.StateChanged)));
 
             // ADDITIVE: behaviour is unchanged — the CSTP data plane still round-trips.

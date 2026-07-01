@@ -4,7 +4,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
-using TqkLibrary.VpnClient.Drivers.OpenConnect.Enums;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.OpenConnect.Enums;
 using Xunit;
 
@@ -39,7 +39,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenConnect.Tests
             connection.PacketChannel.InboundIpPacket += m => inbound.Writer.TryWrite(m.ToArray());
 
             await connection.ConnectAsync(cts.Token);
-            Assert.Equal(OpenConnectConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
             Assert.Equal(OpenConnectRekeyMethod.NewTunnel, connection.RekeyMethod);
             Assert.Equal(1, factory.Attempts);
 
@@ -48,7 +48,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenConnect.Tests
             await WaitUntilAsync(() => connection.RekeyCount >= 1, cts.Token);
 
             // The tunnel never dropped and a fresh tunnel was opened (a 2nd connect through the factory).
-            Assert.Equal(OpenConnectConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
             Assert.True(factory.Attempts >= 2, $"expected a re-establish, attempts={factory.Attempts}");
             Assert.Equal(IPAddress.Parse("10.10.0.9"), connection.AssignedAddress); // swapped onto the new tunnel
 
@@ -83,7 +83,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenConnect.Tests
             clock.Advance(61_000);
             await WaitUntilAsync(() => connection.RekeyCount >= 1, cts.Token);
 
-            Assert.Equal(OpenConnectConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
             Assert.True(factory.Attempts >= 2); // ssl ⇒ re-establish
 
             byte[] packet = Encoding.ASCII.GetBytes("traffic after an ssl-method rekey (re-established)");
@@ -115,7 +115,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenConnect.Tests
             await Task.Delay(250, cts.Token);
             Assert.Equal(0, connection.RekeyCount);
             Assert.Equal(1, factory.Attempts);
-            Assert.Equal(OpenConnectConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
 
             await connection.DisposeAsync();
             factory.StopAll();

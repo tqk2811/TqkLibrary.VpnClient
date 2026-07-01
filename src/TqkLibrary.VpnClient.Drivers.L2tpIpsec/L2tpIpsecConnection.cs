@@ -26,11 +26,11 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
     /// A complete L2TP/IPsec client: IKEv1 Main Mode + Quick Mode (PSK) over UDP/500→4500 NAT-T, an ESP transport-mode
     /// data plane, an L2TP tunnel/session over UDP/1701, and a PPP session (MS-CHAPv2) that yields the assigned IP.
     /// After <see cref="ConnectAsync"/> the tunnel carries IP traffic via the stable
-    /// <see cref="ReconnectingVpnConnection{TState}.PacketChannel"/>. When auto-reconnect is enabled, a dropped tunnel is
+    /// <see cref="ReconnectingVpnConnection.PacketChannel"/>. When auto-reconnect is enabled, a dropped tunnel is
     /// re-established behind that same channel.
     /// <para>The link-loss → supervisor → reconnect-loop machinery (backoff/jitter, the stable
     /// <see cref="SwappablePacketChannel"/> facade, the lifetime cancellation, state changes + structured logging, the
-    /// monotonic clock) lives in <see cref="ReconnectingVpnConnection{TState}"/> (roadmap F.6), mirroring the
+    /// monotonic clock) lives in <see cref="ReconnectingVpnConnection"/> (roadmap F.6), mirroring the
     /// IKEv2 / OpenConnect / OpenVPN / WireGuard / SoftEther / SSTP drivers. This driver keeps only its protocol logic
     /// (<see cref="EstablishAsync"/> / <see cref="CleanupAttemptResourcesAsync"/> / the per-attempt timers) and — the
     /// most intricate part — runs <b>in-place</b> keepalive (L2TP HELLO + IKE DPD), Phase 2 ESP CHILD SA rekey, Phase 1
@@ -38,7 +38,7 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
     /// <i>outside</i> the supervisor so a rekey refreshes the SA without re-establishing the tunnel; only a real drop
     /// (DPD timeout / a server Delete / L2TP teardown) calls the inherited <c>OnLinkLost</c>.</para>
     /// </summary>
-    public sealed class L2tpIpsecConnection : ReconnectingVpnConnection<L2tpIpsecConnectionState>, IDisposable, IAsyncDisposable
+    public sealed class L2tpIpsecConnection : ReconnectingVpnConnection, IDisposable, IAsyncDisposable
     {
         static readonly TimeSpan HelloInterval = TimeSpan.FromSeconds(60);
         static readonly TimeSpan DpdInterval = TimeSpan.FromSeconds(20);
@@ -138,15 +138,6 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
 
         /// <summary>Raised after a successful auto-reconnect, carrying the new address and whether it changed.</summary>
         public event Action<L2tpIpsecReconnectInfo>? Reconnected;
-
-        /// <inheritdoc/>
-        protected override L2tpIpsecConnectionState DisconnectedState => L2tpIpsecConnectionState.Disconnected;
-        /// <inheritdoc/>
-        protected override L2tpIpsecConnectionState ConnectingState => L2tpIpsecConnectionState.Connecting;
-        /// <inheritdoc/>
-        protected override L2tpIpsecConnectionState ConnectedState => L2tpIpsecConnectionState.Connected;
-        /// <inheritdoc/>
-        protected override L2tpIpsecConnectionState ReconnectingState => L2tpIpsecConnectionState.Reconnecting;
 
         /// <summary>Runs the full handshake and returns once PPP/IPCP has assigned an address.</summary>
         public async Task ConnectAsync(string userName, string password, CancellationToken cancellationToken = default)

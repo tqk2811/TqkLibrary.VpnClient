@@ -10,7 +10,6 @@ using Microsoft.Extensions.Logging;
 using TqkLibrary.VpnClient.Drivers.Core;
 using TqkLibrary.VpnClient.Drivers.N2n.Config;
 using TqkLibrary.VpnClient.Drivers.N2n.DataChannel;
-using TqkLibrary.VpnClient.Drivers.N2n.Enums;
 using TqkLibrary.VpnClient.Drivers.N2n.Transport;
 using TqkLibrary.VpnClient.Ethernet;
 using TqkLibrary.VpnClient.N2n;
@@ -26,13 +25,13 @@ namespace TqkLibrary.VpnClient.Drivers.N2n
     /// (REGISTER_SUPER → REGISTER_SUPER_ACK), then carries full Ethernet frames as PACKET messages (relayed via the
     /// supernode) behind an L2 <see cref="N2nEthernetChannel"/>. That channel plugs into the userspace Ethernet fabric
     /// (<see cref="ArpResolver"/> on the static overlay IP + a <see cref="VirtualHost"/> bridge), which exposes the
-    /// stable L3 <see cref="ReconnectingVpnConnection{TState}.PacketChannel"/> the IP stack binds — mirroring the
+    /// stable L3 <see cref="ReconnectingVpnConnection.PacketChannel"/> the IP stack binds — mirroring the
     /// SoftEther / OpenVPN tap drivers. A keepalive timer re-sends REGISTER_SUPER so the supernode keeps the edge
     /// registered, and the shared supervisor / auto-reconnect (roadmap F.6) re-establishes a dead tunnel. Not a server —
     /// the supernode role lives only in tests. P2P edge↔edge (REGISTER / QUERY_PEER) is left as a stretch: the
     /// supernode relay is enough for the point-to-point case.
     /// </summary>
-    public sealed class N2nConnection : ReconnectingVpnConnection<N2nConnectionState>, IDisposable, IAsyncDisposable
+    public sealed class N2nConnection : ReconnectingVpnConnection, IDisposable, IAsyncDisposable
     {
         const int MacSize = 6;
 
@@ -103,15 +102,6 @@ namespace TqkLibrary.VpnClient.Drivers.N2n
 
         /// <summary>This edge's virtual MAC on the n2n L2 segment.</summary>
         public MacAddress LinkAddress => _mac;
-
-        /// <inheritdoc/>
-        protected override N2nConnectionState DisconnectedState => N2nConnectionState.Disconnected;
-        /// <inheritdoc/>
-        protected override N2nConnectionState ConnectingState => N2nConnectionState.Connecting;
-        /// <inheritdoc/>
-        protected override N2nConnectionState ConnectedState => N2nConnectionState.Connected;
-        /// <inheritdoc/>
-        protected override N2nConnectionState ReconnectingState => N2nConnectionState.Reconnecting;
 
         /// <summary>Runs the REGISTER_SUPER exchange and returns once the L2 tunnel is carrying traffic.</summary>
         public Task ConnectAsync(CancellationToken cancellationToken = default) => ConnectCoreAsync(cancellationToken);

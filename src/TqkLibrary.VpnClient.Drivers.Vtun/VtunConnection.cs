@@ -9,7 +9,6 @@ using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Drivers.Core;
 using TqkLibrary.VpnClient.Drivers.Vtun.Config;
 using TqkLibrary.VpnClient.Drivers.Vtun.DataChannel;
-using TqkLibrary.VpnClient.Drivers.Vtun.Enums;
 using TqkLibrary.VpnClient.Drivers.Vtun.Transport;
 using TqkLibrary.VpnClient.Ethernet;
 using TqkLibrary.VpnClient.Vtun.Wire;
@@ -29,7 +28,7 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun
     /// <para>⚠️ vtun's auth keys a Blowfish-ECB challenge with MD5(password); with <c>encrypt no</c> the data plane is
     /// cleartext. Both are legacy/weak — this driver exists only to interoperate with the vtund daemon.</para>
     /// </summary>
-    public sealed class VtunConnection : ReconnectingVpnConnection<VtunConnectionState>, IDisposable, IAsyncDisposable
+    public sealed class VtunConnection : ReconnectingVpnConnection, IDisposable, IAsyncDisposable
     {
         // vtun's default keepalive is 30s interval / 4 missed before timeout. Use the same idle interval; a missed-echo
         // window of interval × maxfail trips link-loss.
@@ -91,15 +90,6 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun
 
         /// <summary>The host flags the server returned (valid after connect).</summary>
         public VtunHostFlags ServerFlags => _control?.ServerFlags ?? VtunHostFlags.None;
-
-        /// <inheritdoc/>
-        protected override VtunConnectionState DisconnectedState => VtunConnectionState.Disconnected;
-        /// <inheritdoc/>
-        protected override VtunConnectionState ConnectingState => VtunConnectionState.Connecting;
-        /// <inheritdoc/>
-        protected override VtunConnectionState ConnectedState => VtunConnectionState.Connected;
-        /// <inheritdoc/>
-        protected override VtunConnectionState ReconnectingState => VtunConnectionState.Reconnecting;
 
         /// <summary>Runs the handshake and returns once the tunnel is carrying traffic.</summary>
         public Task ConnectAsync(CancellationToken cancellationToken = default) => ConnectCoreAsync(cancellationToken);

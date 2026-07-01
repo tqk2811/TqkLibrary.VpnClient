@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using TqkLibrary.VpnClient.Abstractions.Diagnostics;
 using TqkLibrary.VpnClient.Abstractions.Diagnostics.Enums;
 using TqkLibrary.VpnClient.Abstractions.Diagnostics.Extensions;
-using TqkLibrary.VpnClient.Drivers.WireGuard.Enums;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.WireGuard;
 using TqkLibrary.VpnClient.WireGuard.Config;
 using TqkLibrary.VpnClient.WireGuard.Handshake.Models;
@@ -61,7 +61,7 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard.Tests
             Assert.True(logger.Captured(VpnEventIds.Handshake), "expected at least one Handshake event");
             Assert.True(logger.Captured(VpnEventIds.HandshakeCompleted), "expected a HandshakeCompleted event");
             Assert.True(logger.Captured(VpnEventIds.StateChanged), "expected a StateChanged event");
-            Assert.Contains(WireGuardConnectionState.Connected.ToString(),
+            Assert.Contains(VpnConnectionState.Connected.ToString(),
                 string.Join("|", logger.MessagesFor(VpnEventIds.StateChanged)));
 
             // ADDITIVE: behaviour is unchanged — the data plane still round-trips end-to-end.

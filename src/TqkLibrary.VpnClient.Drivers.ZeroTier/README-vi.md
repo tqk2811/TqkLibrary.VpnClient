@@ -18,7 +18,7 @@ Driver **ZeroTier (VL1/VL2)** (overlay **L2** Ethernet-over-UDP) — ráp codec 
 | Hướng | Project | Lý do |
 |-------|---------|-------|
 | Dùng | [Abstractions](../TqkLibrary.VpnClient.Abstractions) | `IVpnProtocolDriver`/`IVpnConnection`/`IVpnSession`, `IPacketChannel`, `SwappablePacketChannel`, `IDatagramTransport`, exceptions, `IHostResolver`, **`Diagnostics`** (log handshake/drop, Q.2) |
-| Dùng | [Drivers.Core](../TqkLibrary.VpnClient.Drivers.Core) | **`ReconnectingVpnConnection<TState>`** (base supervisor F.6) + **`VpnReconnectOptions`** (`ZeroTierReconnectOptions` kế thừa) |
+| Dùng | [Drivers.Core](../TqkLibrary.VpnClient.Drivers.Core) | **`ReconnectingVpnConnection`** (base supervisor F.6) + **`VpnReconnectOptions`** (`ZeroTierReconnectOptions` kế thừa) + **`VpnConnectionState`** (enum state dùng chung) |
 | Dùng | [ZeroTier](../TqkLibrary.VpnClient.ZeroTier) | `Vl1PacketCodec` (seal/open), `HelloMessageCodec`/`OkMessageCodec`, `Vl1KeyDerivation`, `NetworkConfigCodec`, `NetworkCredentialsCodec` (COM push), `Vl2FrameCodec`/`Vl2ExtFrameCodec`, models identity/network/frame (`ZeroTierAddress`/`NetworkId`/`InetAddressValue`/`ZeroTierNetworkConfig`/`Vl2ExtFrame`/`OkHelloMessage`…) |
 | Dùng | [Ethernet](../TqkLibrary.VpnClient.Ethernet) | **`VirtualHost`** (bridge L2↔L3) + `MacAddress` + `INeighborResolver` (qua `ZeroTierNeighborResolver`) — **KHÔNG viết lại switch/bridge** |
 | Dùng | [Crypto](../TqkLibrary.VpnClient.Crypto) | (gián tiếp qua ZeroTier) Salsa20/Poly1305/Curve25519/SHA-512 |
@@ -29,7 +29,7 @@ Driver **ZeroTier (VL1/VL2)** (overlay **L2** Ethernet-over-UDP) — ráp codec 
 ```
 TqkLibrary.VpnClient.Drivers.ZeroTier/
 ├─ ZeroTierDriver.cs                  IVpnProtocolDriver: caps (L2Ethernet/Udp/None/Certificate/OutOfBand) + ConnectAsync(config+endpoint) → ZeroTierConnection
-├─ ZeroTierConnection.cs              Điều phối (kế thừa ReconnectingVpnConnection<…> F.6): UDP → HELLO⇄OK(HELLO) + reply OK(HELLO) → NETWORK_CONFIG_REQUEST → config → bind ZeroTierEthernetChannel vào ZeroTierNeighborResolver+VirtualHost → ECHO keepalive + demux verb; supervisor/reconnect ở base
+├─ ZeroTierConnection.cs              Điều phối (kế thừa ReconnectingVpnConnection F.6): UDP → HELLO⇄OK(HELLO) + reply OK(HELLO) → NETWORK_CONFIG_REQUEST → config → bind ZeroTierEthernetChannel vào ZeroTierNeighborResolver+VirtualHost → ECHO keepalive + demux verb; supervisor/reconnect ở base
 ├─ ZeroTierVpnConnection.cs           IVpnConnection: 1 session L2; OpenSessionAsync ném NotSupportedException
 ├─ ZeroTierVpnSession.cs              IVpnSession: PacketChannel ổn định (facade L3 bridge từ L2) + TunnelConfig
 ├─ ZeroTierReconnectOptions.cs        Kế thừa VpnReconnectOptions (Drivers.Core, F.6)
@@ -38,11 +38,10 @@ TqkLibrary.VpnClient.Drivers.ZeroTier/
 ├─ DataChannel/
 │  ├─ ZeroTierEthernetChannel.cs      IEthernetChannel: WriteFrameAsync đóng Ethernet frame thành EXT_FRAME (đính COM lần đầu nếu được cấp; connection truyền null ⇒ bare) + seal VL1; DeliverExtFrame/DeliverFrame raise InboundFrame
 │  └─ ZeroTierNeighborResolver.cs     INeighborResolver: derive peer MAC từ ZT address (KHÔNG ARP — ZeroTier compute MAC)
-├─ Transport/
-│  ├─ IZeroTierTransportFactory.cs    Seam dựng UDP transport tới node/controller (production socket / test loopback)
-│  ├─ ZeroTierTransportHandle.cs      IDatagramTransport + SetReceiver + receive-pump trả về từ factory
-│  └─ ZeroTierSocketTransportFactory.cs Socket thật: UDP (UdpClient) + receive loop dispatch — live-only, cross-TFM
-└─ Enums/ZeroTierConnectionState.cs   Disconnected/Connecting/Connected/Reconnecting
+└─ Transport/
+   ├─ IZeroTierTransportFactory.cs    Seam dựng UDP transport tới node/controller (production socket / test loopback)
+   ├─ ZeroTierTransportHandle.cs      IDatagramTransport + SetReceiver + receive-pump trả về từ factory
+   └─ ZeroTierSocketTransportFactory.cs Socket thật: UDP (UdpClient) + receive loop dispatch — live-only, cross-TFM
 ```
 
 ## Bảng type
@@ -58,7 +57,7 @@ TqkLibrary.VpnClient.Drivers.ZeroTier/
 | [`ZeroTierVpnConnection`](ZeroTierVpnConnection.cs) / [`ZeroTierVpnSession`](ZeroTierVpnSession.cs) | Adapter `IVpnConnection`/`IVpnSession` (1 session) |
 | [`ZeroTierReconnectOptions`](ZeroTierReconnectOptions.cs) | Kế thừa `VpnReconnectOptions` (Drivers.Core, F.6) — backoff supervisor |
 | [`ZeroTierDriverConstants`](ZeroTierDriverConstants.cs) | Hằng runtime: name `zerotier`, port 9993, MTU 1400, proto v10, version 1.14, keepalive 30s |
-| [`ZeroTierConnectionState`](Enums/ZeroTierConnectionState.cs) | enum vòng đời: Disconnected/Connecting/Connected/Reconnecting |
+| [`VpnConnectionState`](../TqkLibrary.VpnClient.Drivers.Core/Enums/VpnConnectionState.cs) | enum vòng đời: Disconnected/Connecting/Connected/Reconnecting (dùng chung ở [`Drivers.Core`](../TqkLibrary.VpnClient.Drivers.Core/Enums/VpnConnectionState.cs) — state kế thừa từ base) |
 
 ## Trạng thái & ghi chú
 

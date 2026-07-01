@@ -5,7 +5,7 @@ using System.Net;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
-using TqkLibrary.VpnClient.Drivers.SoftEther.Enums;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.SoftEther.Models;
 using Xunit;
 
@@ -58,7 +58,7 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther.Tests
 
             await connection.ConnectAsync(cts.Token);
 
-            Assert.Equal(SoftEtherConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
             Assert.Equal(4, connection.ConnectionCount);                 // primary + 3 additional_connect
             Assert.Equal(4, server.AttachedConnections);
             Assert.Equal(server.LeasedAddress, connection.AssignedAddress);

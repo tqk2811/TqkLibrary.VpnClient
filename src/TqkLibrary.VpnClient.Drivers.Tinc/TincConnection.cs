@@ -10,7 +10,6 @@ using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Drivers.Core;
 using TqkLibrary.VpnClient.Drivers.Tinc.Config;
 using TqkLibrary.VpnClient.Drivers.Tinc.DataChannel;
-using TqkLibrary.VpnClient.Drivers.Tinc.Enums;
 using TqkLibrary.VpnClient.Drivers.Tinc.Meta;
 using TqkLibrary.VpnClient.Drivers.Tinc.Transport;
 using TqkLibrary.VpnClient.Tinc.Hosts;
@@ -32,7 +31,7 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc
     /// is bypassed: the peer's endpoint is configured directly (its host file), which is enough for the point-to-point
     /// case. The data-plane handshake is carried over the meta-connection (TCP); only the keyed data packets use UDP.
     /// </summary>
-    public sealed class TincConnection : ReconnectingVpnConnection<TincConnectionState>, IDisposable, IAsyncDisposable
+    public sealed class TincConnection : ReconnectingVpnConnection, IDisposable, IAsyncDisposable
     {
         const string DriverNameConst = "tinc";
 
@@ -93,15 +92,6 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc
 
         /// <summary>The local overlay (tunnel) address, if configured.</summary>
         public IPAddress? AssignedAddress => _config.OverlayAddress;
-
-        /// <inheritdoc/>
-        protected override TincConnectionState DisconnectedState => TincConnectionState.Disconnected;
-        /// <inheritdoc/>
-        protected override TincConnectionState ConnectingState => TincConnectionState.Connecting;
-        /// <inheritdoc/>
-        protected override TincConnectionState ConnectedState => TincConnectionState.Connected;
-        /// <inheritdoc/>
-        protected override TincConnectionState ReconnectingState => TincConnectionState.Reconnecting;
 
         /// <summary>Runs the meta + data handshakes and returns once the tunnel is carrying traffic.</summary>
         public Task ConnectAsync(CancellationToken cancellationToken = default) => ConnectCoreAsync(cancellationToken);

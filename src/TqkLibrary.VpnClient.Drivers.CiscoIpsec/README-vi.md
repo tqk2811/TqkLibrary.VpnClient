@@ -27,7 +27,7 @@ là **nhánh thêm**, không vỡ Main Mode).
 | Hướng | Project | Lý do |
 |-------|---------|-------|
 | Dùng | [Abstractions](../TqkLibrary.VpnClient.Abstractions) | `IVpnProtocolDriver`/`IVpnConnection`/`IVpnSession`, `IPacketChannel`, `SwappablePacketChannel`, exceptions, `IHostResolver`, **`Diagnostics`** (log handshake/XAUTH/DPD/rekey/reconnect) |
-| Dùng | [Drivers.Core](../TqkLibrary.VpnClient.Drivers.Core) | base [`ReconnectingVpnConnection<TState>`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L24) (supervisor/reconnect/backoff-jitter/facade/state, F.6) + [`VpnReconnectOptions`](../TqkLibrary.VpnClient.Drivers.Core/Models/VpnReconnectOptions.cs#L14) |
+| Dùng | [Drivers.Core](../TqkLibrary.VpnClient.Drivers.Core) | base [`ReconnectingVpnConnection`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L24) (supervisor/reconnect/backoff-jitter/facade/state, F.6) + [`VpnReconnectOptions`](../TqkLibrary.VpnClient.Drivers.Core/Models/VpnReconnectOptions.cs#L14) |
 | Dùng | [Ipsec](../TqkLibrary.VpnClient.Ipsec) | `Ike/V1` (IkeV1Client + Aggressive/XAUTH/Mode-Config payloads), `Esp` (EspSession/EspTunnelChannel), `Nat` (NAT-T) |
 | Được dùng bởi | [TqkLibrary.VpnClient](../TqkLibrary.VpnClient) (façade) | `VpnClientBuilder.UseCiscoIpsec(groupName)` đăng ký driver |
 
@@ -36,11 +36,10 @@ là **nhánh thêm**, không vỡ Main Mode).
 ```
 TqkLibrary.VpnClient.Drivers.CiscoIpsec/
 ├─ CiscoIpsecDriver.cs            IVpnProtocolDriver: capabilities + ConnectAsync → CiscoIpsecConnection; group name qua ctor, group PSK+XAUTH qua VpnCredentials
-├─ CiscoIpsecConnection.cs        : ReconnectingVpnConnection<…> (F.6). Override Establish/Cleanup/StopAttemptLoop + ánh xạ state; giữ DPD/rekey ESP CHILD SA/Delete trên timer riêng (ngoài supervisor)
+├─ CiscoIpsecConnection.cs        : ReconnectingVpnConnection (F.6). Override Establish/Cleanup/StopAttemptLoop; giữ DPD/rekey ESP CHILD SA/Delete trên timer riêng (ngoài supervisor)
 ├─ CiscoIpsecVpnConnection.cs     IVpnConnection: 1 session; OpenSessionAsync ném NotSupportedException (1 ESP CHILD SA)
 ├─ CiscoIpsecVpnSession.cs        IVpnSession: PacketChannel ổn định + TunnelConfig; ApplyReconnect khi reconnect
 ├─ CiscoIpsecReconnectOptions.cs  : VpnReconnectOptions (F.6) — không thêm knob, giữ cho public API
-├─ Enums/CiscoIpsecConnectionState.cs   Disconnected/Connecting/Connected/Reconnecting
 └─ Models/CiscoIpsecReconnectInfo.cs    Địa chỉ mới + cờ AddressChanged sau reconnect
 ```
 
@@ -49,7 +48,7 @@ TqkLibrary.VpnClient.Drivers.CiscoIpsec/
 | Type | Vai trò | Vị trí |
 |------|---------|--------|
 | `CiscoIpsecDriver` | `IVpnProtocolDriver`: capabilities (L3Ip, **không PPP**, ESP, **PSK\|UserPassword**, ConfigPush), `ConnectAsync` dựng `CiscoIpsecConnection`; **group name qua ctor** (`UseCiscoIpsec(groupName)`), group PSK = `VpnCredentials.PreSharedKey`, XAUTH user/pass = `Username`/`Password` (thiếu PSK hoặc thiếu một nửa XAUTH ⇒ `ArgumentException`) | [CiscoIpsecDriver.cs:18](CiscoIpsecDriver.cs#L18) |
-| `CiscoIpsecConnection` | Bộ điều phối, **kế thừa** [`ReconnectingVpnConnection<CiscoIpsecConnectionState>`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L24) (F.6): override `EstablishAsync` (forced NAT-T 500→4500 → Aggressive AG1/AG2/AG3 group PSK → XAUTH `RunXAuthAsync` → Mode-Config virtual IP → Quick Mode ESP tunnel → `EspTunnelChannel` bind sau `Facade`) + `CleanupAttemptResourcesAsync`/`StopAttemptLoop` + ánh xạ 4 state + `OnReconnected`. **Phần IKEv1-riêng giữ ngoài supervisor trên timer riêng**: keepalive DPD (IKE R-U-THERE), rekey Phase 2 ESP CHILD SA make-before-break, **Delete SA khi teardown**; `DisconnectAsync` gửi Delete ESP + ISAKMP trước teardown base | [CiscoIpsecConnection.cs:37](CiscoIpsecConnection.cs#L37) |
+| `CiscoIpsecConnection` | Bộ điều phối, **kế thừa** [`ReconnectingVpnConnection`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L24) (F.6): override `EstablishAsync` (forced NAT-T 500→4500 → Aggressive AG1/AG2/AG3 group PSK → XAUTH `RunXAuthAsync` → Mode-Config virtual IP → Quick Mode ESP tunnel → `EspTunnelChannel` bind sau `Facade`) + `CleanupAttemptResourcesAsync`/`StopAttemptLoop` + `OnReconnected`. **Phần IKEv1-riêng giữ ngoài supervisor trên timer riêng**: keepalive DPD (IKE R-U-THERE), rekey Phase 2 ESP CHILD SA make-before-break, **Delete SA khi teardown**; `DisconnectAsync` gửi Delete ESP + ISAKMP trước teardown base | [CiscoIpsecConnection.cs:37](CiscoIpsecConnection.cs#L37) |
 | `CiscoIpsecVpnConnection` | `IVpnConnection`: 1 session; `OpenSessionAsync` ⇒ `NotSupportedException` (1 ESP CHILD SA / 1 IP ảo ở driver này) | [CiscoIpsecVpnConnection.cs:6](CiscoIpsecVpnConnection.cs#L6) |
 | `CiscoIpsecVpnSession` | `IVpnSession`: `PacketChannel` (facade) + `Config`; `ApplyReconnect` cập nhật IP/DNS sau reconnect | [CiscoIpsecVpnSession.cs:10](CiscoIpsecVpnSession.cs#L10) |
 | `CiscoIpsecReconnectOptions` | **kế thừa** [`VpnReconnectOptions`](../TqkLibrary.VpnClient.Drivers.Core/Models/VpnReconnectOptions.cs#L14) (F.6): `Enabled`/`MaxAttempts`/backoff/jitter — Cisco IPsec không thêm knob, giữ named type cho public API | [CiscoIpsecReconnectOptions.cs:12](CiscoIpsecReconnectOptions.cs#L12) |

@@ -13,7 +13,6 @@ using TqkLibrary.VpnClient.Abstractions.Net;
 using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Crypto;
 using TqkLibrary.VpnClient.Drivers.Core;
-using TqkLibrary.VpnClient.Drivers.SoftEther.Enums;
 using TqkLibrary.VpnClient.Drivers.SoftEther.Models;
 using TqkLibrary.VpnClient.Drivers.SoftEther.Transport;
 using TqkLibrary.VpnClient.Ethernet;
@@ -35,10 +34,10 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
     /// (L2.3) + <see cref="VirtualHost"/> (L2.2) carry IP traffic — the IP stack binds the stable facade, never the
     /// Ethernet channel. A receive loop decodes inbound data blocks and dispatches frames; a periodic keep-alive runs
     /// for the session's lifetime, and (when enabled) a dropped session is re-established behind the same facade by the
-    /// shared supervisor (<see cref="ReconnectingVpnConnection{TState}"/>, roadmap F.6), mirroring the OpenConnect /
+    /// shared supervisor (<see cref="ReconnectingVpnConnection"/>, roadmap F.6), mirroring the OpenConnect /
     /// OpenVPN / WireGuard drivers. Not a server — the responder role lives only in tests.
     /// </summary>
-    public sealed class SoftEtherConnection : ReconnectingVpnConnection<SoftEtherConnectionState>, IDisposable, IAsyncDisposable
+    public sealed class SoftEtherConnection : ReconnectingVpnConnection, IDisposable, IAsyncDisposable
     {
         static readonly TimeSpan KeepAliveTick = TimeSpan.FromSeconds(5);
         static readonly IPAddress LinkLocalPrefix = IPAddress.Parse("fe80::");   // the fe80::/64 IPv6 link-local prefix (RFC 4291 §2.5.6)
@@ -165,15 +164,6 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
 
         /// <summary>Raised after a successful auto-reconnect, carrying the new address and whether it changed.</summary>
         public event Action<SoftEtherReconnectInfo>? Reconnected;
-
-        /// <inheritdoc/>
-        protected override SoftEtherConnectionState DisconnectedState => SoftEtherConnectionState.Disconnected;
-        /// <inheritdoc/>
-        protected override SoftEtherConnectionState ConnectingState => SoftEtherConnectionState.Connecting;
-        /// <inheritdoc/>
-        protected override SoftEtherConnectionState ConnectedState => SoftEtherConnectionState.Connected;
-        /// <inheritdoc/>
-        protected override SoftEtherConnectionState ReconnectingState => SoftEtherConnectionState.Reconnecting;
 
         /// <summary>Runs the full handshake + DHCP lease and returns once the tunnel is carrying traffic.</summary>
         public async Task ConnectAsync(CancellationToken cancellationToken = default)

@@ -9,7 +9,6 @@ using TqkLibrary.VpnClient.Abstractions.Drivers;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
 using TqkLibrary.VpnClient.Abstractions.Net;
 using TqkLibrary.VpnClient.Drivers.Core;
-using TqkLibrary.VpnClient.Drivers.OpenVpn.Enums;
 using TqkLibrary.VpnClient.Drivers.OpenVpn.Models;
 using TqkLibrary.VpnClient.Drivers.OpenVpn.Transport;
 using TqkLibrary.VpnClient.Ethernet;
@@ -35,11 +34,11 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
     /// the userspace DHCPv4 client (roadmap L2.5). Not a server — the responder role lives only in tests.
     /// <para>The link-loss → supervisor → reconnect-loop machinery (backoff/jitter, the stable
     /// <see cref="SwappablePacketChannel"/> facade, the lifetime cancellation, state changes + structured logging, the
-    /// monotonic clock) lives in <see cref="ReconnectingVpnConnection{TState}"/> (roadmap F.6); this driver keeps only its
+    /// monotonic clock) lives in <see cref="ReconnectingVpnConnection"/> (roadmap F.6); this driver keeps only its
     /// protocol logic (<see cref="EstablishAsync"/> / <see cref="CleanupAttemptResourcesAsync"/> / the keepalive timer).
     /// Rekey is a re-establish (fresh keys, packet-id back to 0) — unchanged.</para>
     /// </summary>
-    public sealed class OpenVpnConnection : ReconnectingVpnConnection<OpenVpnConnectionState>, IDisposable, IAsyncDisposable
+    public sealed class OpenVpnConnection : ReconnectingVpnConnection, IDisposable, IAsyncDisposable
     {
         static readonly TimeSpan KeepaliveTick = TimeSpan.FromSeconds(1);
         static readonly IPAddress LinkLocalPrefix = IPAddress.Parse("fe80::");   // the fe80::/64 IPv6 link-local prefix (RFC 4291 §2.5.6)
@@ -216,15 +215,6 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
 
         /// <summary>Raised after a successful auto-reconnect, carrying the new address and whether it changed.</summary>
         public event Action<OpenVpnReconnectInfo>? Reconnected;
-
-        /// <inheritdoc/>
-        protected override OpenVpnConnectionState DisconnectedState => OpenVpnConnectionState.Disconnected;
-        /// <inheritdoc/>
-        protected override OpenVpnConnectionState ConnectingState => OpenVpnConnectionState.Connecting;
-        /// <inheritdoc/>
-        protected override OpenVpnConnectionState ConnectedState => OpenVpnConnectionState.Connected;
-        /// <inheritdoc/>
-        protected override OpenVpnConnectionState ReconnectingState => OpenVpnConnectionState.Reconnecting;
 
         /// <summary>Runs the full handshake and returns once the server has pushed a tunnel address.</summary>
         public async Task ConnectAsync(CancellationToken cancellationToken = default)

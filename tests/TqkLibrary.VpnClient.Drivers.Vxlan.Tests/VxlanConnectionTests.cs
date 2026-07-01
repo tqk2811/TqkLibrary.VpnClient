@@ -6,9 +6,9 @@ using System.Threading.Tasks;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Enums;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.Drivers.Vxlan;
 using TqkLibrary.VpnClient.Drivers.Vxlan.Config;
-using TqkLibrary.VpnClient.Drivers.Vxlan.Enums;
 using TqkLibrary.VpnClient.Ethernet;
 using Xunit;
 
@@ -64,7 +64,7 @@ namespace TqkLibrary.VpnClient.Drivers.Vxlan.Tests
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await connection.ConnectAsync(cts.Token);
 
-            Assert.Equal(VxlanConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
             Assert.Equal(OverlayAddress, connection.AssignedAddress);
             Assert.Equal(OverlayAddress, connection.Config.AssignedAddress);
         }

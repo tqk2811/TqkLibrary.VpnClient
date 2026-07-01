@@ -12,7 +12,6 @@ using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Drivers.Core;
 using TqkLibrary.VpnClient.Drivers.Nebula.Config;
 using TqkLibrary.VpnClient.Drivers.Nebula.DataChannel;
-using TqkLibrary.VpnClient.Drivers.Nebula.Enums;
 using TqkLibrary.VpnClient.Drivers.Nebula.Transport;
 using TqkLibrary.VpnClient.Nebula.Certificate;
 using TqkLibrary.VpnClient.Nebula.Certificate.Models;
@@ -36,7 +35,7 @@ namespace TqkLibrary.VpnClient.Drivers.Nebula
     /// the responder role lives only in tests. Lighthouse discovery is bypassed: the peer's UDP endpoint is configured
     /// directly (a <c>static_host_map</c> entry / the connect host:port), which is enough for the point-to-point case.
     /// </summary>
-    public sealed class NebulaConnection : ReconnectingVpnConnection<NebulaConnectionState>, IDisposable, IAsyncDisposable
+    public sealed class NebulaConnection : ReconnectingVpnConnection, IDisposable, IAsyncDisposable
     {
         static readonly TimeSpan TimerTick = TimeSpan.FromMilliseconds(250);
         const string DriverNameConst = "nebula";
@@ -107,15 +106,6 @@ namespace TqkLibrary.VpnClient.Drivers.Nebula
 
         /// <summary>The local overlay (tunnel) IPv4 address, if configured / derivable.</summary>
         public IPAddress? AssignedAddress => _config.ResolveOverlayAddress();
-
-        /// <inheritdoc/>
-        protected override NebulaConnectionState DisconnectedState => NebulaConnectionState.Disconnected;
-        /// <inheritdoc/>
-        protected override NebulaConnectionState ConnectingState => NebulaConnectionState.Connecting;
-        /// <inheritdoc/>
-        protected override NebulaConnectionState ConnectedState => NebulaConnectionState.Connected;
-        /// <inheritdoc/>
-        protected override NebulaConnectionState ReconnectingState => NebulaConnectionState.Reconnecting;
 
         /// <summary>Runs the initial handshake and returns once the tunnel is carrying traffic.</summary>
         public Task ConnectAsync(CancellationToken cancellationToken = default) => ConnectCoreAsync(cancellationToken);

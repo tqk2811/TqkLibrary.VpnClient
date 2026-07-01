@@ -6,7 +6,6 @@ using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
 using TqkLibrary.VpnClient.Abstractions.Net;
 using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Drivers.Core;
-using TqkLibrary.VpnClient.Drivers.Pptp.Enums;
 using TqkLibrary.VpnClient.Drivers.Pptp.Models;
 using TqkLibrary.VpnClient.Drivers.Pptp.Transport;
 using TqkLibrary.VpnClient.Ppp;
@@ -22,18 +21,18 @@ namespace TqkLibrary.VpnClient.Drivers.Pptp
     /// A complete PPTP client (RFC 2637): a TCP/1723 control connection (Start-Control-Connection + Outgoing-Call),
     /// a GRE (IP proto-47) data plane keyed by the negotiated Call-IDs, MPPE (RFC 3078/3079) over CCP, and a PPP
     /// session (MS-CHAPv2) that yields the assigned IP. After <see cref="ConnectAsync"/> the tunnel carries IP
-    /// traffic via the stable <see cref="ReconnectingVpnConnection{TState}.PacketChannel"/>; when auto-reconnect is
+    /// traffic via the stable <see cref="ReconnectingVpnConnection.PacketChannel"/>; when auto-reconnect is
     /// enabled a dropped tunnel is re-established behind that same channel.
     /// <para>This is "L2TP/IPsec minus IPsec/L2TP, plus GRE + MPPE": the link-loss → supervisor → reconnect-loop
     /// machinery (backoff/jitter, the stable <see cref="SwappablePacketChannel"/> facade, lifetime cancellation, the
-    /// state changes + structured logging, the monotonic clock) lives in <see cref="ReconnectingVpnConnection{TState}"/>
+    /// state changes + structured logging, the monotonic clock) lives in <see cref="ReconnectingVpnConnection"/>
     /// (roadmap F.6). This driver keeps only its protocol logic (<see cref="EstablishAsync"/> /
     /// <see cref="CleanupAttemptResourcesAsync"/> / the Echo-Request keepalive).</para>
     /// <para><b>PPTP + MS-CHAPv2 + MPPE/RC4 is cryptographically broken</b> — provided only for interop with legacy
     /// PPTP servers. GRE needs a raw-IP transport (<see cref="IRawIpTransportFactory"/>, roadmap F.9) which requires
     /// elevation.</para>
     /// </summary>
-    public sealed class PptpConnection : ReconnectingVpnConnection<PptpConnectionState>, IDisposable, IAsyncDisposable
+    public sealed class PptpConnection : ReconnectingVpnConnection, IDisposable, IAsyncDisposable
     {
         const string DriverNameConst = "pptp";
         const int GreIpProtocol = 47; // IANA IP protocol number for GRE (native, no UDP encapsulation)
@@ -91,15 +90,6 @@ namespace TqkLibrary.VpnClient.Drivers.Pptp
 
         /// <summary>Raised after a successful auto-reconnect, carrying the new address and whether it changed.</summary>
         public event Action<PptpReconnectInfo>? Reconnected;
-
-        /// <inheritdoc/>
-        protected override PptpConnectionState DisconnectedState => PptpConnectionState.Disconnected;
-        /// <inheritdoc/>
-        protected override PptpConnectionState ConnectingState => PptpConnectionState.Connecting;
-        /// <inheritdoc/>
-        protected override PptpConnectionState ConnectedState => PptpConnectionState.Connected;
-        /// <inheritdoc/>
-        protected override PptpConnectionState ReconnectingState => PptpConnectionState.Reconnecting;
 
         /// <summary>Runs the full handshake and returns once PPP/IPCP has assigned an address.</summary>
         public async Task ConnectAsync(string userName, string password, CancellationToken cancellationToken = default)

@@ -4,7 +4,7 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using TqkLibrary.VpnClient.Abstractions.Diagnostics;
-using TqkLibrary.VpnClient.Drivers.SoftEther.Enums;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.SoftEther.Models;
 using Xunit;
 
@@ -45,11 +45,11 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther.Tests
             await connection.ConnectAsync(cts.Token);
 
             // The handshake/DHCP/lifecycle events the connect path is expected to log.
-            Assert.Equal(SoftEtherConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
             Assert.True(logger.Captured(VpnEventIds.Handshake), "expected Handshake events (control + DHCP)");
             Assert.True(logger.Captured(VpnEventIds.HandshakeCompleted), "expected a HandshakeCompleted event");
             Assert.True(logger.Captured(VpnEventIds.StateChanged), "expected a StateChanged event");
-            Assert.Contains(SoftEtherConnectionState.Connected.ToString(),
+            Assert.Contains(VpnConnectionState.Connected.ToString(),
                 string.Join("|", logger.MessagesFor(VpnEventIds.StateChanged)));
 
             await connection.DisposeAsync();

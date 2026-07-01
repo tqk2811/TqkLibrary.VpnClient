@@ -18,7 +18,7 @@ namespace TqkLibrary.VpnClient.Drivers.IpEncap.Tests
     /// (<see cref="IpEncapConnection"/> / <see cref="IpEncapDriver"/>), driven against a loopback datagram link standing
     /// in for the raw-IP proto-47/4/41 transport. No real raw sockets, no <c>Integration</c> trait.
     /// <para>What this covers (exercises the real driver's <c>EstablishAsync</c> and the stable
-    /// <see cref="ReconnectingVpnConnection{TState}.PacketChannel"/> facade):</para>
+    /// <see cref="ReconnectingVpnConnection.PacketChannel"/> facade):</para>
     /// <list type="bullet">
     ///   <item>GRE (proto-47): an inner IPv4 packet written to the channel reaches the peer GRE-wrapped (decodes via
     ///         <see cref="GreCodec"/> back to the same inner packet), and a peer→client GRE frame surfaces on the

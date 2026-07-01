@@ -4,7 +4,7 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using TqkLibrary.VpnClient.Abstractions.Diagnostics;
-using TqkLibrary.VpnClient.Drivers.OpenVpn.Enums;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.OpenVpn;
 using Xunit;
 
@@ -45,12 +45,12 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn.Tests
             await connection.ConnectAsync(cts.Token);
 
             // The handshake/lifecycle events the connect path is expected to log, plus an unchanged data path.
-            Assert.Equal(OpenVpnConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
             Assert.Equal(IPAddress.Parse("10.8.0.2"), connection.AssignedAddress);
             Assert.True(logger.Captured(VpnEventIds.Handshake), "expected Handshake events (reset/key-method-2/PUSH)");
             Assert.True(logger.Captured(VpnEventIds.HandshakeCompleted), "expected a HandshakeCompleted event");
             Assert.True(logger.Captured(VpnEventIds.StateChanged), "expected a StateChanged event");
-            Assert.Contains(OpenVpnConnectionState.Connected.ToString(),
+            Assert.Contains(VpnConnectionState.Connected.ToString(),
                 string.Join("|", logger.MessagesFor(VpnEventIds.StateChanged)));
 
             await connection.DisposeAsync();

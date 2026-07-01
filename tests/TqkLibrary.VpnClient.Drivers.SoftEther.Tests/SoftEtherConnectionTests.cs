@@ -7,7 +7,7 @@ using TqkLibrary.VpnClient.Abstractions.Drivers;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Enums;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
-using TqkLibrary.VpnClient.Drivers.SoftEther.Enums;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.SoftEther.Models;
 using Xunit;
 
@@ -72,7 +72,7 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther.Tests
             await connection.ConnectAsync(cts.Token);
 
             // The DHCP lease drove the tunnel config (address, prefix from the /24 mask, gateway route, DNS).
-            Assert.Equal(SoftEtherConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
             Assert.Equal(sim.LeasedAddress, connection.AssignedAddress);
             Assert.Equal(24, connection.Config.PrefixLength);
             Assert.Contains(IPAddress.Parse("192.168.30.1"), connection.Config.DnsServers);
@@ -111,7 +111,7 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther.Tests
             await connection.ConnectAsync(cts.Token);
 
             // The whole handshake + DHCP lease + ARP ran through the use_compress/use_encrypt data session.
-            Assert.Equal(SoftEtherConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
             Assert.Equal(sim.LeasedAddress, connection.AssignedAddress);
 
             // A compressible IP packet survives compress+encrypt both ways (echoed by the server).
@@ -157,7 +157,7 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther.Tests
             await connection.ConnectAsync(cts.Token);
 
             // IPv4 still leased over DHCP exactly as before.
-            Assert.Equal(SoftEtherConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
             Assert.Equal(sim.LeasedAddress, connection.AssignedAddress);
             Assert.Equal(24, connection.Config.PrefixLength);
 
@@ -207,7 +207,7 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther.Tests
 
             await connection.ConnectAsync(cts.Token);
 
-            Assert.Equal(SoftEtherConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
             Assert.Equal(sim.LeasedAddress, connection.AssignedAddress);
             Assert.Null(connection.AssignedAddressV6);   // no RA → no SLAAC/DHCPv6 → IPv4-only config
 
@@ -401,19 +401,19 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther.Tests
                 new InProcessSoftEtherTransportFactory(() => client),
                 reconnectOptions: new SoftEtherReconnectOptions { Enabled = false });
 
-            var states = Channel.CreateUnbounded<SoftEtherConnectionState>();
+            var states = Channel.CreateUnbounded<VpnConnectionState>();
             connection.StateChanged += s => states.Writer.TryWrite(s);
 
             await connection.ConnectAsync(cts.Token);
-            Assert.Equal(SoftEtherConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
 
             // Closing the server end makes the client's receive loop see EOF → link lost → Disconnected (reconnect off).
             await server.DisposeAsync();
-            SoftEtherConnectionState state;
+            VpnConnectionState state;
             do { state = await states.Reader.ReadAsync(cts.Token); }
-            while (state != SoftEtherConnectionState.Disconnected);
+            while (state != VpnConnectionState.Disconnected);
 
-            Assert.Equal(SoftEtherConnectionState.Disconnected, connection.State);
+            Assert.Equal(VpnConnectionState.Disconnected, connection.State);
             await connection.DisposeAsync();
         }
     }

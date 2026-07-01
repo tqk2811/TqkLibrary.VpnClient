@@ -10,7 +10,6 @@ using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
 using TqkLibrary.VpnClient.Abstractions.Net;
 using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Drivers.Core;
-using TqkLibrary.VpnClient.Drivers.WireGuard.Enums;
 using TqkLibrary.VpnClient.Drivers.WireGuard.Models;
 using TqkLibrary.VpnClient.Drivers.WireGuard.Transport;
 using TqkLibrary.VpnClient.WireGuard;
@@ -50,7 +49,7 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
     /// inbound initiation we answered), so <c>EstablishAsync</c> no longer requires our own initiation to be answered.
     /// </para>
     /// </summary>
-    public sealed class WireGuardConnection : ReconnectingVpnConnection<WireGuardConnectionState>, IDisposable, IAsyncDisposable
+    public sealed class WireGuardConnection : ReconnectingVpnConnection, IDisposable, IAsyncDisposable
     {
         static readonly TimeSpan TimerTick = TimeSpan.FromMilliseconds(250);
         const string DriverNameConst = "wireguard";
@@ -123,15 +122,6 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard
 
         /// <summary>Raised after a successful auto-reconnect.</summary>
         public event Action<WireGuardReconnectInfo>? Reconnected;
-
-        /// <inheritdoc/>
-        protected override WireGuardConnectionState DisconnectedState => WireGuardConnectionState.Disconnected;
-        /// <inheritdoc/>
-        protected override WireGuardConnectionState ConnectingState => WireGuardConnectionState.Connecting;
-        /// <inheritdoc/>
-        protected override WireGuardConnectionState ConnectedState => WireGuardConnectionState.Connected;
-        /// <inheritdoc/>
-        protected override WireGuardConnectionState ReconnectingState => WireGuardConnectionState.Reconnecting;
 
         /// <inheritdoc/>
         protected override void OnReconnected() => Reconnected?.Invoke(new WireGuardReconnectInfo());

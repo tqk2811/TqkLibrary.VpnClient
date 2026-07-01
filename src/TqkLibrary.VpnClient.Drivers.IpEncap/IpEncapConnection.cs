@@ -21,16 +21,16 @@ namespace TqkLibrary.VpnClient.Drivers.IpEncap
     /// (<see cref="IpEncapKind.Gre"/>→47, <see cref="IpEncapKind.IpIp"/>→4, <see cref="IpEncapKind.Sit"/>→41) to the
     /// remote gateway and binds the matching data-plane channel — <see cref="GreTunnelChannel"/> for GRE,
     /// <see cref="RawIpPassthroughChannel"/> for IPIP/SIT — behind the stable
-    /// <see cref="ReconnectingVpnConnection{TState}.PacketChannel"/> facade so the IP stack above sees one durable L3 link.
+    /// <see cref="ReconnectingVpnConnection.PacketChannel"/> facade so the IP stack above sees one durable L3 link.
     /// <para>This is "WireGuard minus the handshake": the link-loss → supervisor → reconnect-loop machinery (the stable
     /// <see cref="SwappablePacketChannel"/> facade, lifetime cancellation, state + structured logging) is reused from
-    /// <see cref="ReconnectingVpnConnection{TState}"/> (roadmap F.6); the driver only opens the transport and starts the
+    /// <see cref="ReconnectingVpnConnection"/> (roadmap F.6); the driver only opens the transport and starts the
     /// channel. Plain encap is <i>connectionless</i> — there is no control plane (no handshake, keepalive or DPD), so a
     /// silent link loss cannot be detected and auto-reconnect does not fire on its own.</para>
     /// <para><b>GRE/IPIP/SIT are UNENCRYPTED</b> — use only on a trusted path or under IPsec ESP. The raw-IP transport
     /// (<see cref="IRawIpTransportFactory"/>, roadmap F.9) requires elevation.</para>
     /// </summary>
-    public sealed class IpEncapConnection : ReconnectingVpnConnection<IpEncapConnectionState>, IDisposable, IAsyncDisposable
+    public sealed class IpEncapConnection : ReconnectingVpnConnection, IDisposable, IAsyncDisposable
     {
         const string DriverNameConst = "ipencap";
 
@@ -73,15 +73,6 @@ namespace TqkLibrary.VpnClient.Drivers.IpEncap
 
         /// <summary>The MTU advertised to the IP stack (from <see cref="IpEncapOptions.Mtu"/>).</summary>
         public int Mtu => _options.Mtu;
-
-        /// <inheritdoc/>
-        protected override IpEncapConnectionState DisconnectedState => IpEncapConnectionState.Disconnected;
-        /// <inheritdoc/>
-        protected override IpEncapConnectionState ConnectingState => IpEncapConnectionState.Connecting;
-        /// <inheritdoc/>
-        protected override IpEncapConnectionState ConnectedState => IpEncapConnectionState.Connected;
-        /// <inheritdoc/>
-        protected override IpEncapConnectionState ReconnectingState => IpEncapConnectionState.Reconnecting;
 
         /// <summary>Opens the raw-IP transport and brings the encapsulation channel up; returns once the link is live.</summary>
         public Task ConnectAsync(CancellationToken cancellationToken = default)

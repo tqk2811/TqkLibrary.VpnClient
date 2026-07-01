@@ -4,7 +4,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
-using TqkLibrary.VpnClient.Drivers.WireGuard.Enums;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.WireGuard;
 using TqkLibrary.VpnClient.WireGuard.Config;
 using TqkLibrary.VpnClient.WireGuard.Handshake.Models;
@@ -64,8 +64,8 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard.Tests
             // Both connect concurrently: each sends an initiation; whoever's reaches the other first is answered.
             await Task.WhenAll(connA.ConnectAsync(cts.Token), connB.ConnectAsync(cts.Token));
 
-            Assert.Equal(WireGuardConnectionState.Connected, connA.State);
-            Assert.Equal(WireGuardConnectionState.Connected, connB.State);
+            Assert.Equal(VpnConnectionState.Connected, connA.State);
+            Assert.Equal(VpnConnectionState.Connected, connB.State);
 
             // A → B: a bare IP packet survives the type-4 data plane and is delivered at B.
             byte[] aToB = Encoding.ASCII.GetBytes("packet from node A to node B over the responder-role tunnel");
@@ -118,7 +118,7 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard.Tests
             connR.PacketChannel.InboundIpPacket += m => inboundR.Writer.TryWrite(m.ToArray());
 
             await Task.WhenAll(connI.ConnectAsync(cts.Token), connR.ConnectAsync(cts.Token));
-            Assert.Equal(WireGuardConnectionState.Connected, connR.State);
+            Assert.Equal(VpnConnectionState.Connected, connR.State);
 
             byte[] packet = Encoding.ASCII.GetBytes("initiator->responder data after the responder answered type-1");
             await connI.PacketChannel.WriteIpPacketAsync(packet, cts.Token);

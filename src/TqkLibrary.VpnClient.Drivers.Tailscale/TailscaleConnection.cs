@@ -7,7 +7,6 @@ using TqkLibrary.VpnClient.Abstractions.Drivers;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
 using TqkLibrary.VpnClient.Drivers.Core;
 using TqkLibrary.VpnClient.Drivers.Tailscale.Config;
-using TqkLibrary.VpnClient.Drivers.Tailscale.Enums;
 using TqkLibrary.VpnClient.Drivers.WireGuard;
 using TqkLibrary.VpnClient.Drivers.WireGuard.Transport;
 using TqkLibrary.VpnClient.Tailscale;
@@ -31,7 +30,7 @@ namespace TqkLibrary.VpnClient.Drivers.Tailscale
     /// supervisor here covers a control-plane failure during establish.
     /// </para>
     /// </summary>
-    public sealed class TailscaleConnection : ReconnectingVpnConnection<TailscaleConnectionState>, IDisposable, IAsyncDisposable
+    public sealed class TailscaleConnection : ReconnectingVpnConnection, IDisposable, IAsyncDisposable
     {
         const string DriverNameConst = "tailscale";
 
@@ -66,15 +65,6 @@ namespace TqkLibrary.VpnClient.Drivers.Tailscale
 
         /// <summary>The tunnel configuration derived from the netmap (self address, routes from peers' allowed-IPs, MTU).</summary>
         public TunnelConfig Config => _tunnelConfig;
-
-        /// <inheritdoc/>
-        protected override TailscaleConnectionState DisconnectedState => TailscaleConnectionState.Disconnected;
-        /// <inheritdoc/>
-        protected override TailscaleConnectionState ConnectingState => TailscaleConnectionState.Connecting;
-        /// <inheritdoc/>
-        protected override TailscaleConnectionState ConnectedState => TailscaleConnectionState.Connected;
-        /// <inheritdoc/>
-        protected override TailscaleConnectionState ReconnectingState => TailscaleConnectionState.Reconnecting;
 
         /// <summary>Runs the control login + netmap fetch + WireGuard bring-up and returns once the tunnel is up.</summary>
         public Task ConnectAsync(CancellationToken cancellationToken = default) => ConnectCoreAsync(cancellationToken);

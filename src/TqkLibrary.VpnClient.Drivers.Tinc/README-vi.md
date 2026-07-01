@@ -17,7 +17,7 @@ Driver **tinc 1.1 (SPTPS)** — ráp các khối protocol thuần ở [`Tinc`](.
 | Hướng | Project | Lý do |
 |-------|---------|-------|
 | Dùng | [Abstractions](../TqkLibrary.VpnClient.Abstractions) | `IVpnProtocolDriver`/`IVpnConnection`/`IVpnSession`, `IPacketChannel`, `SwappablePacketChannel`, `IByteStreamTransport`/`IDatagramTransport`, exceptions, `IHostResolver`, **`Diagnostics`** (`VpnDropReason`/`VpnLogExtensions`/`LogProtocolStep` — Q.2) |
-| Dùng | [Drivers.Core](../TqkLibrary.VpnClient.Drivers.Core) | **`ReconnectingVpnConnection<TState>`** (base supervisor F.6) + **`VpnReconnectOptions`** (`TincReconnectOptions` kế thừa) |
+| Dùng | [Drivers.Core](../TqkLibrary.VpnClient.Drivers.Core) | **`ReconnectingVpnConnection`** (base supervisor F.6) + **`VpnReconnectOptions`** (`TincReconnectOptions` kế thừa) + **`VpnConnectionState`** (enum state dùng chung) |
 | Dùng | [Tinc](../TqkLibrary.VpnClient.Tinc) | `SptpsHandshake` (KEX/SIG/derive + `BuildMetaLabel`/`BuildUdpLabel`), `SptpsRecordLayer` (meta TCP), `SptpsDatagramRecordLayer` (data UDP + handshake framing), `TincMetaRequest`/`TincRequestType` (meta line codec), `TincHostConfig`/`TincBase64` (host file + base64 LE phi chuẩn) |
 | Dùng | [Transport.Tcp](../TqkLibrary.VpnClient.Transport.Tcp) | `TcpByteStream` (meta-connection TCP/655, F.1) |
 | Dùng | [Crypto](../TqkLibrary.VpnClient.Crypto) | (gián tiếp qua Tinc) `AntiReplayWindow` trong `SptpsDatagramRecordLayer` |
@@ -28,13 +28,12 @@ Driver **tinc 1.1 (SPTPS)** — ráp các khối protocol thuần ở [`Tinc`](.
 ```
 TqkLibrary.VpnClient.Drivers.Tinc/
 ├─ TincDriver.cs                 IVpnProtocolDriver: caps (L3Ip/Noise/Certificate/OutOfBand/Tcp|Udp) + ConnectAsync → TincConnection
-├─ TincConnection.cs             Điều phối (kế thừa ReconnectingVpnConnection<…> F.6): TCP meta handshake → ACK/ADD_SUBNET/ADD_EDGE → data-plane SPTPS (REQ_KEY/ANS_KEY) → bind TincChannel → meta+UDP read loop; supervisor/reconnect ở base
+├─ TincConnection.cs             Điều phối (kế thừa ReconnectingVpnConnection F.6): TCP meta handshake → ACK/ADD_SUBNET/ADD_EDGE → data-plane SPTPS (REQ_KEY/ANS_KEY) → bind TincChannel → meta+UDP read loop; supervisor/reconnect ở base
 ├─ TincVpnConnection.cs          IVpnConnection: 1 session point-to-point; OpenSessionAsync ném NotSupportedException
 ├─ TincVpnSession.cs             IVpnSession: PacketChannel ổn định + TunnelConfig tĩnh
 ├─ TincReconnectOptions.cs       Kế thừa VpnReconnectOptions (Drivers.Core, F.6)
 ├─ TincDriverConstants.cs        Port 655, PROT 17.7, MTU 1400, node-id 6B, RouterPacketType 0, ProbePacketType 4, MinProbeSize 3
 ├─ Config/TincConfig.cs          Ed25519 seed ta + peer host file + overlay IP/CIDR + MTU → ToTunnelConfig() (route = peer Subnet)
-├─ Enums/TincConnectionState.cs  Disconnected/Connecting/Connected/Reconnecting
 ├─ Meta/TincMetaConnection.cs    ID + SPTPS meta handshake + meta request I/O (type-0 app record) + TCP data fallback SPTPS_PACKET
 ├─ DataChannel/
 │  ├─ TincNodeId.cs              SHA512(node_name)[:6] (codec thuần)

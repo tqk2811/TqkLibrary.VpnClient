@@ -5,7 +5,6 @@ using TqkLibrary.VpnClient.Abstractions.Channels.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Diagnostics.Extensions;
 using TqkLibrary.VpnClient.Abstractions.Drivers;
 using TqkLibrary.VpnClient.Abstractions.Net;
-using TqkLibrary.VpnClient.Drivers.CiscoIpsec.Enums;
 using TqkLibrary.VpnClient.Drivers.CiscoIpsec.Models;
 using TqkLibrary.VpnClient.Drivers.Core;
 using TqkLibrary.VpnClient.Ipsec.Esp;
@@ -21,11 +20,11 @@ namespace TqkLibrary.VpnClient.Drivers.CiscoIpsec
     /// A complete Cisco IPsec / EzVPN remote-access client: IKEv1 <b>Aggressive Mode</b> with a group PSK, then
     /// <b>XAUTH</b> (extended user-name/password authentication) and <b>Mode-Config</b> (which pulls the virtual IP/DNS),
     /// over UDP/500→4500 forced NAT-T, finishing with a Quick Mode that installs an ESP <b>tunnel-mode</b> CHILD SA.
-    /// The decapsulated inner IP packets ride the stable <see cref="ReconnectingVpnConnection{TState}.PacketChannel"/>
+    /// The decapsulated inner IP packets ride the stable <see cref="ReconnectingVpnConnection.PacketChannel"/>
     /// straight to the userspace stack — no PPP, no L2TP. After <see cref="ConnectAsync"/> the tunnel is up.
     /// <para>The link-loss → supervisor → reconnect-loop machinery (backoff/jitter, the stable
     /// <see cref="SwappablePacketChannel"/> facade, the lifetime cancellation, state changes + structured logging, the
-    /// monotonic clock) lives in <see cref="ReconnectingVpnConnection{TState}"/> (roadmap F.6), mirroring the IKEv2 /
+    /// monotonic clock) lives in <see cref="ReconnectingVpnConnection"/> (roadmap F.6), mirroring the IKEv2 /
     /// L2TP-IPsec drivers. This driver keeps only its protocol logic and runs <b>in-place</b> DPD keepalive + Phase 2 ESP
     /// CHILD SA rekey (make-before-break) on its own timers, deliberately <i>outside</i> the supervisor so a rekey
     /// refreshes the SA without re-establishing the tunnel; only a real drop (DPD timeout / a server Delete) calls
@@ -34,7 +33,7 @@ namespace TqkLibrary.VpnClient.Drivers.CiscoIpsec
     /// eavesdropper mount an offline dictionary attack on the group PSK). This driver exists only to interop with legacy
     /// Cisco-compatible gateways (strongSwan/vpnc EzVPN); prefer IKEv2 or L2TP/IPsec Main Mode where available.</para>
     /// </summary>
-    public sealed class CiscoIpsecConnection : ReconnectingVpnConnection<CiscoIpsecConnectionState>, IDisposable, IAsyncDisposable
+    public sealed class CiscoIpsecConnection : ReconnectingVpnConnection, IDisposable, IAsyncDisposable
     {
         static readonly TimeSpan DpdInterval = TimeSpan.FromSeconds(20);
         const int DpdMaxMissed = 3;
@@ -105,15 +104,6 @@ namespace TqkLibrary.VpnClient.Drivers.CiscoIpsec
 
         /// <summary>Raised after a successful auto-reconnect, carrying the new address and whether it changed.</summary>
         public event Action<CiscoIpsecReconnectInfo>? Reconnected;
-
-        /// <inheritdoc/>
-        protected override CiscoIpsecConnectionState DisconnectedState => CiscoIpsecConnectionState.Disconnected;
-        /// <inheritdoc/>
-        protected override CiscoIpsecConnectionState ConnectingState => CiscoIpsecConnectionState.Connecting;
-        /// <inheritdoc/>
-        protected override CiscoIpsecConnectionState ConnectedState => CiscoIpsecConnectionState.Connected;
-        /// <inheritdoc/>
-        protected override CiscoIpsecConnectionState ReconnectingState => CiscoIpsecConnectionState.Reconnecting;
 
         /// <summary>Runs the full handshake and returns once the gateway has assigned a virtual address.</summary>
         public async Task ConnectAsync(CancellationToken cancellationToken = default)

@@ -9,7 +9,6 @@ using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
 using TqkLibrary.VpnClient.Abstractions.Net;
 using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Drivers.Core;
-using TqkLibrary.VpnClient.Drivers.OpenConnect.Enums;
 using TqkLibrary.VpnClient.Drivers.OpenConnect.Models;
 using TqkLibrary.VpnClient.Drivers.OpenConnect.Transport;
 using TqkLibrary.VpnClient.OpenConnect;
@@ -49,7 +48,7 @@ namespace TqkLibrary.VpnClient.Drivers.OpenConnect
     /// dead session.
     /// </para>
     /// </summary>
-    public sealed partial class OpenConnectConnection : ReconnectingVpnConnection<OpenConnectConnectionState>, IDisposable, IAsyncDisposable
+    public sealed partial class OpenConnectConnection : ReconnectingVpnConnection, IDisposable, IAsyncDisposable
     {
         static readonly TimeSpan TimerTick = TimeSpan.FromSeconds(1);
         const string DriverNameConst = "openconnect";
@@ -146,15 +145,6 @@ namespace TqkLibrary.VpnClient.Drivers.OpenConnect
 
         /// <summary>Raised after a successful CSTP rekey (the data plane swapped onto a freshly re-established tunnel).</summary>
         public event Action? Rekeyed;
-
-        /// <inheritdoc/>
-        protected override OpenConnectConnectionState DisconnectedState => OpenConnectConnectionState.Disconnected;
-        /// <inheritdoc/>
-        protected override OpenConnectConnectionState ConnectingState => OpenConnectConnectionState.Connecting;
-        /// <inheritdoc/>
-        protected override OpenConnectConnectionState ConnectedState => OpenConnectConnectionState.Connected;
-        /// <inheritdoc/>
-        protected override OpenConnectConnectionState ReconnectingState => OpenConnectConnectionState.Reconnecting;
 
         /// <summary>Runs auth + CONNECT and returns once the CSTP tunnel is carrying traffic.</summary>
         public async Task ConnectAsync(CancellationToken cancellationToken = default)

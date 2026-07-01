@@ -11,7 +11,6 @@ using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Drivers.Core;
 using TqkLibrary.VpnClient.Drivers.Vxlan.Config;
 using TqkLibrary.VpnClient.Drivers.Vxlan.DataChannel;
-using TqkLibrary.VpnClient.Drivers.Vxlan.Enums;
 using TqkLibrary.VpnClient.Drivers.Vxlan.Transport;
 using TqkLibrary.VpnClient.Ethernet;
 
@@ -22,11 +21,11 @@ namespace TqkLibrary.VpnClient.Drivers.Vxlan
     /// then carries full Ethernet frames behind an 8-byte VXLAN header (UDP/4789) as a <see cref="VxlanEthernetChannel"/>.
     /// That channel plugs into the userspace Ethernet fabric (<see cref="ArpResolver"/> on the static overlay IP + a
     /// <see cref="VirtualHost"/> bridge), which exposes the stable L3
-    /// <see cref="ReconnectingVpnConnection{TState}.PacketChannel"/> the IP stack binds — mirroring the n2n driver.
+    /// <see cref="ReconnectingVpnConnection.PacketChannel"/> the IP stack binds — mirroring the n2n driver.
     /// Unlike n2n there is <b>no control plane</b>: no registration, no keepalive, no transform, no header encryption.
     /// The 8-byte header is the whole protocol; the shared supervisor (roadmap F.6) re-opens the transport on a drop.
     /// </summary>
-    public sealed class VxlanConnection : ReconnectingVpnConnection<VxlanConnectionState>, IDisposable, IAsyncDisposable
+    public sealed class VxlanConnection : ReconnectingVpnConnection, IDisposable, IAsyncDisposable
     {
         readonly string _host;
         readonly VxlanConfig _config;
@@ -78,15 +77,6 @@ namespace TqkLibrary.VpnClient.Drivers.Vxlan
 
         /// <summary>This endpoint's virtual MAC on the VXLAN L2 segment.</summary>
         public MacAddress LinkAddress => _mac;
-
-        /// <inheritdoc/>
-        protected override VxlanConnectionState DisconnectedState => VxlanConnectionState.Disconnected;
-        /// <inheritdoc/>
-        protected override VxlanConnectionState ConnectingState => VxlanConnectionState.Connecting;
-        /// <inheritdoc/>
-        protected override VxlanConnectionState ConnectedState => VxlanConnectionState.Connected;
-        /// <inheritdoc/>
-        protected override VxlanConnectionState ReconnectingState => VxlanConnectionState.Reconnecting;
 
         /// <summary>Opens the UDP transport and returns once the L2 tunnel is carrying traffic (VXLAN has no handshake).</summary>
         public Task ConnectAsync(CancellationToken cancellationToken = default) => ConnectCoreAsync(cancellationToken);

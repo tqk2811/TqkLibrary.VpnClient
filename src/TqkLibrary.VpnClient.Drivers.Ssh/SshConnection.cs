@@ -8,7 +8,6 @@ using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Drivers.Core;
 using TqkLibrary.VpnClient.Drivers.Ssh.Config;
 using TqkLibrary.VpnClient.Drivers.Ssh.DataChannel;
-using TqkLibrary.VpnClient.Drivers.Ssh.Enums;
 using TqkLibrary.VpnClient.Drivers.Ssh.Transport;
 using TqkLibrary.VpnClient.Ssh;
 
@@ -25,7 +24,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ssh
     /// (roadmap F.6) re-establishes a dead tunnel, mirroring the vtun / tinc drivers.
     /// <para>The client needs no elevation; the server needs <c>PermitTunnel</c> + a tun device (admin, server-side).</para>
     /// </summary>
-    public sealed class SshConnection : ReconnectingVpnConnection<SshConnectionState>, IDisposable, IAsyncDisposable
+    public sealed class SshConnection : ReconnectingVpnConnection, IDisposable, IAsyncDisposable
     {
         readonly string _host;
         readonly int _port;
@@ -68,15 +67,6 @@ namespace TqkLibrary.VpnClient.Drivers.Ssh
 
         /// <summary>The local tunnel (overlay) address, if configured.</summary>
         public IPAddress? AssignedAddress => _config.TunnelAddress;
-
-        /// <inheritdoc/>
-        protected override SshConnectionState DisconnectedState => SshConnectionState.Disconnected;
-        /// <inheritdoc/>
-        protected override SshConnectionState ConnectingState => SshConnectionState.Connecting;
-        /// <inheritdoc/>
-        protected override SshConnectionState ConnectedState => SshConnectionState.Connected;
-        /// <inheritdoc/>
-        protected override SshConnectionState ReconnectingState => SshConnectionState.Reconnecting;
 
         /// <summary>Runs the handshake and returns once the tunnel is carrying traffic.</summary>
         public Task ConnectAsync(CancellationToken cancellationToken = default) => ConnectCoreAsync(cancellationToken);

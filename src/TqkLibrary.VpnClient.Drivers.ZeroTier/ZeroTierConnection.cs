@@ -10,7 +10,6 @@ using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Drivers.Core;
 using TqkLibrary.VpnClient.Drivers.ZeroTier.Config;
 using TqkLibrary.VpnClient.Drivers.ZeroTier.DataChannel;
-using TqkLibrary.VpnClient.Drivers.ZeroTier.Enums;
 using TqkLibrary.VpnClient.Drivers.ZeroTier.Transport;
 using TqkLibrary.VpnClient.Ethernet;
 using TqkLibrary.VpnClient.ZeroTier.Identity.Models;
@@ -30,12 +29,12 @@ namespace TqkLibrary.VpnClient.Drivers.ZeroTier
     /// <see cref="ZeroTierEthernetChannel"/>. That channel plugs into the userspace Ethernet fabric (a
     /// <see cref="ZeroTierNeighborResolver"/> deriving peer MACs the ZeroTier way + a <see cref="VirtualHost"/> bridge),
     /// which exposes the stable L3
-    /// <see cref="ReconnectingVpnConnection{TState}.PacketChannel"/> the IP stack binds — mirroring the n2n / SoftEther
+    /// <see cref="ReconnectingVpnConnection.PacketChannel"/> the IP stack binds — mirroring the n2n / SoftEther
     /// drivers. An <c>ECHO</c> keepalive holds the VL1 path open and the shared supervisor / auto-reconnect (roadmap F.6)
     /// re-establishes a dead tunnel. Not a server / controller — those roles live only in tests. Planet/moon root
     /// discovery is out of scope: the client peers directly with the node/controller in its config.
     /// </summary>
-    public sealed class ZeroTierConnection : ReconnectingVpnConnection<ZeroTierConnectionState>, IDisposable, IAsyncDisposable
+    public sealed class ZeroTierConnection : ReconnectingVpnConnection, IDisposable, IAsyncDisposable
     {
         readonly string _host;
         readonly int _port;
@@ -108,15 +107,6 @@ namespace TqkLibrary.VpnClient.Drivers.ZeroTier
 
         /// <summary>The effective overlay (tunnel) IPv4 address (pinned or controller-assigned); valid after connect.</summary>
         public IPAddress AssignedAddress => _tunnelConfig?.AssignedAddress ?? throw new InvalidOperationException("not connected");
-
-        /// <inheritdoc/>
-        protected override ZeroTierConnectionState DisconnectedState => ZeroTierConnectionState.Disconnected;
-        /// <inheritdoc/>
-        protected override ZeroTierConnectionState ConnectingState => ZeroTierConnectionState.Connecting;
-        /// <inheritdoc/>
-        protected override ZeroTierConnectionState ConnectedState => ZeroTierConnectionState.Connected;
-        /// <inheritdoc/>
-        protected override ZeroTierConnectionState ReconnectingState => ZeroTierConnectionState.Reconnecting;
 
         /// <summary>Runs the VL1 handshake + VL2 join and returns once the L2 tunnel is carrying traffic.</summary>
         public Task ConnectAsync(CancellationToken cancellationToken = default) => ConnectCoreAsync(cancellationToken);

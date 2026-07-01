@@ -3,7 +3,7 @@ using System.Text;
 using System.Threading.Channels;
 using TqkLibrary.VpnClient.Abstractions.Drivers;
 using TqkLibrary.VpnClient.Drivers.Nebula.Config;
-using TqkLibrary.VpnClient.Drivers.Nebula.Enums;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.Nebula.Certificate.Models;
 using Xunit;
 
@@ -51,7 +51,7 @@ namespace TqkLibrary.VpnClient.Drivers.Nebula.Tests
 
             await connection.ConnectAsync(cts.Token);
 
-            Assert.Equal(NebulaConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
             Assert.Equal(IPAddress.Parse("192.168.100.5"), connection.AssignedAddress); // overlay from the cert
             Assert.Equal(NebulaDriverConstants.DefaultMtu, connection.Config.Mtu);
             Assert.Equal(0, connection.PacketChannel.MaxHeaderLength); // Nebula carries bare IP
@@ -92,7 +92,7 @@ namespace TqkLibrary.VpnClient.Drivers.Nebula.Tests
             var connection = new NebulaConnection("127.0.0.1", 4242, config,
                 new InProcessNebulaTransportFactory(link.Client));
             await connection.ConnectAsync(cts.Token);
-            Assert.Equal(NebulaConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
             await connection.DisposeAsync();
         }
 
@@ -151,7 +151,7 @@ namespace TqkLibrary.VpnClient.Drivers.Nebula.Tests
             await connection.PacketChannel.WriteIpPacketAsync(packet, cts.Token);
             byte[] echoed = await inbound.Reader.ReadAsync(cts.Token);
             Assert.Equal(packet, echoed);
-            Assert.Equal(NebulaConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
 
             await connection.DisposeAsync();
         }

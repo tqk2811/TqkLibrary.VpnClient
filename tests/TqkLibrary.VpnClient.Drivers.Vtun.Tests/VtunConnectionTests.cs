@@ -2,7 +2,7 @@ using System.Net;
 using TqkLibrary.VpnClient.Abstractions.Drivers;
 using TqkLibrary.VpnClient.Drivers.Core.Models;
 using TqkLibrary.VpnClient.Drivers.Vtun.Config;
-using TqkLibrary.VpnClient.Drivers.Vtun.Enums;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.Vtun.Wire.Enums;
 using Xunit;
 
@@ -48,7 +48,7 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun.Tests
                 using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                 await client.ConnectAsync(connectCts.Token);
 
-                Assert.Equal(VtunConnectionState.Connected, client.State);
+                Assert.Equal(VpnConnectionState.Connected, client.State);
                 Assert.True(server.Authenticated);
                 Assert.Equal(VtunHostFlags.Tcp | VtunHostFlags.Tun, client.ServerFlags);
                 Assert.Equal(IPAddress.Parse("10.11.0.2"), client.AssignedAddress);
@@ -92,7 +92,7 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun.Tests
             {
                 using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                 await client.ConnectAsync(connectCts.Token);
-                Assert.Equal(VtunConnectionState.Connected, client.State);
+                Assert.Equal(VpnConnectionState.Connected, client.State);
                 Assert.True((client.ServerFlags & VtunHostFlags.Encrypt) != 0);
 
                 var received = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -162,7 +162,7 @@ namespace TqkLibrary.VpnClient.Drivers.Vtun.Tests
             {
                 using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                 await client.ConnectAsync(connectCts.Token);
-                Assert.Equal(VtunConnectionState.Connected, client.State);
+                Assert.Equal(VpnConnectionState.Connected, client.State);
                 Assert.Equal(VtunHostFlags.Tcp | VtunHostFlags.Ether, client.ServerFlags);
                 // The facade presents an L3 (bare-IP) channel regardless of the L2 carrier.
                 Assert.Equal(Abstractions.Channels.Enums.LinkMedium.Ip, client.PacketChannel.Medium);

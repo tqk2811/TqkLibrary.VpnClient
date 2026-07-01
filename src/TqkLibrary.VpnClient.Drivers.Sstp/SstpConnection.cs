@@ -27,10 +27,10 @@ namespace TqkLibrary.VpnClient.Drivers.Sstp
     /// After <see cref="ConnectAsync"/> the tunnel carries IP traffic via the stable <see cref="PacketChannel"/>.
     /// Keepalive (active SSTP Echo + missed-response detection) and clean teardown (Call-Disconnect) are SSTP-specific;
     /// link-loss detection, auto-reconnect (backoff/jitter), the state machine and the stable facade are factored into
-    /// the shared supervisor (<see cref="ReconnectingVpnConnection{TState}"/>, roadmap F.6), mirroring the
+    /// the shared supervisor (<see cref="ReconnectingVpnConnection"/>, roadmap F.6), mirroring the
     /// OpenConnect / OpenVPN / WireGuard / SoftEther drivers: a dropped tunnel is re-established behind that same channel.
     /// </summary>
-    public sealed class SstpConnection : ReconnectingVpnConnection<SstpConnectionState>, IDisposable, IAsyncDisposable
+    public sealed class SstpConnection : ReconnectingVpnConnection, IDisposable, IAsyncDisposable
     {
         static readonly TimeSpan EchoInterval = TimeSpan.FromSeconds(30);
         const int EchoMaxMissed = 3;
@@ -104,15 +104,6 @@ namespace TqkLibrary.VpnClient.Drivers.Sstp
 
         /// <summary>Raised after a successful auto-reconnect, carrying the new address and whether it changed.</summary>
         public event Action<SstpReconnectInfo>? Reconnected;
-
-        /// <inheritdoc/>
-        protected override SstpConnectionState DisconnectedState => SstpConnectionState.Disconnected;
-        /// <inheritdoc/>
-        protected override SstpConnectionState ConnectingState => SstpConnectionState.Connecting;
-        /// <inheritdoc/>
-        protected override SstpConnectionState ConnectedState => SstpConnectionState.Connected;
-        /// <inheritdoc/>
-        protected override SstpConnectionState ReconnectingState => SstpConnectionState.Reconnecting;
 
         /// <summary>Connects and authenticates, returning once IPCP has assigned an address.</summary>
         public async Task ConnectAsync(string userName, string password, CancellationToken cancellationToken = default)

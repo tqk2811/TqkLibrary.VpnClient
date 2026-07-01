@@ -16,7 +16,7 @@ Driver **Nebula** (Slack mesh VPN) — ráp các khối protocol thuần ở [`N
 | Hướng | Project | Lý do |
 |-------|---------|-------|
 | Dùng | [Abstractions](../TqkLibrary.VpnClient.Abstractions) | `IVpnProtocolDriver`/`IVpnConnection`/`IVpnSession`, `IPacketChannel`, `SwappablePacketChannel`, `IDatagramTransport`, exceptions, `IHostResolver`, **`Diagnostics`** (`VpnDropReason`/`VpnLogExtensions` — log handshake/rekey/drop, Q.2) |
-| Dùng | [Drivers.Core](../TqkLibrary.VpnClient.Drivers.Core) | **`ReconnectingVpnConnection<TState>`** (base supervisor F.6: facade/lifetime/`OnLinkLost`/`ReconnectLoopAsync`/backoff-jitter/`SetState`/clock) + **`VpnReconnectOptions`** (`NebulaReconnectOptions` kế thừa) |
+| Dùng | [Drivers.Core](../TqkLibrary.VpnClient.Drivers.Core) | **`ReconnectingVpnConnection`** (base supervisor F.6: facade/lifetime/`OnLinkLost`/`ReconnectLoopAsync`/backoff-jitter/`SetState`/clock) + **`VpnConnectionState`** (state chung) + **`VpnReconnectOptions`** (`NebulaReconnectOptions` kế thừa) |
 | Dùng | [Nebula](../TqkLibrary.VpnClient.Nebula) | `NebulaNoiseIxHandshake` (handshake IX), `NebulaCertificateCodec`/`NebulaCertificateValidator` (cert protobuf + Ed25519 verify), `NebulaHandshakePayloadCodec` (payload `NebulaHandshake`), `NebulaHeaderCodec`/`NebulaHeader` (header 16B = AAD) |
 | Dùng | [Crypto](../TqkLibrary.VpnClient.Crypto) | `AntiReplayWindow` (tái dùng trong `NebulaReplayProtector` 64-bit), `AesGcmCipher` (data-plane AEAD mặc định) |
 | Được dùng bởi | [TqkLibrary.VpnClient](../TqkLibrary.VpnClient) (façade) | `VpnClientBuilder.UseNebula(config)` đăng ký driver |
@@ -26,7 +26,7 @@ Driver **Nebula** (Slack mesh VPN) — ráp các khối protocol thuần ở [`N
 ```
 TqkLibrary.VpnClient.Drivers.Nebula/
 ├─ NebulaDriver.cs                    IVpnProtocolDriver: capabilities (L3Ip/Noise/Certificate/OutOfBand/Udp) + ConnectAsync(config+endpoint) → NebulaConnection
-├─ NebulaConnection.cs                Điều phối (kế thừa ReconnectingVpnConnection<…> F.6): UDP transport → handshake IX initiator + verify cert → bind NebulaChannel → timer loop (re-handshake make-before-break) + demux; supervisor/reconnect ở base
+├─ NebulaConnection.cs                Điều phối (kế thừa ReconnectingVpnConnection F.6): UDP transport → handshake IX initiator + verify cert → bind NebulaChannel → timer loop (re-handshake make-before-break) + demux; supervisor/reconnect ở base
 ├─ NebulaVpnConnection.cs             IVpnConnection: 1 session point-to-point; OpenSessionAsync ném NotSupportedException
 ├─ NebulaVpnSession.cs               IVpnSession: PacketChannel ổn định + TunnelConfig tĩnh (không đổi khi re-handshake/reconnect)
 ├─ NebulaReconnectOptions.cs         Kế thừa VpnReconnectOptions (Drivers.Core, F.6) — giữ type tên riêng cho public API
@@ -36,11 +36,10 @@ TqkLibrary.VpnClient.Drivers.Nebula/
 │  ├─ NebulaTransport.cs             Type-1 Message seal/open: header=AAD, nonce 0^4‖counter(8 BE), AES-256-GCM, counter u64 từ 1
 │  ├─ NebulaChannel.cs               IPacketChannel: WriteIpPacketAsync seal → send; Deliver mở type-1 → InboundIpPacket
 │  └─ NebulaReplayProtector.cs       Anti-replay 64-bit (tái dùng Crypto AntiReplayWindow per high-32 epoch — như WireGuardReplayProtector)
-├─ Transport/
-│  ├─ INebulaTransportFactory.cs     Seam dựng UDP transport tới endpoint (production socket / test loopback)
-│  ├─ NebulaTransportHandle.cs       IDatagramTransport + SetReceiver + receive-pump trả về từ factory
-│  └─ NebulaSocketTransportFactory.cs Socket thật: UDP (UdpClient) + receive loop dispatch — live-only, cross-TFM
-└─ Enums/NebulaConnectionState.cs    Disconnected/Connecting/Connected/Reconnecting
+└─ Transport/
+   ├─ INebulaTransportFactory.cs     Seam dựng UDP transport tới endpoint (production socket / test loopback)
+   ├─ NebulaTransportHandle.cs       IDatagramTransport + SetReceiver + receive-pump trả về từ factory
+   └─ NebulaSocketTransportFactory.cs Socket thật: UDP (UdpClient) + receive loop dispatch — live-only, cross-TFM
 ```
 
 ## Bảng type
@@ -48,14 +47,14 @@ TqkLibrary.VpnClient.Drivers.Nebula/
 | Type | Vai trò | Vị trí |
 |------|---------|--------|
 | `NebulaDriver` | `IVpnProtocolDriver`: capabilities (`L3Ip`, **không PPP**, `Noise`, **Certificate** (Ed25519 host cert), `Udp`, `OutOfBand`); `ConnectAsync` dựng `NebulaConnection` từ `NebulaConfig` + endpoint | [NebulaDriver.cs:17](NebulaDriver.cs#L17) |
-| `NebulaConnection` | Bộ điều phối — kế thừa [`ReconnectingVpnConnection<NebulaConnectionState>`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L24) (supervisor F.6): override `EstablishAsync` (resolve peer endpoint → mở transport UDP qua `INebulaTransportFactory.ConnectAsync` → handshake **IX initiator** (`StartHandshake`: payload `NebulaHandshake{Details{Cert(strip pubkey),InitiatorIndex,Time}}` → `CreateInitiation` → header `Type=Handshake` → gửi), đợi stage-2 → `OnHandshakeResponse` (`ConsumeResponse` → verify cert responder → `Split` → `BindSession`) → `Facade.SetInner(channel)` → `MarkConnected`) + `CleanupAttemptResourcesAsync`/`StopAttemptLoop`; timer loop (`_timerRunning`) resend stage-1 chưa trả lời + **re-handshake make-before-break** (`_pending` session mới chạy nền, swap channel khi response về) + **demux** gói vào (`OnInboundDatagram` theo `NebulaMessageType`); fault → `OnLinkLost` của base arm reconnect | [NebulaConnection.cs:39](NebulaConnection.cs#L39) |
+| `NebulaConnection` | Bộ điều phối — kế thừa [`ReconnectingVpnConnection`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L24) (supervisor F.6): override `EstablishAsync` (resolve peer endpoint → mở transport UDP qua `INebulaTransportFactory.ConnectAsync` → handshake **IX initiator** (`StartHandshake`: payload `NebulaHandshake{Details{Cert(strip pubkey),InitiatorIndex,Time}}` → `CreateInitiation` → header `Type=Handshake` → gửi), đợi stage-2 → `OnHandshakeResponse` (`ConsumeResponse` → verify cert responder → `Split` → `BindSession`) → `Facade.SetInner(channel)` → `MarkConnected`) + `CleanupAttemptResourcesAsync`/`StopAttemptLoop`; timer loop (`_timerRunning`) resend stage-1 chưa trả lời + **re-handshake make-before-break** (`_pending` session mới chạy nền, swap channel khi response về) + **demux** gói vào (`OnInboundDatagram` theo `NebulaMessageType`); fault → `OnLinkLost` của base arm reconnect | [NebulaConnection.cs:39](NebulaConnection.cs#L39) |
 | `NebulaConfig` | Config tĩnh: `CaCertificate`/`ClientCertificate`/`ClientX25519PrivateKey`/`PeerEndpoint`/`OverlayAddress`+`PrefixLength`/`DnsServers`/`Routes`/`Mtu`; `ResolveOverlayAddress` (đè hoặc lấy IP từ cert `Ips[0]`) + `ToTunnelConfig` | [Config/NebulaConfig.cs:20](Config/NebulaConfig.cs#L20) |
 | `NebulaTransport` | Data plane type-1 Message: `Seal` (header `Type=Message,RemoteIndex=responderIndex,MessageCounter=counter` = AAD; nonce `0^4‖counter(8 BE)`; AES-256-GCM) / `TryOpen` (drop tag sai / index sai / replay); counter u64 từ 1 + `NebulaReplayProtector` | [DataChannel/NebulaTransport.cs:26](DataChannel/NebulaTransport.cs#L26) |
 | `NebulaChannel` | `IPacketChannel` (`Medium=Ip`, `MaxHeaderLength=0` — bare IP): `WriteIpPacketAsync` seal → send sink; `Deliver` mở type-1 → `InboundIpPacket`; callback sealed/received cho timer | [DataChannel/NebulaChannel.cs:22](DataChannel/NebulaChannel.cs#L22) |
 | `NebulaReplayProtector` | Anti-replay 64-bit: tái dùng [`AntiReplayWindow`](../TqkLibrary.VpnClient.Crypto/AntiReplayWindow.cs#L8) cho low-32 trong mỗi high-32 epoch (mirror `WireGuardReplayProtector`) | [DataChannel/NebulaReplayProtector.cs:17](DataChannel/NebulaReplayProtector.cs#L17) |
 | `NebulaVpnConnection` / `NebulaVpnSession` | `IVpnConnection` 1 session (point-to-point) + `IVpnSession` (`PacketChannel` facade + `Config` tĩnh) | [NebulaVpnConnection.cs:6](NebulaVpnConnection.cs#L6) / [NebulaVpnSession.cs:12](NebulaVpnSession.cs#L12) |
 | `INebulaTransportFactory` / `NebulaTransportHandle` / `NebulaSocketTransportFactory` | Seam dựng UDP transport (1 datagram = 1 gói Nebula, **không framing**) + socket thật `UdpClient` + receive loop — live-only, cross-TFM | [Transport/INebulaTransportFactory.cs:11](Transport/INebulaTransportFactory.cs#L11) |
-| `NebulaConnectionState` / `NebulaReconnectOptions` | `Disconnected/Connecting/Connected/Reconnecting` + kế thừa `VpnReconnectOptions` (F.6) | [Enums/NebulaConnectionState.cs:4](Enums/NebulaConnectionState.cs#L4) / [NebulaReconnectOptions.cs:10](NebulaReconnectOptions.cs#L10) |
+| `VpnConnectionState` / `NebulaReconnectOptions` | `Disconnected/Connecting/Connected/Reconnecting` (dùng chung ở [`Drivers.Core`](../TqkLibrary.VpnClient.Drivers.Core/Enums/VpnConnectionState.cs) — state kế thừa từ base) + kế thừa `VpnReconnectOptions` (F.6) | [../TqkLibrary.VpnClient.Drivers.Core/Enums/VpnConnectionState.cs](../TqkLibrary.VpnClient.Drivers.Core/Enums/VpnConnectionState.cs) / [NebulaReconnectOptions.cs:10](NebulaReconnectOptions.cs#L10) |
 
 ## Luồng kết nối (as-built)
 

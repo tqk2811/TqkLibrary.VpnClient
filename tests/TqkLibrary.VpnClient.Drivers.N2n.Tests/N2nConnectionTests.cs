@@ -2,7 +2,7 @@ using System.Net;
 using System.Threading.Channels;
 using TqkLibrary.VpnClient.Abstractions.Drivers;
 using TqkLibrary.VpnClient.Drivers.N2n.Config;
-using TqkLibrary.VpnClient.Drivers.N2n.Enums;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.N2n.Transform;
 using Xunit;
 
@@ -64,7 +64,7 @@ namespace TqkLibrary.VpnClient.Drivers.N2n.Tests
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await connection.ConnectAsync(cts.Token);
 
-            Assert.Equal(N2nConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
             Assert.True(supernode.RegisterSuperCount >= 1, "the supernode must have received a REGISTER_SUPER");
             Assert.Equal(OverlayAddress, connection.AssignedAddress);
             Assert.Equal(OverlayAddress, connection.Config.AssignedAddress);
@@ -128,7 +128,7 @@ namespace TqkLibrary.VpnClient.Drivers.N2n.Tests
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await connection.ConnectAsync(cts.Token);
 
-            Assert.Equal(N2nConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
             Assert.True(supernode.RegisterSuperCount >= 1, "the -H REGISTER_SUPER must decrypt + register on the supernode");
         }
 
@@ -168,7 +168,7 @@ namespace TqkLibrary.VpnClient.Drivers.N2n.Tests
             // The initial connect threw before any success, so reconnect never arms — the state stays at Connecting
             // (matching the base ReconnectingVpnConnection contract: it only goes Disconnected via teardown or a final
             // reconnect failure).
-            Assert.Equal(N2nConnectionState.Connecting, connection.State);
+            Assert.Equal(VpnConnectionState.Connecting, connection.State);
         }
     }
 }

@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Enums;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
-using TqkLibrary.VpnClient.Drivers.WireGuard.Enums;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.WireGuard;
 using TqkLibrary.VpnClient.WireGuard.Config;
 using TqkLibrary.VpnClient.WireGuard.Handshake.Models;
@@ -58,7 +58,7 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard.Tests
             await connection.ConnectAsync(cts.Token);
 
             // Static config (out-of-band address) — not negotiated.
-            Assert.Equal(WireGuardConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
             Assert.Equal(IPAddress.Parse("10.7.0.2"), connection.AssignedAddress);
             Assert.Equal(WireGuardConstants.DefaultMtu, connection.Config.Mtu);
             Assert.Equal(0, connection.PacketChannel.MaxHeaderLength); // WireGuard carries bare IP
@@ -144,7 +144,7 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard.Tests
             connection.PacketChannel.InboundIpPacket += m => inbound.Writer.TryWrite(m.ToArray());
 
             await connection.ConnectAsync(cts.Token);
-            Assert.Equal(WireGuardConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
 
             byte[] packet = Encoding.ASCII.GetBytes("after the cookie-reply round-trip");
             await connection.PacketChannel.WriteIpPacketAsync(packet, cts.Token);

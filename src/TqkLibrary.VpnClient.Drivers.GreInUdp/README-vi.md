@@ -12,7 +12,7 @@ Project này là **một driver của tầng DRIVER** — điểm điều phối
 
 Điểm cốt lõi: **tái dùng nguyên** codec + kênh GRE ở project [IpEncap](../TqkLibrary.VpnClient.IpEncap). `GreTunnelChannel` nhận một [`IDatagramTransport`](../TqkLibrary.VpnClient.Abstractions/Transport/Interfaces/IDatagramTransport.cs#L10) trừu tượng và **tự lái receive-loop**; project này chỉ cung cấp một `IDatagramTransport` chạy trên **UDP** thay vì raw-IP. Vì cùng header GRE, gói lên dây khác IpEncap **duy nhất** ở lớp mang ngoài (UDP/4754 vs proto-47).
 
-> So với [Drivers.IpEncap](../TqkLibrary.VpnClient.Drivers.IpEncap): cùng "WireGuard **bỏ** handshake" — toàn bộ máy supervisor/reconnect/facade dùng chung [`ReconnectingVpnConnection<TState>`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L24) (F.6); driver chỉ mở transport + start kênh. Khác biệt: transport là UDP (không elevate) thay vì raw-IP proto-47.
+> So với [Drivers.IpEncap](../TqkLibrary.VpnClient.Drivers.IpEncap): cùng "WireGuard **bỏ** handshake" — toàn bộ máy supervisor/reconnect/facade dùng chung [`ReconnectingVpnConnection`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L24) (F.6); driver chỉ mở transport + start kênh. Khác biệt: transport là UDP (không elevate) thay vì raw-IP proto-47.
 
 ## Vị trí trong kiến trúc
 
@@ -20,7 +20,7 @@ Project này là **một driver của tầng DRIVER** — điểm điều phối
 - **Target frameworks:** `netstandard2.0; net8.0` (kế thừa từ [src/Directory.Build.props](../Directory.Build.props)).
 - **Phụ thuộc (ProjectReference):**
   - [TqkLibrary.VpnClient.Abstractions](../TqkLibrary.VpnClient.Abstractions) — interface/model/enum (`IVpnProtocolDriver`, `IVpnConnection`, `IVpnSession`, `IPacketChannel`, `SwappablePacketChannel`, `TunnelConfig`, [`IDatagramTransport`](../TqkLibrary.VpnClient.Abstractions/Transport/Interfaces/IDatagramTransport.cs#L10), `IHostResolver`/`DnsHostResolver`, `AddressFamilyPreference`...) + **`Diagnostics`** (`VpnLogExtensions` — log handshake/state/reconnect).
-  - [TqkLibrary.VpnClient.Drivers.Core](../TqkLibrary.VpnClient.Drivers.Core) — base supervisor [`ReconnectingVpnConnection<TState>`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L24) + model reconnect chung [`VpnReconnectOptions`](../TqkLibrary.VpnClient.Drivers.Core/Models/VpnReconnectOptions.cs#L14).
+  - [TqkLibrary.VpnClient.Drivers.Core](../TqkLibrary.VpnClient.Drivers.Core) — base supervisor [`ReconnectingVpnConnection`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L24) + model reconnect chung [`VpnReconnectOptions`](../TqkLibrary.VpnClient.Drivers.Core/Models/VpnReconnectOptions.cs#L14).
   - [TqkLibrary.VpnClient.IpEncap](../TqkLibrary.VpnClient.IpEncap) — kênh data-plane [`GreTunnelChannel`](../TqkLibrary.VpnClient.IpEncap/Gre/GreTunnelChannel.cs#L21) + [`GreTunnelOptions`](../TqkLibrary.VpnClient.IpEncap/Gre/GreTunnelOptions.cs#L9) + codec `GreCodec`/`GrePacket` (dùng lại nguyên, không sửa).
   - **Transport UDP** là concrete nội bộ [`UdpDatagramTransport`](UdpDatagramTransport.cs#L17) (socket UDP thường qua BCL) — không PackageReference đặc thù, chỉ BCL.
 - **Được dùng bởi:** [TqkLibrary.VpnClient](../TqkLibrary.VpnClient) (entry point — [`VpnClientBuilder.UseGreInUdp(...)`](../TqkLibrary.VpnClient/VpnClientBuilder.cs) đăng ký driver này).
@@ -37,9 +37,7 @@ TqkLibrary.VpnClient.Drivers.GreInUdp/
 ├── GreInUdpReconnectOptions.cs     Named subclass của VpnReconnectOptions (không thêm knob)
 ├── IGreUdpTransportFactory.cs      Seam tạo IDatagramTransport UDP (injectable cho test)
 ├── UdpGreTransportFactory.cs       Factory production: tạo UdpDatagramTransport
-├── UdpDatagramTransport.cs         IDatagramTransport UDP THỤ ĐỘNG (không tự chạy receive-pump; kênh tự lái)
-└── Enums/
-    └── GreInUdpConnectionState.cs  Disconnected / Connecting / Connected / Reconnecting
+└── UdpDatagramTransport.cs         IDatagramTransport UDP THỤ ĐỘNG (không tự chạy receive-pump; kênh tự lái)
 ```
 
 ## Bảng type
@@ -47,7 +45,7 @@ TqkLibrary.VpnClient.Drivers.GreInUdp/
 | Type | Vai trò |
 |------|---------|
 | [`GreInUdpDriver`](GreInUdpDriver.cs) | `IVpnProtocolDriver`. `Name="gre-udp"`, `Capabilities` (L3Ip / **Udp** / SecurityKinds=None / AuthMethods=None / `AddressAssignment=OutOfBand` / **`RequiresElevation=false`** / **`RequiresRawIpSocket=false`**), `ConnectAsync` dựng `GreInUdpConnection` → `GreInUdpVpnConnection`. Ctor nhận `GreInUdpOptions?`/`GreInUdpReconnectOptions?` + `IGreUdpTransportFactory?` (null ⇒ `UdpGreTransportFactory` production) + `ILoggerFactory?`. |
-| [`GreInUdpConnection`](GreInUdpConnection.cs) | Kế thừa [`ReconnectingVpnConnection<GreInUdpConnectionState>`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L24). Override `EstablishAsync`/`CleanupAttemptResourcesAsync`/`StopAttemptLoop` (no-op: encap không keepalive) + 4 ánh xạ state. Phơi `Port`/`Mtu`. `IDisposable`/`IAsyncDisposable`. |
+| [`GreInUdpConnection`](GreInUdpConnection.cs) | Kế thừa [`ReconnectingVpnConnection`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L24). Override `EstablishAsync`/`CleanupAttemptResourcesAsync`/`StopAttemptLoop` (no-op: encap không keepalive). Phơi `Port`/`Mtu`. `IDisposable`/`IAsyncDisposable`. |
 | [`GreInUdpVpnConnection`](GreInUdpVpnConnection.cs) | Adapter `IVpnConnection` (1 session). `OpenSessionAsync` ⇒ `NotSupportedException` (1 encap / 1 remote). |
 | [`GreInUdpVpnSession`](GreInUdpVpnSession.cs) | `IVpnSession`: `Config` (TunnelConfig) + `PacketChannel` (facade ổn định). |
 | [`GreInUdpOptions`](GreInUdpOptions.cs) | Cấu hình tĩnh: `Port` (mặc định **4754** — IANA GRE-in-UDP) + `Mtu` (1400) + `Gre` (`GreTunnelOptions?` cho RFC 2890 Key/Sequence/Checksum). MTU kênh luôn lấy theo `Mtu` bất kể giá trị trên `Gre`. |
@@ -55,7 +53,7 @@ TqkLibrary.VpnClient.Drivers.GreInUdp/
 | [`IGreUdpTransportFactory`](IGreUdpTransportFactory.cs) | Seam `IDatagramTransport Create(IPEndPoint remote)` — trả transport UDP **chưa-connect** (connection gọi `ConnectAsync` sau, giống cách IpEncap dùng `IRawIpTransportFactory.Create`). Injectable cho test. |
 | [`UdpGreTransportFactory`](UdpGreTransportFactory.cs) | `IGreUdpTransportFactory` production: tạo `UdpDatagramTransport`. Ctor tuỳ chọn `localBind` (pin local source address). |
 | [`UdpDatagramTransport`](UdpDatagramTransport.cs) | `internal sealed` `IDatagramTransport` UDP **thụ động** (bind ephemeral + connect tới remote; `ReceiveAsync` await đúng 1 datagram; **không** tự chạy receive-pump — `GreTunnelChannel` tự lái). Hỗ trợ IPv4/IPv6 theo `AddressFamily` của remote. netstandard2.0 fallback `ArraySegment` (không có overload `Memory<T>`). |
-| [`GreInUdpConnectionState`](Enums/GreInUdpConnectionState.cs) | enum Disconnected/Connecting/Connected/Reconnecting. |
+| [`VpnConnectionState`](../TqkLibrary.VpnClient.Drivers.Core/Enums/VpnConnectionState.cs) | enum Disconnected/Connecting/Connected/Reconnecting (dùng chung ở [`Drivers.Core`](../TqkLibrary.VpnClient.Drivers.Core/Enums/VpnConnectionState.cs) — state kế thừa từ base). |
 
 ## Bảng chuẩn / RFC
 

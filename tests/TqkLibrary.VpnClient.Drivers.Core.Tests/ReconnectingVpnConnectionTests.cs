@@ -6,13 +6,14 @@ using System.Threading.Tasks;
 using TqkLibrary.VpnClient.Abstractions.Channels.Enums;
 using TqkLibrary.VpnClient.Abstractions.Channels.Interfaces;
 using TqkLibrary.VpnClient.Drivers.Core;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.Drivers.Core.Models;
 using Xunit;
 
 namespace TqkLibrary.VpnClient.Drivers.Core.Tests
 {
     /// <summary>
-    /// Exercises the shared <see cref="ReconnectingVpnConnection{TState}"/> supervisor (roadmap F.6) in isolation
+    /// Exercises the shared <see cref="ReconnectingVpnConnection"/> supervisor (roadmap F.6) in isolation
     /// through a tiny fake driver: it must run the initial establish, arm the reconnect loop after a link loss, retry
     /// with the configured policy (max-attempts / disabled / backoff), raise <c>StateChanged</c> and the reconnected
     /// hook, and tear down cleanly. This is the contract the WireGuard / OpenConnect drivers now inherit instead of
@@ -20,8 +21,6 @@ namespace TqkLibrary.VpnClient.Drivers.Core.Tests
     /// </summary>
     public class ReconnectingVpnConnectionTests
     {
-        enum TestState { Disconnected, Connecting, Connected, Reconnecting }
-
         // A no-op channel so the facade has something to bind (the test never sends packets through it).
         sealed class DummyChannel : IPacketChannel
         {
@@ -34,7 +33,7 @@ namespace TqkLibrary.VpnClient.Drivers.Core.Tests
             public ValueTask DisposeAsync() => default;
         }
 
-        sealed class TestConnection : ReconnectingVpnConnection<TestState>, IAsyncDisposable
+        sealed class TestConnection : ReconnectingVpnConnection, IAsyncDisposable
         {
             readonly Func<int, bool> _establishSucceeds; // (attemptOrdinal) => succeed?
             public int EstablishCount;
@@ -46,11 +45,6 @@ namespace TqkLibrary.VpnClient.Drivers.Core.Tests
             {
                 _establishSucceeds = establishSucceeds;
             }
-
-            protected override TestState DisconnectedState => TestState.Disconnected;
-            protected override TestState ConnectingState => TestState.Connecting;
-            protected override TestState ConnectedState => TestState.Connected;
-            protected override TestState ReconnectingState => TestState.Reconnecting;
 
             protected override Task EstablishAsync(CancellationToken cancellationToken)
             {
@@ -105,19 +99,19 @@ namespace TqkLibrary.VpnClient.Drivers.Core.Tests
         [Fact]
         public async Task Connect_RunsEstablishOnce_AndGoesConnected_WithStateEvents()
         {
-            var states = new List<TestState>();
+            var states = new List<VpnConnectionState>();
             await using var conn = new TestConnection(FastOptions(), _ => true);
             conn.StateChanged += s => { lock (states) states.Add(s); };
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await conn.ConnectAsync(cts.Token);
 
-            Assert.Equal(TestState.Connected, conn.State);
+            Assert.Equal(VpnConnectionState.Connected, conn.State);
             Assert.Equal(1, conn.EstablishCount);
             lock (states)
             {
-                Assert.Contains(TestState.Connecting, states);
-                Assert.Contains(TestState.Connected, states);
+                Assert.Contains(VpnConnectionState.Connecting, states);
+                Assert.Contains(VpnConnectionState.Connected, states);
             }
         }
 
@@ -130,7 +124,7 @@ namespace TqkLibrary.VpnClient.Drivers.Core.Tests
 
             await Assert.ThrowsAsync<InvalidOperationException>(() => conn.ConnectAsync(cts.Token));
             Assert.Equal(1, conn.EstablishCount); // no retry on the initial connect
-            Assert.Equal(TestState.Connecting, conn.State);
+            Assert.Equal(VpnConnectionState.Connecting, conn.State);
         }
 
         [Fact]
@@ -140,12 +134,12 @@ namespace TqkLibrary.VpnClient.Drivers.Core.Tests
             await using var conn = new TestConnection(FastOptions(), _ => true);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await conn.ConnectAsync(cts.Token);
-            Assert.Equal(TestState.Connected, conn.State);
+            Assert.Equal(VpnConnectionState.Connected, conn.State);
 
             conn.Drop("test-induced link loss");
 
             await WaitUntilAsync(() => conn.ReconnectedCount > 0, cts.Token);
-            Assert.Equal(TestState.Connected, conn.State);
+            Assert.Equal(VpnConnectionState.Connected, conn.State);
             Assert.Equal(2, conn.EstablishCount); // initial + one reconnect
             Assert.Equal(1, conn.ReconnectedCount);
         }
@@ -159,8 +153,8 @@ namespace TqkLibrary.VpnClient.Drivers.Core.Tests
 
             conn.Drop("link loss with reconnect off");
 
-            await WaitUntilAsync(() => conn.State == TestState.Disconnected, cts.Token);
-            Assert.Equal(TestState.Disconnected, conn.State);
+            await WaitUntilAsync(() => conn.State == VpnConnectionState.Disconnected, cts.Token);
+            Assert.Equal(VpnConnectionState.Disconnected, conn.State);
             Assert.Equal(1, conn.EstablishCount); // no reconnect attempted
             Assert.Equal(0, conn.ReconnectedCount);
         }
@@ -176,8 +170,8 @@ namespace TqkLibrary.VpnClient.Drivers.Core.Tests
 
             conn.Drop("link loss; all reconnects will fail");
 
-            await WaitUntilAsync(() => conn.State == TestState.Disconnected, cts.Token);
-            Assert.Equal(TestState.Disconnected, conn.State);
+            await WaitUntilAsync(() => conn.State == VpnConnectionState.Disconnected, cts.Token);
+            Assert.Equal(VpnConnectionState.Disconnected, conn.State);
             // 1 initial success + 3 failed reconnect attempts (CleanupCount = one per establish entry).
             Assert.Equal(4, conn.EstablishCount);
             Assert.Equal(0, conn.ReconnectedCount);
@@ -195,7 +189,7 @@ namespace TqkLibrary.VpnClient.Drivers.Core.Tests
             await WaitUntilAsync(() => conn.EstablishCount >= 2, cts.Token); // a reconnect attempt has run
             await conn.DisposeAsync();
 
-            Assert.Equal(TestState.Disconnected, conn.State);
+            Assert.Equal(VpnConnectionState.Disconnected, conn.State);
             int afterTeardown = conn.EstablishCount;
             await Task.Delay(50, cts.Token);
             Assert.Equal(afterTeardown, conn.EstablishCount); // the loop really stopped

@@ -4,7 +4,7 @@ using System.Net;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
-using TqkLibrary.VpnClient.Drivers.WireGuard.Enums;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.WireGuard;
 using TqkLibrary.VpnClient.WireGuard.Config;
 using TqkLibrary.VpnClient.WireGuard.DataChannel;
@@ -57,7 +57,7 @@ namespace TqkLibrary.VpnClient.Drivers.WireGuard.Tests
             connection.PacketChannel.InboundIpPacket += m => inbound.Writer.TryWrite(m.ToArray());
 
             await connection.ConnectAsync(cts.Token);
-            Assert.Equal(WireGuardConnectionState.Connected, connection.State);
+            Assert.Equal(VpnConnectionState.Connected, connection.State);
 
             // A LAN-destined IPv4 packet → peer 1 (10.0.0.0/24, the longest prefix).
             byte[] lanPacket = BuildIpv4("10.0.0.2", "10.0.0.50", payload: 0x11);

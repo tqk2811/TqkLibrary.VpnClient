@@ -1,6 +1,7 @@
 using System.Net;
 using System.Security.Cryptography;
 using TqkLibrary.VpnClient.Crypto.Noise;
+using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.Drivers.Tinc;
 using TqkLibrary.VpnClient.Drivers.Tinc.Config;
 using TqkLibrary.VpnClient.Tinc.Hosts;
@@ -79,7 +80,7 @@ namespace TqkLibrary.VpnClient.Drivers.Tinc.Tests
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             await h.Client.ConnectAsync(cts.Token);
 
-            Assert.Equal(Enums.TincConnectionState.Connected, h.Client.State);
+            Assert.Equal(VpnConnectionState.Connected, h.Client.State);
             Assert.Equal(IPAddress.Parse("10.99.0.2"), h.Client.AssignedAddress);
             // The peer's subnet became a tunnel route.
             Assert.Contains("10.99.0.1/32", h.Client.Config.Routes);

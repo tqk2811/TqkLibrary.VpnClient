@@ -37,8 +37,6 @@ làm con bên trong — control plane Tailscale chỉ sinh `WireGuardConfig` đa
 TqkLibrary.VpnClient.Drivers.Tailscale/
 ├─ Config/
 │  └─ TailscaleConfig.cs            # ServerUrl + PreauthKey + Machine/Node X25519 keys + Mtu + WireGuardLocalPort + AdvertisedEndpoints; Generate()
-├─ Enums/
-│  └─ TailscaleConnectionState.cs   # Disconnected/Connecting/Connected/Reconnecting
 ├─ TailscaleConnection.cs           # ReconnectingVpnConnection: control -> netmap -> WireGuardConfig -> WireGuardConnection con
 ├─ TailscaleControlClientAdapter.cs # build TailscaleControlClient thật (net5+; ns2.0 ném PlatformNotSupported)
 ├─ TailscaleDriver.cs               # IVpnProtocolDriver Name="tailscale"
