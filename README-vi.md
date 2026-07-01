@@ -6,10 +6,10 @@ Toàn bộ ngăn xếp giao thức — IKE, ESP, L2TP, PPP, SSTP, Noise/WireGuar
 
 ## Tính năng
 
-- **18 driver VPN** đăng ký qua `VpnClientBuilder.Use*`, gần như tất cả đã **kiểm chứng live** (xem bảng [Trạng thái](#trạng-thái)):
+- **19 driver VPN** đăng ký qua `VpnClientBuilder.Use*`, gần như tất cả đã **kiểm chứng live** (xem bảng [Trạng thái](#trạng-thái)):
   - **Live trên VPN Gate (internet thật):** **MS-SSTP** (TLS/443 + handshake `[MS-SSTP]` + PPP RAW + MS-CHAPv2 + crypto binding chống MITM) và **L2TP/IPsec** (IKEv1 PSK Main+Quick Mode, NAT-T RFC 3948, ESP transport mode AES-CBC+HMAC-SHA1 / AES-GCM negotiate, L2TPv2, PPP/MS-CHAPv2).
   - **Live trong lab Docker (server opensource thật):** **IKEv2-native** (RFC 7296 PSK/EAP/cert + ESP tunnel), **Cisco IPsec/EzVPN** (IKEv1 Aggressive + XAUTH + Mode-Config), **OpenVPN** (community server, UDP/TCP, tun & tap, NCP AEAD), **WireGuard** (Noise_IKpsk2), **SoftEther** SSL-VPN (Ethernet-over-TLS + DHCP), **OpenConnect** (Cisco AnyConnect/ocserv, CSTP + DTLS 1.2), **Nebula**, **tinc** 1.1 SPTPS, **ZeroTier** VL1/VL2, **n2n** v3 (kể cả header-encryption `-H`), **Tailscale** (ts2021 control + WireGuard data), **GRE/IPIP/SIT** (IpEncap), **vtun**, **VPN-over-SSH** (`tun@openssh.com`).
-  - **Built + test offline (live còn chờ):** **PPTP** (RFC 2637 GRE + MPPE + MS-CHAPv2 — chờ raw-IP proto-47 + elevate; legacy/interop), **GRE-in-UDP** (RFC 8086 — header GRE trong UDP/4754, userspace KHÔNG elevate/raw socket, qua NAT; tái dùng `GreTunnelChannel` của IpEncap).
+  - **Built + test offline (live còn chờ):** **PPTP** (RFC 2637 GRE + MPPE + MS-CHAPv2 — chờ raw-IP proto-47 + elevate; legacy/interop), **GRE-in-UDP** (RFC 8086 — header GRE trong UDP/4754, userspace KHÔNG elevate/raw socket, qua NAT; tái dùng `GreTunnelChannel` của IpEncap), **VXLAN** (RFC 7348 — L2-over-UDP/4789, VXLAN header 8B + VNI 24-bit → Ethernet L2 fabric; userspace KHÔNG elevate/raw socket, KHÔNG mã hóa).
 - **Vòng đời đầy đủ** dùng chung qua supervisor base `ReconnectingVpnConnection`: keepalive (DPD / Echo / ping theo từng giao thức), rekey make-before-break (ESP theo lifetime + sequence; WireGuard/OpenVPN/IKEv2 theo cơ chế riêng), teardown sạch, **auto-reconnect** (exponential backoff + jitter) — socket trong tunnel **sống sót qua reconnect** khi IP không đổi.
 - **IPv6 trong tunnel — đã hiện thực + validate live:** PPP có **IPV6CP** (`Ipv6cpNegotiator` + `PppIpv6Autoconfigurator`); tap-mode/SoftEther/OpenVPN chạy **SLAAC + DHCPv6 + NDISC v6** trên cùng L2 segment (opt-in qua `enableIpv6`). Outer-IPv6 (kết nối tới server qua AAAA/IPv6) cũng đã chạy live.
 - **Tầng L2 Ethernet dùng thật:** `EthernetSwitch` (học MAC) + `VirtualHost` + `ArpResolver` (ARP RFC 826) + NDISC/SLAAC/DHCP(v4/v6) — bắc cầu L2→L3 cho **SoftEther / OpenVPN-tap / n2n / ZeroTier / tinc / vtun**.
@@ -72,14 +72,14 @@ Hai triết lý: **plugin theo driver** (mỗi giao thức một `IVpnProtocolDr
  └────────────┬──────────────┘     │ VpnNetworkStream             │
               │ IVpnProtocolDriver  └─────────────┬───────────────┘
  ┌────────────▼───────────────┐    ┌──────────────▼──────────────┐
- │ DRIVERS (18 × Use*)        │    │ TqkLibrary.VpnClient.IpStack │
+ │ DRIVERS (19 × Use*)        │    │ TqkLibrary.VpnClient.IpStack │
  │ Sstp · L2tpIpsec · Ikev2   │    │ TCP·UDP·ICMP / IPv4+IPv6     │
  │ CiscoIpsec · OpenVpn · WG  │    │ (userspace, dual-stack)      │
  │ SoftEther · OpenConnect    │    └──────────────┬──────────────┘
  │ Nebula · Tinc · ZeroTier   │                   │ bind
  │ N2n · Tailscale · Vtun     │                   │
  │ Ssh · Pptp · IpEncap       │                   │
- │ GreInUdp                   │                   │
+ │ GreInUdp · Vxlan           │                   │
  │ (base: Drivers.Core F.6)   │                   │
  └────────────┬───────────────┘                   │
               │ lắp ráp protocol                   ▼
@@ -129,7 +129,7 @@ Hai triết lý: **plugin theo driver** (mỗi giao thức một `IVpnProtocolDr
                                                       └─ UDP/TCP(+TLS) → gateway
 ```
 
-### Các project trong `src/` (45 project)
+### Các project trong `src/` (46 project)
 
 Bảng dưới gom theo tầng; mỗi project có `README-vi.md` riêng (as-built). Cột "Driver" đánh dấu project hiện thực `IVpnProtocolDriver` (wire qua `VpnClientBuilder.Use*`).
 
@@ -155,6 +155,7 @@ Bảng dưới gom theo tầng; mỗi project có `README-vi.md` riêng (as-buil
 | DRIVER | [Drivers.Pptp](src/TqkLibrary.VpnClient.Drivers.Pptp/README-vi.md) | PPTP (GRE + MPPE + MS-CHAPv2; cần raw-IP) |
 | DRIVER | [Drivers.IpEncap](src/TqkLibrary.VpnClient.Drivers.IpEncap/README-vi.md) | GRE / IPIP / SIT (6in4) thuần; cần raw-IP |
 | DRIVER | [Drivers.GreInUdp](src/TqkLibrary.VpnClient.Drivers.GreInUdp/README-vi.md) | Driver GRE-in-UDP (RFC 8086): chở header GRE trong UDP/4754 — userspace, KHÔNG elevate/raw socket, qua NAT; tái dùng `GreTunnelChannel` của IpEncap |
+| DRIVER | [Drivers.Vxlan](src/TqkLibrary.VpnClient.Drivers.Vxlan/README-vi.md) | Driver VXLAN (RFC 7348): L2-over-UDP/4789 (VXLAN header 8B + VNI 24-bit) → Ethernet L2 fabric; userspace KHÔNG elevate/raw socket, KHÔNG mã hóa |
 | DRIVER | [Drivers.Core](src/TqkLibrary.VpnClient.Drivers.Core/README-vi.md) | Base `ReconnectingVpnConnection` (supervisor/reconnect/backoff — F.6), KHÔNG phải driver giao thức |
 | PROTOCOL | [Ipsec](src/TqkLibrary.VpnClient.Ipsec/README-vi.md) | IKEv1/IKEv2 + ESP + NAT-T (`Nat/`) |
 | PROTOCOL | [L2tp](src/TqkLibrary.VpnClient.L2tp/README-vi.md) | L2TPv2 control + data, multi-session (RFC 2661) |

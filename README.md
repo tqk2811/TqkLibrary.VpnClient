@@ -6,10 +6,10 @@ The entire protocol stack — IKE, ESP, L2TP, PPP, SSTP, Noise/WireGuard, OpenVP
 
 ## Features
 
-- **18 VPN drivers** registered via `VpnClientBuilder.Use*`, almost all already **validated live** (see the [Status](#status) table):
+- **19 VPN drivers** registered via `VpnClientBuilder.Use*`, almost all already **validated live** (see the [Status](#status) table):
   - **Live on VPN Gate (the real internet):** **MS-SSTP** (TLS/443 + the `[MS-SSTP]` handshake + PPP RAW + MS-CHAPv2 + crypto binding against MITM) and **L2TP/IPsec** (IKEv1 PSK Main+Quick Mode, NAT-T RFC 3948, ESP transport mode AES-CBC+HMAC-SHA1 / AES-GCM negotiated, L2TPv2, PPP/MS-CHAPv2).
   - **Live in a Docker lab (real open-source servers):** **IKEv2-native** (RFC 7296 PSK/EAP/cert + ESP tunnel), **Cisco IPsec/EzVPN** (IKEv1 Aggressive + XAUTH + Mode-Config), **OpenVPN** (community server, UDP/TCP, tun & tap, NCP AEAD), **WireGuard** (Noise_IKpsk2), **SoftEther** SSL-VPN (Ethernet-over-TLS + DHCP), **OpenConnect** (Cisco AnyConnect/ocserv, CSTP + DTLS 1.2), **Nebula**, **tinc** 1.1 SPTPS, **ZeroTier** VL1/VL2, **n2n** v3 (including header encryption `-H`), **Tailscale** (ts2021 control + WireGuard data), **GRE/IPIP/SIT** (IpEncap), **vtun**, and **VPN-over-SSH** (`tun@openssh.com`).
-  - **Built + offline-tested (live still pending):** **PPTP** (RFC 2637 GRE + MPPE + MS-CHAPv2 — pending raw-IP proto-47 + elevation; legacy/interop), **GRE-in-UDP** (RFC 8086 — the GRE header inside UDP/4754, userspace with NO elevation/raw socket, NAT-friendly; reuses IpEncap's `GreTunnelChannel`).
+  - **Built + offline-tested (live still pending):** **PPTP** (RFC 2637 GRE + MPPE + MS-CHAPv2 — pending raw-IP proto-47 + elevation; legacy/interop), **GRE-in-UDP** (RFC 8086 — the GRE header inside UDP/4754, userspace with NO elevation/raw socket, NAT-friendly; reuses IpEncap's `GreTunnelChannel`), **VXLAN** (RFC 7348 — L2-over-UDP/4789, an 8-byte VXLAN header + 24-bit VNI → the Ethernet L2 fabric; userspace with NO elevation/raw socket, NO encryption).
 - **Full lifecycle** shared through the supervisor base `ReconnectingVpnConnection`: keepalive (DPD / Echo / ping, per protocol), make-before-break rekey (ESP by lifetime + sequence; WireGuard/OpenVPN/IKEv2 by their own mechanisms), clean teardown, and **auto-reconnect** (exponential backoff + jitter) — in-tunnel sockets **survive a reconnect** when the IP does not change.
 - **IPv6 in the tunnel — implemented + validated live:** PPP has **IPV6CP** (`Ipv6cpNegotiator` + `PppIpv6Autoconfigurator`); tap-mode/SoftEther/OpenVPN run **SLAAC + DHCPv6 + NDISC v6** over the same L2 segment (opt-in via `enableIpv6`). Outer IPv6 (connecting to the server over AAAA/IPv6) also runs live.
 - **An L2 Ethernet fabric that is actually used:** `EthernetSwitch` (MAC learning) + `VirtualHost` + `ArpResolver` (ARP RFC 826) + NDISC/SLAAC/DHCP (v4/v6) — bridging L2→L3 for **SoftEther / OpenVPN-tap / n2n / ZeroTier / tinc / vtun**.
@@ -72,14 +72,14 @@ Two principles: **per-driver plugins** (each protocol is one `IVpnProtocolDriver
  └────────────┬──────────────┘     │ VpnNetworkStream             │
               │ IVpnProtocolDriver  └─────────────┬───────────────┘
  ┌────────────▼───────────────┐    ┌──────────────▼──────────────┐
- │ DRIVERS (18 × Use*)        │    │ TqkLibrary.VpnClient.IpStack │
+ │ DRIVERS (19 × Use*)        │    │ TqkLibrary.VpnClient.IpStack │
  │ Sstp · L2tpIpsec · Ikev2   │    │ TCP·UDP·ICMP / IPv4+IPv6     │
  │ CiscoIpsec · OpenVpn · WG  │    │ (userspace, dual-stack)      │
  │ SoftEther · OpenConnect    │    └──────────────┬──────────────┘
  │ Nebula · Tinc · ZeroTier   │                   │ bind
  │ N2n · Tailscale · Vtun     │                   │
  │ Ssh · Pptp · IpEncap       │                   │
- │ GreInUdp                   │                   │
+ │ GreInUdp · Vxlan           │                   │
  │ (base: Drivers.Core F.6)   │                   │
  └────────────┬───────────────┘                   │
               │ assemble protocol                  ▼
@@ -129,7 +129,7 @@ Two principles: **per-driver plugins** (each protocol is one `IVpnProtocolDriver
                                                       └─ UDP/TCP(+TLS) → gateway
 ```
 
-### Projects in `src/` (45 projects)
+### Projects in `src/` (46 projects)
 
 The table below is grouped by layer; every project has its own `README-vi.md` (as-built). The "DRIVER" tier marks projects that implement `IVpnProtocolDriver` (wired through `VpnClientBuilder.Use*`).
 
@@ -155,6 +155,7 @@ The table below is grouped by layer; every project has its own `README-vi.md` (a
 | DRIVER | [Drivers.Pptp](src/TqkLibrary.VpnClient.Drivers.Pptp/README-vi.md) | PPTP (GRE + MPPE + MS-CHAPv2; needs raw IP) |
 | DRIVER | [Drivers.IpEncap](src/TqkLibrary.VpnClient.Drivers.IpEncap/README-vi.md) | Plain GRE / IPIP / SIT (6in4); needs raw IP |
 | DRIVER | [Drivers.GreInUdp](src/TqkLibrary.VpnClient.Drivers.GreInUdp/README-vi.md) | GRE-in-UDP driver (RFC 8086): carries the GRE header inside UDP/4754 — userspace, NO elevation/raw socket, NAT-friendly; reuses IpEncap's `GreTunnelChannel` |
+| DRIVER | [Drivers.Vxlan](src/TqkLibrary.VpnClient.Drivers.Vxlan/README-vi.md) | VXLAN driver (RFC 7348): L2-over-UDP/4789 (an 8-byte VXLAN header + 24-bit VNI) → the Ethernet L2 fabric; userspace, NO elevation/raw socket, NO encryption |
 | DRIVER | [Drivers.Core](src/TqkLibrary.VpnClient.Drivers.Core/README-vi.md) | Base `ReconnectingVpnConnection` (supervisor/reconnect/backoff — F.6); NOT a protocol driver |
 | PROTOCOL | [Ipsec](src/TqkLibrary.VpnClient.Ipsec/README-vi.md) | IKEv1/IKEv2 + ESP + NAT-T (`Nat/`) |
 | PROTOCOL | [L2tp](src/TqkLibrary.VpnClient.L2tp/README-vi.md) | L2TPv2 control + data, multi-session (RFC 2661) |
