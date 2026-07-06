@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Geneve (RFC 8926) L2-over-UDP protocol driver: an 8-byte Geneve base header (+ optional variable TLV options) + a full Ethernet frame (protocol type 0x6558, Transparent Ethernet Bridging) carried over UDP/6081 to a static unicast remote tunnel endpoint. The data session is an L2 IEthernetChannel that plugs into the userspace Ethernet fabric (ARP + VirtualHost), bridged down to a stable L3 packet channel — the direct sibling of the VXLAN driver (UDP/6081 vs 4789, base header + VNI + variable options TLV) WITHOUT registration, transform, keepalive or a control plane (Geneve is a pure header, no signalling). The receiver skips options by OptLen and drops a datagram carrying a critical option it cannot process (RFC 8926 §3.5). No encryption, no elevation. Static config (VNI, overlay IP/prefix, local MAC, MTU) maps to a TunnelConfig (no DHCP); the remote host:port comes from the connect-time VpnEndpoint. Teardown and auto-reconnect via the shared supervisor.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.Core\TqkLibrary.VpnClient.Drivers.Core.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Ethernet\TqkLibrary.VpnClient.Ethernet.csproj" />
+  </ItemGroup>
+
+</Project>

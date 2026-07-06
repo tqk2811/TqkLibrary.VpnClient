@@ -3,6 +3,8 @@ using System.Security.Cryptography.X509Certificates;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Drivers.CiscoIpsec;
+using TqkLibrary.VpnClient.Drivers.Geneve;
+using TqkLibrary.VpnClient.Drivers.Geneve.Config;
 using TqkLibrary.VpnClient.Drivers.GreInUdp;
 using TqkLibrary.VpnClient.Drivers.Ikev2;
 using TqkLibrary.VpnClient.Drivers.IpEncap;
@@ -328,6 +330,23 @@ namespace TqkLibrary.VpnClient
         /// <summary>Registers the VXLAN driver with explicit auto-reconnect options (e.g. to disable it).</summary>
         public VpnClientBuilder UseVxlan(VxlanConfig config, VxlanReconnectOptions reconnectOptions)
             => AddDriver(new VxlanDriver(config, reconnectOptions));
+
+        /// <summary>
+        /// Registers the Geneve (RFC 8926) driver: L2-over-UDP that carries full Ethernet frames behind an 8-byte Geneve
+        /// base header (+ optional variable TLV options, protocol type 0x6558) over UDP/6081 to a static unicast remote
+        /// endpoint, plugged into the Ethernet fabric (ARP + VirtualHost) down to a stable L3 packet channel — the direct
+        /// sibling of VXLAN but on UDP/6081 with a variable options block and an explicit protocol type, and with <b>no
+        /// control plane</b> (no registration, keepalive, transform or encryption). The receiver skips options by OptLen
+        /// and drops a datagram carrying a critical option it cannot process (RFC 8926 §3.5). The static
+        /// <see cref="GeneveConfig"/> (VNI, this endpoint's static overlay IP + MAC, MTU) maps straight to a
+        /// <c>TunnelConfig</c> (no DHCP); the remote host comes from the connect-time endpoint. No elevation required.
+        /// Auto-reconnect is enabled by default.
+        /// </summary>
+        public VpnClientBuilder UseGeneve(GeneveConfig config) => AddDriver(new GeneveDriver(config));
+
+        /// <summary>Registers the Geneve driver with explicit auto-reconnect options (e.g. to disable it).</summary>
+        public VpnClientBuilder UseGeneve(GeneveConfig config, GeneveReconnectOptions reconnectOptions)
+            => AddDriver(new GeneveDriver(config, reconnectOptions));
 
         /// <summary>Builds the client.</summary>
         public VpnClient Build() => new VpnClient(_drivers);
