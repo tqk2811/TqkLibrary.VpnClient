@@ -144,7 +144,6 @@
 - [ ] **MPLS-in-IP / MPLS-in-GRE** (RFC 4023, proto-137 / GRE — ⚠️ cần control plane nhãn LDP/BGP), **NSH** (RFC 8300 service-chaining — niche, không phải VPN endpoint). Tier 3.
 
 ### V.23 — L2 pseudowire (PWE3)
-- [ ] **L2TPv3 Ethernet pseudowire** (RFC 4719 trên RFC 3931 — mở rộng V.8c L2TPv3 chở Ethernet → L2 fabric; mode UDP KHÔNG-admin / mode proto-115 raw). Feasible medium-high. Tier 2.
 - [ ] **PWE3 / Ethernet-over-MPLS** (RFC 3985/4448/4385 control-word — ⚠️ cần control plane MPLS/LDP, niche). Tier 3.
 
 ### V.24 — Segment Routing (rất nâng cao — kiến trúc routing nhà mạng)

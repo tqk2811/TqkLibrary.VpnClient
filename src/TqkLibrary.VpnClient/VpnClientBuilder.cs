@@ -12,6 +12,8 @@ using TqkLibrary.VpnClient.Drivers.Ikev2;
 using TqkLibrary.VpnClient.Drivers.IpEncap;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec.Enums;
+using TqkLibrary.VpnClient.Drivers.L2tpv3Eth;
+using TqkLibrary.VpnClient.Drivers.L2tpv3Eth.Config;
 using TqkLibrary.VpnClient.Drivers.N2n;
 using TqkLibrary.VpnClient.Drivers.N2n.Config;
 using TqkLibrary.VpnClient.Drivers.Nebula;
@@ -380,6 +382,25 @@ namespace TqkLibrary.VpnClient
         /// <summary>Registers the Geneve driver with explicit auto-reconnect options (e.g. to disable it).</summary>
         public VpnClientBuilder UseGeneve(GeneveConfig config, GeneveReconnectOptions reconnectOptions)
             => AddDriver(new GeneveDriver(config, reconnectOptions));
+
+        /// <summary>
+        /// Registers the L2TPv3 (RFC 3931) Ethernet-pseudowire (RFC 4719) driver in <b>static/unmanaged</b> mode: L2-over-UDP
+        /// that carries full Ethernet frames behind an L2TPv3 data header (a 32-bit Session ID + an optional 0/4/8-byte Cookie
+        /// + an optional 4-byte Default L2-Specific Sublayer for sequencing) over UDP (default port 1701) to a static unicast
+        /// remote endpoint, plugged into the Ethernet fabric (ARP + VirtualHost) down to a stable L3 packet channel — the
+        /// sibling of VXLAN / Geneve, and like them with <b>no control plane</b> (no L2TP control channel, registration,
+        /// keepalive, transform or encryption — the Session IDs and Cookie are configured statically on both peers). The
+        /// receiver drops any datagram that is not a data message for the configured local session (control message / zero or
+        /// mismatched Session ID / Cookie mismatch / truncated header). The static <see cref="L2tpv3EthConfig"/> (local/remote
+        /// Session IDs, Cookie, sequencing, this endpoint's static overlay IP + MAC, MTU) maps straight to a
+        /// <c>TunnelConfig</c> (no DHCP); the remote host comes from the connect-time endpoint. No elevation required (the
+        /// data header rides an ordinary UDP payload, unlike raw-IP L2TPv3 proto-115). Auto-reconnect is enabled by default.
+        /// </summary>
+        public VpnClientBuilder UseL2tpv3Ethernet(L2tpv3EthConfig config) => AddDriver(new L2tpv3EthDriver(config));
+
+        /// <summary>Registers the L2TPv3 Ethernet-pseudowire driver with explicit auto-reconnect options (e.g. to disable it).</summary>
+        public VpnClientBuilder UseL2tpv3Ethernet(L2tpv3EthConfig config, L2tpv3EthReconnectOptions reconnectOptions)
+            => AddDriver(new L2tpv3EthDriver(config, reconnectOptions));
 
         /// <summary>Builds the client.</summary>
         public VpnClient Build() => new VpnClient(_drivers);

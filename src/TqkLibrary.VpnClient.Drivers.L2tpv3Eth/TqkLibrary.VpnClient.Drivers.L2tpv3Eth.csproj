@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>L2TPv3 (RFC 3931) Ethernet-pseudowire (RFC 4719) L2-over-UDP protocol driver, static/unmanaged mode: an L2TPv3 data header (32-bit Session ID + optional 0/4/8-byte Cookie + optional 4-byte Default L2-Specific Sublayer for sequencing) + a full Ethernet frame carried over UDP (default port 1701) to a static unicast remote endpoint. The data session is an L2 IEthernetChannel that plugs into the userspace Ethernet fabric (ARP + VirtualHost), bridged down to a stable L3 packet channel — the sibling of the VXLAN / Geneve drivers WITHOUT any control plane (no L2TP control channel, no registration, transform, keepalive — the Session IDs and Cookie are configured statically on both peers). The receiver drops any datagram that is not a data message for the configured local session (control message / zero Session ID / mismatched Session ID or Cookie / truncated header). Runs the L2TPv3-over-IP data header directly in a UDP payload (the no-admin variant of L2TPv3, no raw socket / elevation), which differs from Linux `ip l2tp ... encap udp` (extra 4-byte version prefix). No encryption. Static config (local/remote Session IDs, Cookie, sequencing, overlay IP/prefix, local MAC, MTU) maps to a TunnelConfig (no DHCP); the remote host:port comes from the connect-time VpnEndpoint. Teardown and auto-reconnect via the shared supervisor.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.Core\TqkLibrary.VpnClient.Drivers.Core.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Ethernet\TqkLibrary.VpnClient.Ethernet.csproj" />
+  </ItemGroup>
+
+</Project>
