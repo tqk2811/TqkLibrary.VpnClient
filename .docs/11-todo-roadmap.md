@@ -3,8 +3,8 @@
 > **Mục tiêu dài hạn: clone lại mọi VPN opensource** thành driver userspace thuần .NET trong thư viện này
 > (đối chiếu plan gốc `wild-stargazing-spark.md` + as-built [`10-codebase-architecture-and-flow.md`](10-codebase-architecture-and-flow.md)).
 > Lộ trình **đã chạy gần hết**: **P1 (ĐÓNG — SSTP + L2TP/IPsec client 100%, kể cả IPv6)** + **F** nền dùng chung
-> + **L2** tầng Ethernet + **19 driver V.x as-built** (Sstp, L2tpIpsec, Pptp, IpEncap, GreInUdp, Ikev2, CiscoIpsec, OpenVpn,
-> WireGuard, Nebula, Tailscale, Tinc, N2n, Vtun, Ssh, ZeroTier, OpenConnect, SoftEther, Vxlan — **phần lớn đã VALIDATE LIVE**)
+> + **L2** tầng Ethernet + **22 driver V.x as-built** (Sstp, L2tpIpsec, Pptp, IpEncap, GreInUdp, Ikev2, CiscoIpsec, OpenVpn,
+> WireGuard, Nebula, Tailscale, Tinc, N2n, Vtun, Ssh, ZeroTier, OpenConnect, SoftEther, Vxlan, Geneve, Fou/Gue, L2tpv3Eth — **phần lớn đã VALIDATE LIVE**; 3 driver mới nhất Geneve/Fou-Gue/L2tpv3Eth còn offline chờ live)
 > → **còn residual từng driver + tính năng tương lai + Q chất lượng/hạ tầng** (liệt kê dưới đây).
 > Ngoài ra **vài giao thức trong taxonomy [`02`](02-protocol-taxonomy.md) CHƯA khởi động** (chưa có driver): SSL-VPN doanh nghiệp
 > (V.9 Fortinet/F5/GlobalProtect/Array, **V.13** Juniper oNCP / Pulse IF-T), V.8(c) EtherIP/L2TPv3.
@@ -45,7 +45,7 @@
 
 ### Ma trận tái dùng (driver × thành phần)
 
-> 19 driver V.x đều **as-built + wire qua `VpnClientBuilder.Use*`**; cột "trạng thái" ✓ = đã VALIDATE LIVE.
+> 22 driver V.x đều **as-built + wire qua `VpnClientBuilder.Use*`**; cột "trạng thái" ✓ = đã VALIDATE LIVE.
 > Bảng chỉ giữ để tra cứu thành phần tái dùng — không phải việc cần làm.
 
 | Driver | Trạng thái | Transport | Bảo mật data plane | Framing | PPP | L2 fabric |
@@ -69,11 +69,14 @@
 | SSH (-w tun) | live ✓ | TCP (`Transport.Tcp`) | SSH transport (chacha20/aes-gcm) | tun@openssh.com | — | — |
 | vtun | live ✓ | TCP | Blowfish-128-ECB | vtun 2-byte header | — | ✅ tap ether |
 | VXLAN | offline (chờ live) | UDP/4789 | none (trần) | VXLAN 8-byte + VNI | — | ✅ Ethernet fabric |
+| Geneve | offline (chờ live) | UDP/6081 | none (trần) | Geneve 8B + options TLV + VNI | — | ✅ Ethernet fabric |
+| FOU/GUE | offline (chờ live) | UDP | none (trần) | FOU trần / GUE 4B header | — | — |
+| L2TPv3-eth | offline (chờ live) | UDP/1701 | none (trần) | L2TPv3 SessionID + cookie + sublayer | — | ✅ Ethernet fabric |
 
 > Điểm tái dùng lớn: **PPP** phục vụ 3 driver (SSTP/L2TP/PPTP); **ESP + Nat (NAT-T)** phục vụ 3 (L2TP/IPsec, IKEv2, Cisco IPsec);
 > **TLS transport** phục vụ 5 (SSTP/OpenVPN-TCP/SoftEther/OpenConnect/Tailscale-control); **DTLS** (OpenConnect);
 > **Noise (`Crypto.Noise`)** phục vụ WireGuard/Nebula/Tailscale/(SSH dùng X25519/Ed25519); **Ethernet L2 fabric** phục vụ
-> SoftEther/OpenVPN-tap/ZeroTier/n2n/vtun-tap; **RawIp** phục vụ PPTP/IpEncap; **IpStack/Sockets/SwappablePacketChannel/supervisor
+> SoftEther/OpenVPN-tap/ZeroTier/n2n/vtun-tap/Geneve/L2tpv3-eth; **RawIp** phục vụ PPTP/IpEncap (kênh GRE/IPIP tái dùng cho GreInUdp + FOU/GUE qua UDP); **IpStack/Sockets/SwappablePacketChannel/supervisor
 > (`ReconnectingVpnConnection` F.6)** phục vụ tất cả.
 
 ---
@@ -196,7 +199,7 @@
 
 ## Q — Chất lượng / hạ tầng (chạy song song mọi giai đoạn)
 
-- [ ] **Q.1 — Lab server Docker (còn lại: job integration CI + validate driver chưa kiểm live)**. Lab đã dựng + chạy ở [`lab/`](../lab/README-vi.md) cho phần lớn driver (P1 + 19 driver V.x đa số validate live). **Còn lại**: (1) job **integration lab trong CI** (Q.5); (2) lab/validate cho residual chưa kiểm live của từng driver (đã liệt kê ở V.x). ⚠️ **accel-ppp L2TP cũng IPv4-only** (`socket(PF_INET)`/`sockaddr_in`, 0 `sockaddr_in6` ở `l2tp.c`) — như xl2tpd ⇒ **không dùng được để validate full L2TP-over-IPv6** (external-infeasible).
+- [ ] **Q.1 — Lab server Docker (còn lại: job integration CI + validate driver chưa kiểm live)**. Lab đã dựng + chạy ở [`lab/`](../lab/README-vi.md) cho phần lớn driver (P1 + 22 driver V.x đa số validate live). **Còn lại**: (1) job **integration lab trong CI** (Q.5); (2) lab/validate cho residual chưa kiểm live của từng driver (đã liệt kê ở V.x). ⚠️ **accel-ppp L2TP cũng IPv4-only** (`socket(PF_INET)`/`sockaddr_in`, 0 `sockaddr_in6` ở `l2tp.c`) — như xl2tpd ⇒ **không dùng được để validate full L2TP-over-IPv6** (external-infeasible).
 - [ ] **Q.2 — Logging/diagnostics: tầng Ethernet/L2 + IKEv2 deep (còn lại)**. Seam `Abstractions/Diagnostics` + luồng `ILoggerFactory?` đã làm cho **tất cả driver runtime** và **tầng PROTOCOL sâu IKE/ESP/PPP/IpStack-TCP**. **Còn lại**: luồn logger xuống tầng **Ethernet/L2 fabric** (`EthernetSwitch`/`VirtualHost`/ARP·NDISC·DHCP resolver) khi cần trace L2; và IKEv2-native deep (`IkeClient` V2/`IkeSaInitiator`) per-message trace nếu cần (hiện chỉ `Ikev2Connection` log handshake-step cấp cao).
 - [ ] **Q.4 — Hiệu năng data plane (zero-alloc + backpressure, còn lại)**: design `09` đặt mục tiêu `ArrayPool`/`IMemoryOwner`/span không-alloc-mỗi-gói + `System.Threading.Channels`/Pipe để backpressure. Hiện data plane copy `byte[]` mỗi gói (`System.IO.Pipelines` mới chỉ ref ở [Directory.Build.props](../src/Directory.Build.props), chưa dùng) — **đo + tối ưu khi cần throughput**. (Bug TCP send-window stall "1 byte/segment" đã SỬA + VALIDATE LIVE — sender SWS avoidance [`ShouldSendNow`](../src/TqkLibrary.VpnClient.IpStack/Tcp/TcpConnection.cs#L569) RFC 9293 §3.8.6.2.1; chi tiết bảng "Khác biệt" [`10`](10-codebase-architecture-and-flow.md).)
 - [ ] **Q.5 — CI: job integration lab (còn lại)**. CI đa OS as-built — workflow [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) build 2 TFM + offline suite matrix 3 OS (ubuntu/windows/macos). **Còn lại**: (sau Q.1) **job integration lab** chạy validate live trong CI.
@@ -207,7 +210,7 @@
 
 ## Gợi ý thứ tự cho việc CÒN LẠI
 
-> P1 + F + L2 + 19 driver V.x (kể cả V.12 Cisco IPsec/EzVPN) đã as-built, phần lớn VALIDATE LIVE — as-built ở
+> P1 + F + L2 + 22 driver V.x (kể cả V.12 Cisco IPsec/EzVPN) đã as-built, phần lớn VALIDATE LIVE — as-built ở
 > [`10`](10-codebase-architecture-and-flow.md) §5/§9 + README từng project. Dưới đây là thứ tự ưu tiên cho **residual + tính năng mới**:
 
 1. **Giao thức mới chưa khởi động**: **V.9 SSL-VPN dialects** (Fortinet/F5/GlobalProtect/**Array** — họ TLS+DTLS mở rộng V.5, tái dùng F.1/F.3/PPP); **V.13 Juniper oNCP / Pulse IF-T** (TLS + ESP-in-UDP + EAP, tái dùng Ipsec/ESP + EAP); **V.8(c) EtherIP/L2TPv3** (mở rộng IpEncap, cần F.9 RawIp + IP public). **+ backlog mở rộng V.15–V.29** (mục **V★**) — toàn bộ họ giao thức opensource/RFC còn lại; đòn bẩy cao nhất: V.26 innernet (WG control-plane Tier 1), V.28 OpenVPN-over-TCP + V.29 AmneziaWG/stunnel (chống-DPI rẻ), V.21 FOU/GUE (GRE-in-UDP đã as-built offline — residual live), V.22 GRETAP (Geneve đã as-built offline — residual live), V.15 IKEv2 Fragmentation+MOBIKE + IPsec-over-TCP (RFC 8229), V.16 EAP-TLS/TTLS, V.19 SIIT engine.
