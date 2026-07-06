@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>FOU + GUE (Generic X-over-UDP) tunnel driver runtime: carries an inner IP-protocol payload (IPIP proto 4/41 or GRE proto 47) inside a UDP payload, either bare (Linux Foo-over-UDP — the inner protocol is inferred from the UDP dst port) or behind a 4-byte GUE variant-0 header (draft-ietf-intarea-gue — the header carries the inner IP protocol number). Reuses the IpEncap GRE codec / GreTunnelChannel and RawIpPassthroughChannel over a connected UDP IDatagramTransport, so no elevation / no raw IP socket is required. Generalises GRE-in-UDP (RFC 8086). Connectionless encap — no control plane (no handshake/keepalive/auto-reconnect). UNENCRYPTED — use only on a trusted path or under IPsec ESP.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.Core\TqkLibrary.VpnClient.Drivers.Core.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.IpEncap\TqkLibrary.VpnClient.IpEncap.csproj" />
+  </ItemGroup>
+
+</Project>

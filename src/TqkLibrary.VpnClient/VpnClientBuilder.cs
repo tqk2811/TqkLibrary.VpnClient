@@ -3,6 +3,8 @@ using System.Security.Cryptography.X509Certificates;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Drivers.CiscoIpsec;
+using TqkLibrary.VpnClient.Drivers.Fou;
+using TqkLibrary.VpnClient.Drivers.Fou.Enums;
 using TqkLibrary.VpnClient.Drivers.Geneve;
 using TqkLibrary.VpnClient.Drivers.Geneve.Config;
 using TqkLibrary.VpnClient.Drivers.GreInUdp;
@@ -123,6 +125,37 @@ namespace TqkLibrary.VpnClient
         /// </summary>
         public VpnClientBuilder UseGreInUdp(GreInUdpOptions? options = null, GreInUdpReconnectOptions? reconnectOptions = null)
             => AddDriver(new GreInUdpDriver(options, reconnectOptions));
+
+        /// <summary>
+        /// Registers the FOU (Foo-over-UDP) tunnel driver (key <c>"fou"</c>): carries an inner IP-protocol payload
+        /// (IPIP proto 4/41 or GRE proto 47, per <see cref="FouOptions.InnerProtocol"/>) inside a UDP payload with
+        /// <b>no encapsulation header</b> — the inner protocol is fixed by the UDP port, as Linux <c>ip fou</c> does —
+        /// then binds the reused IpEncap data-plane channel behind a stable L3 packet channel. Generalises GRE-in-UDP
+        /// (RFC 8086) without the fixed GRE framing. Because the carrier is an ordinary connected UDP socket, it needs
+        /// <b>no elevation and no raw IP socket</b> and traverses NAT/firewalls that pass UDP. <paramref name="options"/>
+        /// selects the inner protocol / UDP port / MTU / GRE options (its <c>Mode</c> is forced to FOU here);
+        /// <paramref name="reconnectOptions"/> tunes (or disables) auto-reconnect. The remote gateway is the
+        /// <c>VpnEndpoint.Host</c> passed to <c>ConnectAsync</c>.
+        /// <para>There is no control plane (no handshake, no auth, no keepalive) — the tunnel address must be arranged out
+        /// of band. <b>FOU is UNENCRYPTED</b> — use only on a trusted path or under IPsec ESP.</para>
+        /// </summary>
+        public VpnClientBuilder UseFou(FouOptions? options = null, FouReconnectOptions? reconnectOptions = null)
+            => AddDriver(new FouDriver((options ?? new FouOptions()) with { Mode = FouEncapMode.Fou }, reconnectOptions));
+
+        /// <summary>
+        /// Registers the GUE (Generic UDP Encapsulation) tunnel driver (key <c>"gue"</c>, draft-ietf-intarea-gue): carries
+        /// an inner IP-protocol payload (IPIP proto 4/41 or GRE proto 47, per <see cref="FouOptions.InnerProtocol"/>)
+        /// inside a UDP payload behind a 4-byte GUE <b>variant-0</b> header whose Proto field names the inner protocol, so
+        /// one UDP port can multiplex several inner protocols; header extension fields are skipped and control messages
+        /// dropped on decode. Otherwise identical to <see cref="UseFou"/> — the reused IpEncap data-plane channel behind a
+        /// stable L3 packet channel, no elevation / no raw IP socket, NAT-friendly. <paramref name="options"/> selects the
+        /// inner protocol / UDP port / MTU / GRE options (its <c>Mode</c> is forced to GUE here);
+        /// <paramref name="reconnectOptions"/> tunes (or disables) auto-reconnect.
+        /// <para>There is no control plane (no handshake, no auth, no keepalive) — the tunnel address must be arranged out
+        /// of band. <b>GUE is UNENCRYPTED</b> — use only on a trusted path or under IPsec ESP.</para>
+        /// </summary>
+        public VpnClientBuilder UseGue(FouOptions? options = null, FouReconnectOptions? reconnectOptions = null)
+            => AddDriver(new FouDriver((options ?? new FouOptions()) with { Mode = FouEncapMode.Gue }, reconnectOptions));
 
         /// <summary>Registers the IKEv2-native driver (RFC 7296 PSK + NAT-T, CP virtual IP, ESP tunnel mode) with auto-reconnect enabled by default.</summary>
         public VpnClientBuilder UseIkev2() => AddDriver(new Ikev2Driver());

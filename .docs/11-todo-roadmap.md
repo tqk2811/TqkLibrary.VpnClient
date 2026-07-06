@@ -136,7 +136,6 @@
 - [ ] **Teredo** (RFC 4380/5991/6081, IPv6-in-UDP/IPv4, prefix `2001::/32` + qualification cone/restricted-NAT ⚠️ MS server công cộng đã ngừng), **AYIYA** (SixXS `draft-massar-v6ops-ayiya`, `aiccu` — SHA-hash+timestamp, ⚠️ SixXS đóng 2017), **TSP** (RFC 5572, Gogo6 `gogoc` — signaling XML + SASL) + TIC/heartbeat (RFC 3053). Tái dùng `IDatagramTransport` + IpStack + keepalive F.6 + Crypto SHA/HMAC. Feasible high. Tier 2–3.
 
 ### V.21 — Generic X-over-UDP encapsulation (UDP — KHÔNG admin; **bù đúng hạn chế raw-IP của V.8**)
-- [ ] **FOU** (Linux foo-over-UDP — IP-proto suy từ UDP dest-port), **GUE** (draft-ietf-intarea-gue — header mang proto + flags/security). Tái dùng codec GRE/IPIP + `IDatagramTransport` (nền GRE-in-UDP/RFC 8086 đã as-built ở [`Drivers.GreInUdp`](../src/TqkLibrary.VpnClient.Drivers.GreInUdp)). Feasible high. Tier 2.
 - [ ] **MPLS-in-UDP** (RFC 7510 UDP/6635 — ⚠️ cần control plane nhãn), **GTP-U** (3GPP TS 29.281, UDP/2152, TEID — lab cellular 4G/5G), **AMT** (RFC 7450 UDP/2268 — multicast tunneling). Feasible medium. Tier 3.
 
 ### V.22 — Overlay datacenter L2/L3 (tái dùng [Ethernet L2 fabric](../src/TqkLibrary.VpnClient.Ethernet) như VXLAN [`Drivers.Vxlan`](../src/TqkLibrary.VpnClient.Drivers.Vxlan) / SoftEther / n2n / ZeroTier)
