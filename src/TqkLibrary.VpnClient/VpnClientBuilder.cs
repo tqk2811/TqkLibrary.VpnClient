@@ -2,6 +2,7 @@ using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
+using TqkLibrary.VpnClient.Drivers.Ayiya;
 using TqkLibrary.VpnClient.Drivers.CiscoIpsec;
 using TqkLibrary.VpnClient.Drivers.Fou;
 using TqkLibrary.VpnClient.Drivers.Fou.Enums;
@@ -401,6 +402,27 @@ namespace TqkLibrary.VpnClient
         /// <summary>Registers the L2TPv3 Ethernet-pseudowire driver with explicit auto-reconnect options (e.g. to disable it).</summary>
         public VpnClientBuilder UseL2tpv3Ethernet(L2tpv3EthConfig config, L2tpv3EthReconnectOptions reconnectOptions)
             => AddDriver(new L2tpv3EthDriver(config, reconnectOptions));
+
+        /// <summary>
+        /// Registers the AYIYA (Anything In Anything, draft-massar-v6ops-ayiya-02) tunnel-broker driver (key <c>"ayiya"</c>)
+        /// in <b>static</b> mode: carries an IPv6 packet inside a UDP payload (default port 5072) behind an AYIYA header
+        /// (4-byte field header + 4-byte epoch time + identity + signature), integrity-signed with the shared-secret hash
+        /// (SHA-1, the aiccu algorithm) and replay-guarded by the epoch time, then binds the reused IPv6 passthrough channel
+        /// behind a stable L3 packet channel. Static mode skips the TIC control channel — the identity, shared secret and
+        /// endpoint are all fixed by <paramref name="options"/> (the broker host is the <c>VpnEndpoint.Host</c> passed to
+        /// <c>ConnectAsync</c>). Because the carrier is an ordinary connected UDP socket it needs <b>no elevation and no raw
+        /// IP socket</b> and traverses NAT/firewalls that pass UDP. <paramref name="reconnectOptions"/> tunes (or disables)
+        /// auto-reconnect.
+        /// <para>There is no automatic keepalive (static mode has no control plane). <b>AYIYA does NOT encrypt the
+        /// payload</b> — it signs integrity and guards replay only; use only on a trusted path or under an outer secure
+        /// layer.</para>
+        /// </summary>
+        public VpnClientBuilder UseAyiya(AyiyaOptions options)
+            => AddDriver(new AyiyaDriver(options));
+
+        /// <summary>Registers the AYIYA (static-mode) driver with explicit auto-reconnect options (e.g. to disable it).</summary>
+        public VpnClientBuilder UseAyiya(AyiyaOptions options, AyiyaReconnectOptions reconnectOptions)
+            => AddDriver(new AyiyaDriver(options, reconnectOptions));
 
         /// <summary>Builds the client.</summary>
         public VpnClient Build() => new VpnClient(_drivers);

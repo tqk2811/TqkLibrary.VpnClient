@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>AYIYA (Anything In Anything, draft-massar-v6ops-ayiya-02) tunnel-broker driver runtime in STATIC mode (endpoint + shared secret configured up front, TIC control channel skipped): carries an IPv6 packet inside a UDP payload behind an AYIYA header (4-byte field header + 4-byte epoch time + identity + signature), integrity-signed with the shared-secret SHA-1 algorithm (aiccu behaviour) and replay-guarded by the epoch time. Reuses the IpEncap RawIpPassthroughChannel (IPv6 L3) over a connected UDP IDatagramTransport wrapped in an AyiyaFramingTransport signer/verifier, so no elevation / no raw IP socket is required. Default UDP port 5072. UNENCRYPTED payload — AYIYA signs integrity + guards replay but does NOT encrypt; use only on a trusted path or wrap in an outer secure layer. Live tunnel-broker endpoints are scarce (SixXS closed 2017) so this is offline-validated, like FOU/GreInUdp.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.Core\TqkLibrary.VpnClient.Drivers.Core.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.IpEncap\TqkLibrary.VpnClient.IpEncap.csproj" />
+  </ItemGroup>
+
+</Project>
