@@ -27,7 +27,7 @@ Vấn đề được giải quyết: tách phần "biết cách nói chuyện v�
   - [TqkLibrary.VpnClient.Pptp](../TqkLibrary.VpnClient.Pptp) — [`PptpControlConnection`](../TqkLibrary.VpnClient.Pptp/PptpControlConnection.cs#L22), [`PptpGreChannel`](../TqkLibrary.VpnClient.Pptp/Gre/PptpGreChannel.cs#L21), [`MppePppFrameChannel`](../TqkLibrary.VpnClient.Pptp/Ccp/MppePppFrameChannel.cs#L23).
   - **GRE data plane** chỉ phụ thuộc **interface** [`IRawIpTransportFactory`](../TqkLibrary.VpnClient.Abstractions/Transport/Interfaces/IRawIpTransportFactory.cs#L12) (ở `Abstractions`) — driver **không** ProjectReference [`Transport.RawIp`](../TqkLibrary.VpnClient.Transport.RawIp); app tự cấp concrete `RawIpTransportFactory` (kéo project đó vào) khi muốn bật. Số hiệu proto-47 dùng [`IpProtocol.Gre`](../TqkLibrary.VpnClient.Abstractions/Net/IpProtocol.cs) (ở `Abstractions`, hằng dùng chung) — **vẫn KHÔNG** ProjectReference Transport.RawIp (chỉ phụ thuộc interface `IRawIpTransportFactory`).
   - Không có PackageReference đặc thù — chỉ dùng BCL.
-- **Được dùng bởi:** [TqkLibrary.VpnClient](../TqkLibrary.VpnClient) (entry point — [`VpnClientBuilder.UsePptp(IRawIpTransportFactory, ...)`](../TqkLibrary.VpnClient/VpnClientBuilder.cs#L91) đăng ký driver này).
+- **Được dùng bởi:** [TqkLibrary.VpnClient](../TqkLibrary.VpnClient) (entry point — [`VpnClientBuilder.UsePptp(IRawIpTransportFactory, ...)`](../TqkLibrary.VpnClient/VpnClientBuilder.cs#L104) đăng ký driver này).
 
 ## Cấu trúc thư mục
 

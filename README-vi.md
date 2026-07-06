@@ -42,7 +42,7 @@ var tcp   = await VpnTcpClient.ConnectAsync(stack, remoteIp, 443);
 Stream s  = tcp.GetStream();                                   // cắm thẳng HttpClient
 ```
 
-Mỗi driver có một `Use*` riêng (vài driver nhận config tĩnh thay vì `VpnCredentials`) — xem [`VpnClientBuilder`](src/TqkLibrary.VpnClient/VpnClientBuilder.cs#L37):
+Mỗi driver có một `Use*` riêng (vài driver nhận config tĩnh thay vì `VpnCredentials`) — xem [`VpnClientBuilder`](src/TqkLibrary.VpnClient/VpnClientBuilder.cs#L50):
 
 ```csharp
 new VpnClientBuilder()

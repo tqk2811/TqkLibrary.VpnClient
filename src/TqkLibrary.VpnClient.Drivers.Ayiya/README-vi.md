@@ -23,7 +23,7 @@ Project này là **một driver của tầng DRIVER** — điểm điều phối
   - [TqkLibrary.VpnClient.Drivers.Core](../TqkLibrary.VpnClient.Drivers.Core) — base supervisor [`ReconnectingVpnConnection`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L24) + model reconnect chung [`VpnReconnectOptions`](../TqkLibrary.VpnClient.Drivers.Core/Models/VpnReconnectOptions.cs#L14).
   - [TqkLibrary.VpnClient.IpEncap](../TqkLibrary.VpnClient.IpEncap) — kênh data-plane [`RawIpPassthroughChannel`](../TqkLibrary.VpnClient.IpEncap/RawIpPassthroughChannel.cs#L20) (dùng lại nguyên, không sửa).
   - **SHA-1** dùng thẳng `System.Security.Cryptography.SHA1` (BCL, cả 2 TFM) — **không** ref project `Crypto`.
-- **Được dùng bởi:** [TqkLibrary.VpnClient](../TqkLibrary.VpnClient) (entry point — [`VpnClientBuilder.UseAyiya(...)`](../TqkLibrary.VpnClient/VpnClientBuilder.cs#L420) đăng ký driver này với `Name` là `ayiya`).
+- **Được dùng bởi:** [TqkLibrary.VpnClient](../TqkLibrary.VpnClient) (entry point — [`VpnClientBuilder.UseAyiya(...)`](../TqkLibrary.VpnClient/VpnClientBuilder.cs#L440) đăng ký driver này với `Name` là `ayiya`).
 
 ## Cấu trúc thư mục
 
