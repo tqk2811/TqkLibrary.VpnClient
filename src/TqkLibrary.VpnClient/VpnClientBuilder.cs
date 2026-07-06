@@ -34,6 +34,8 @@ using TqkLibrary.VpnClient.Drivers.Vtun;
 using TqkLibrary.VpnClient.Drivers.Vtun.Config;
 using TqkLibrary.VpnClient.Drivers.Vxlan;
 using TqkLibrary.VpnClient.Drivers.Vxlan.Config;
+using TqkLibrary.VpnClient.Drivers.VxlanGpe;
+using TqkLibrary.VpnClient.Drivers.VxlanGpe.Config;
 using TqkLibrary.VpnClient.Drivers.WireGuard;
 using TqkLibrary.VpnClient.Drivers.ZeroTier;
 using TqkLibrary.VpnClient.Drivers.ZeroTier.Config;
@@ -366,6 +368,23 @@ namespace TqkLibrary.VpnClient
         /// <summary>Registers the VXLAN driver with explicit auto-reconnect options (e.g. to disable it).</summary>
         public VpnClientBuilder UseVxlan(VxlanConfig config, VxlanReconnectOptions reconnectOptions)
             => AddDriver(new VxlanDriver(config, reconnectOptions));
+
+        /// <summary>
+        /// Registers the VXLAN-GPE (Generic Protocol Extension, draft-ietf-nvo3-vxlan-gpe) driver: L2-over-UDP that carries
+        /// full Ethernet frames behind an 8-byte VXLAN-GPE header over UDP/4790 to a static unicast remote peer, plugged
+        /// into the Ethernet fabric (ARP + VirtualHost) down to a stable L3 packet channel — a superset of VXLAN (same
+        /// 24-bit VNI) but with a P (Next-Protocol-present) flag bit and an explicit Next Protocol byte (default Ethernet
+        /// 0x03) so one UDP port can name Ethernet / IPv4 / IPv6 / NSH payloads. Only the Ethernet Next Protocol is wired to
+        /// the L2 data plane; the receiver drops non-Ethernet or OAM datagrams. Like VXLAN there is <b>no control plane</b>
+        /// (no registration, keepalive, transform or encryption). The static <see cref="VxlanGpeConfig"/> (VNI, Next
+        /// Protocol, this endpoint's static overlay IP + MAC, MTU) maps straight to a <c>TunnelConfig</c> (no DHCP); the
+        /// remote host comes from the connect-time endpoint. No elevation required. Auto-reconnect is enabled by default.
+        /// </summary>
+        public VpnClientBuilder UseVxlanGpe(VxlanGpeConfig config) => AddDriver(new VxlanGpeDriver(config));
+
+        /// <summary>Registers the VXLAN-GPE driver with explicit auto-reconnect options (e.g. to disable it).</summary>
+        public VpnClientBuilder UseVxlanGpe(VxlanGpeConfig config, VxlanGpeReconnectOptions reconnectOptions)
+            => AddDriver(new VxlanGpeDriver(config, reconnectOptions));
 
         /// <summary>
         /// Registers the Geneve (RFC 8926) driver: L2-over-UDP that carries full Ethernet frames behind an 8-byte Geneve

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>VXLAN-GPE (Generic Protocol Extension, draft-ietf-nvo3-vxlan-gpe) L2-over-UDP protocol driver: an 8-byte VXLAN-GPE header (a superset of the VXLAN header — same 24-bit VNI, plus a P/Next-Protocol-present flag bit and an explicit Next Protocol byte) + a full Ethernet frame carried over UDP/4790 to a static unicast remote peer. The data session is an L2 IEthernetChannel that plugs into the userspace Ethernet fabric (ARP + VirtualHost), bridged down to a stable L3 packet channel — mirroring the VXLAN driver but with a P bit and Next Protocol (default Ethernet 0x03; the receiver drops non-Ethernet or OAM datagrams). WITHOUT registration, transform, keepalive or a control plane (VXLAN-GPE is a pure header, no signalling). No encryption, no elevation. Static config (VNI, Next Protocol, overlay IP/prefix, local MAC, MTU) maps to a TunnelConfig (no DHCP); the remote host:port comes from the connect-time VpnEndpoint. Teardown and auto-reconnect via the shared supervisor.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.Core\TqkLibrary.VpnClient.Drivers.Core.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Ethernet\TqkLibrary.VpnClient.Ethernet.csproj" />
+  </ItemGroup>
+
+</Project>
