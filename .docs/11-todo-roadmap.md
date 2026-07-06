@@ -3,8 +3,8 @@
 > **Mục tiêu dài hạn: clone lại mọi VPN opensource** thành driver userspace thuần .NET trong thư viện này
 > (đối chiếu plan gốc `wild-stargazing-spark.md` + as-built [`10-codebase-architecture-and-flow.md`](10-codebase-architecture-and-flow.md)).
 > Lộ trình **đã chạy gần hết**: **P1 (ĐÓNG — SSTP + L2TP/IPsec client 100%, kể cả IPv6)** + **F** nền dùng chung
-> + **L2** tầng Ethernet + **24 driver V.x as-built** (Sstp, L2tpIpsec, Pptp, IpEncap, GreInUdp, Ikev2, CiscoIpsec, OpenVpn,
-> WireGuard, Nebula, Tailscale, Tinc, N2n, Vtun, Ssh, ZeroTier, OpenConnect, SoftEther, Vxlan, VxlanGpe, Geneve, Fou/Gue, L2tpv3Eth, Ayiya — **phần lớn đã VALIDATE LIVE**; 5 driver mới nhất Geneve/Fou-Gue/L2tpv3Eth/Ayiya/VxlanGpe còn offline chờ live)
+> + **L2** tầng Ethernet + **25 driver V.x as-built** (Sstp, L2tpIpsec, Pptp, IpEncap, GreInUdp, Ikev2, CiscoIpsec, OpenVpn,
+> WireGuard, Nebula, Tailscale, Tinc, N2n, Vtun, Ssh, ZeroTier, OpenConnect, SoftEther, Vxlan, VxlanGpe, Geneve, Fou/Gue, L2tpv3Eth, Ayiya, GtpU — **phần lớn đã VALIDATE LIVE**; 6 driver mới nhất Geneve/Fou-Gue/L2tpv3Eth/Ayiya/VxlanGpe/GtpU còn offline chờ live)
 > → **còn residual từng driver + tính năng tương lai + Q chất lượng/hạ tầng** (liệt kê dưới đây).
 > Ngoài ra **vài giao thức trong taxonomy [`02`](02-protocol-taxonomy.md) CHƯA khởi động** (chưa có driver): SSL-VPN doanh nghiệp
 > (V.9 Fortinet/F5/GlobalProtect/Array, **V.13** Juniper oNCP / Pulse IF-T), V.8(c) EtherIP/L2TPv3.
@@ -45,7 +45,7 @@
 
 ### Ma trận tái dùng (driver × thành phần)
 
-> 24 driver V.x đều **as-built + wire qua `VpnClientBuilder.Use*`**; cột "trạng thái" ✓ = đã VALIDATE LIVE.
+> 25 driver V.x đều **as-built + wire qua `VpnClientBuilder.Use*`**; cột "trạng thái" ✓ = đã VALIDATE LIVE.
 > Bảng chỉ giữ để tra cứu thành phần tái dùng — không phải việc cần làm.
 
 | Driver | Trạng thái | Transport | Bảo mật data plane | Framing | PPP | L2 fabric |
@@ -74,6 +74,7 @@
 | FOU/GUE | offline (chờ live) | UDP | none (trần) | FOU trần / GUE 4B header | — | — |
 | L2TPv3-eth | offline (chờ live) | UDP/1701 | none (trần) | L2TPv3 SessionID + cookie + sublayer | — | ✅ Ethernet fabric |
 | AYIYA (static) | offline (chờ live) | UDP/5072 | shared-secret SHA-1 sig (không mã hóa payload) | AYIYA header (epoch + identity + signature) | — | — |
+| GTP-U (static) | offline (chờ live) | UDP/2152 | none (trần) | GTP-U G-PDU 8B + TEID 32-bit | — | — |
 
 > Điểm tái dùng lớn: **PPP** phục vụ 3 driver (SSTP/L2TP/PPTP); **ESP + Nat (NAT-T)** phục vụ 3 (L2TP/IPsec, IKEv2, Cisco IPsec);
 > **TLS transport** phục vụ 5 (SSTP/OpenVPN-TCP/SoftEther/OpenConnect/Tailscale-control); **DTLS** (OpenConnect);
@@ -141,7 +142,7 @@
 - [ ] **Teredo** (RFC 4380/5991/6081, IPv6-in-UDP/IPv4, prefix `2001::/32` + qualification cone/restricted-NAT ⚠️ MS server công cộng đã ngừng), **TSP** (RFC 5572, Gogo6 `gogoc` — signaling XML + SASL) + TIC/heartbeat (RFC 3053). Tái dùng `IDatagramTransport` + IpStack + keepalive F.6 + Crypto SHA/HMAC. Feasible high. Tier 2–3. *(AYIYA static-mode `draft-massar-v6ops-ayiya-02` XONG — as-built ở [`10`](10-codebase-architecture-and-flow.md) §5/§9 + [Drivers.Ayiya](../src/TqkLibrary.VpnClient.Drivers.Ayiya); còn TIC control-channel động.)*
 
 ### V.21 — Generic X-over-UDP encapsulation (UDP — KHÔNG admin; **bù đúng hạn chế raw-IP của V.8**)
-- [ ] **MPLS-in-UDP** (RFC 7510 UDP/6635 — ⚠️ cần control plane nhãn), **GTP-U** (3GPP TS 29.281, UDP/2152, TEID — lab cellular 4G/5G), **AMT** (RFC 7450 UDP/2268 — multicast tunneling). Feasible medium. Tier 3.
+- [ ] **MPLS-in-UDP** (RFC 7510 UDP/6635 — ⚠️ cần control plane nhãn), **AMT** (RFC 7450 UDP/2268 — multicast tunneling). Feasible medium. Tier 3. *(GTP-U `3GPP TS 29.281` UDP/2152 **static-mode** XONG — as-built ở [`10`](10-codebase-architecture-and-flow.md) §5/§9 + [Drivers.GtpU](../src/TqkLibrary.VpnClient.Drivers.GtpU); header G-PDU 8B (message type 255) + TEID 32-bit + optional Sequence + skip extension header, tái dùng `RawIpPassthroughChannel`, ⚠️ TRẦN không mã hóa; offline chờ UPF/GGSN (open5gs/srsRAN) hoặc Linux `ip link add ... type gtp`.)*
 
 ### V.22 — Overlay datacenter L2/L3 (tái dùng [Ethernet L2 fabric](../src/TqkLibrary.VpnClient.Ethernet) như VXLAN [`Drivers.Vxlan`](../src/TqkLibrary.VpnClient.Drivers.Vxlan) / SoftEther / n2n / ZeroTier)
 - [ ] **GRE-in-UDP TEB** (đã ở V.21, protocol-type Ethernet). Feasible high. Tier 2. *(VXLAN-GPE `draft-ietf-nvo3-vxlan-gpe` UDP/4790 XONG — as-built ở [`10`](10-codebase-architecture-and-flow.md) §5/§9 + [Drivers.VxlanGpe](../src/TqkLibrary.VpnClient.Drivers.VxlanGpe); superset codec VXLAN + bit P + Next-Protocol (chỉ Ethernet đã wire data plane), offline chờ peer Linux/OVS `ip link add type vxlan ... gpe`.)*

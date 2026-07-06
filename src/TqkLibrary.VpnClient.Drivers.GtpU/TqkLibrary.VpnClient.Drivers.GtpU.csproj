@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>GTP-U (GPRS Tunnelling Protocol, User plane — 3GPP TS 29.281) tunnel driver runtime in static mode: carries an inner IP packet inside a UDP payload (default port 2152) behind an 8-byte GTP-U G-PDU header (message type 255) tagged with a configured TEID (optional Sequence Number; extension headers skipped on decode). Reuses the IpEncap RawIpPassthroughChannel over a connected UDP IDatagramTransport via a GtpUFramingTransport decorator, so no elevation / no raw IP socket is required. Static mode has no GTP-C control plane (no handshake/keepalive/auto-reconnect). UNENCRYPTED — it only tags the inner IP packet with a TEID; use only on a trusted path or under IPsec ESP.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.Core\TqkLibrary.VpnClient.Drivers.Core.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.IpEncap\TqkLibrary.VpnClient.IpEncap.csproj" />
+  </ItemGroup>
+
+</Project>

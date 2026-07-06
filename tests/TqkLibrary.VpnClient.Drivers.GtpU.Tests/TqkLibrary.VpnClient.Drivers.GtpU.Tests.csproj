@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Drivers.GtpU\TqkLibrary.VpnClient.Drivers.GtpU.csproj" />
+    <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.IpEncap\TqkLibrary.VpnClient.IpEncap.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -9,6 +9,7 @@ using TqkLibrary.VpnClient.Drivers.Fou.Enums;
 using TqkLibrary.VpnClient.Drivers.Geneve;
 using TqkLibrary.VpnClient.Drivers.Geneve.Config;
 using TqkLibrary.VpnClient.Drivers.GreInUdp;
+using TqkLibrary.VpnClient.Drivers.GtpU;
 using TqkLibrary.VpnClient.Drivers.Ikev2;
 using TqkLibrary.VpnClient.Drivers.IpEncap;
 using TqkLibrary.VpnClient.Drivers.L2tpIpsec;
@@ -442,6 +443,23 @@ namespace TqkLibrary.VpnClient
         /// <summary>Registers the AYIYA (static-mode) driver with explicit auto-reconnect options (e.g. to disable it).</summary>
         public VpnClientBuilder UseAyiya(AyiyaOptions options, AyiyaReconnectOptions reconnectOptions)
             => AddDriver(new AyiyaDriver(options, reconnectOptions));
+
+        /// <summary>
+        /// Registers the GTP-U (GPRS Tunnelling Protocol, User plane — 3GPP TS 29.281) driver (key <c>"gtpu"</c>) in
+        /// <b>static mode</b>: carries an inner IP packet inside a UDP payload (default port 2152) behind an 8-byte GTP-U
+        /// G-PDU header (message type 255) tagged with a configured <see cref="GtpUOptions.Teid"/> (optionally a 16-bit
+        /// Sequence Number), then binds the reused IpEncap passthrough data-plane channel behind a stable L3 packet channel.
+        /// Static mode has <b>no GTP-C control plane</b> (no GTP tunnel-management signalling) — the TEID and endpoint are
+        /// arranged out of band. Because the carrier is an ordinary connected UDP socket it needs <b>no elevation and no raw
+        /// IP socket</b> and traverses NAT/firewalls that pass UDP. The remote gateway (UPF/GGSN/SGSN or a Linux
+        /// <c>type gtp</c> peer) is the <c>VpnEndpoint.Host</c> passed to <c>ConnectAsync</c>. <paramref name="options"/>
+        /// selects the UDP port / TEID / expected inbound TEID / sequence flag / MTU; <paramref name="reconnectOptions"/>
+        /// tunes (or disables) auto-reconnect.
+        /// <para>There is no keepalive (static mode has no control plane). <b>GTP-U is UNENCRYPTED</b> — it only tags the
+        /// inner IP packet with a TEID (no authentication or encryption). Use only on a trusted path or under IPsec ESP.</para>
+        /// </summary>
+        public VpnClientBuilder UseGtpU(GtpUOptions? options = null, GtpUReconnectOptions? reconnectOptions = null)
+            => AddDriver(new GtpUDriver(options, reconnectOptions));
 
         /// <summary>Builds the client.</summary>
         public VpnClient Build() => new VpnClient(_drivers);
