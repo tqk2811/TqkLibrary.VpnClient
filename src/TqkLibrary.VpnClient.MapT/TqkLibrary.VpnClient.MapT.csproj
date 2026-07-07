@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>MAP-T (RFC 7599) double stateless IPv4↔IPv6 translation: the MAP addressing algorithm (RFC 7597 §5) plugged into the SIIT engine (TqkLibrary.VpnClient.Siit) via IAddressTranslator. Not wired into VpnClientBuilder.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Siit\TqkLibrary.VpnClient.Siit.csproj" />
+  </ItemGroup>
+
+</Project>
