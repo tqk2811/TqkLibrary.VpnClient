@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>AmneziaWG anti-DPI obfuscation for WireGuard-over-UDP (clean-room from the public awg spec — no code copied). A transport-level obfuscation layer that hides WireGuard traffic from DPI without touching WireGuard crypto: it swaps the 4-byte message-type magic (H1..H4 replace types 1/2/3/4), prepends S1/S2 random junk bytes before handshake initiation/response packets, and emits Jc random junk packets before the first initiation. Implemented as a datagram-transport decorator (AmneziaWgDatagramTransport) plus a factory decorator (AmneziaWgTransportFactory) that plugs into the existing WireGuard transport seam (IWireGuardTransportFactory) — the WireGuard driver and VpnClientBuilder are untouched. Both peers share the same AmneziaWgParameters so inbound de-obfuscation is deterministic; unrecognised datagrams are treated as junk and dropped.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.WireGuard\TqkLibrary.VpnClient.WireGuard.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.WireGuard\TqkLibrary.VpnClient.Drivers.WireGuard.csproj" />
+  </ItemGroup>
+
+</Project>
