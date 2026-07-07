@@ -4,6 +4,9 @@ using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Drivers.Ayiya;
 using TqkLibrary.VpnClient.Drivers.CiscoIpsec;
+using TqkLibrary.VpnClient.Drivers.EoGre;
+using TqkLibrary.VpnClient.Drivers.EoGre.Config;
+using TqkLibrary.VpnClient.Drivers.EoGre.Enums;
 using TqkLibrary.VpnClient.Drivers.Fou;
 using TqkLibrary.VpnClient.Drivers.Fou.Enums;
 using TqkLibrary.VpnClient.Drivers.Geneve;
@@ -460,6 +463,37 @@ namespace TqkLibrary.VpnClient
         /// </summary>
         public VpnClientBuilder UseGtpU(GtpUOptions? options = null, GtpUReconnectOptions? reconnectOptions = null)
             => AddDriver(new GtpUDriver(options, reconnectOptions));
+
+        /// <summary>
+        /// Registers the EoGRE / GRETAP (RFC 8086 + RFC 2784/2890) driver (key <c>"eogre"</c>): L2-over-UDP that carries
+        /// full Ethernet frames behind a standard GRE header (protocol type 0x6558) inside a UDP payload on dst port 4754
+        /// to a static unicast remote endpoint, plugged into the Ethernet fabric (ARP + VirtualHost) down to a stable L3
+        /// packet channel. The GRE codec is reused from <c>TqkLibrary.VpnClient.IpEncap</c>; the optional 24-bit VSID (with
+        /// a FlowID) rides the RFC 2890 Key, and the Checksum / Sequence Number are optional. Like VXLAN / Geneve there is
+        /// <b>no control plane</b> (no registration, keepalive, transform or encryption). The static <see cref="EoGreConfig"/>
+        /// (optional VSID/FlowID, the static overlay IP + MAC, MTU) maps straight to a <c>TunnelConfig</c> (no DHCP); the
+        /// remote host comes from the connect-time endpoint. No elevation required. Auto-reconnect is enabled by default.
+        /// <para><b>EoGRE/NVGRE only tunnel the L2 frame - they do NOT encrypt</b> - use only on a trusted path or under IPsec ESP.</para>
+        /// </summary>
+        public VpnClientBuilder UseEoGre(EoGreConfig config) => AddDriver(new EoGreDriver(config, EoGreMode.EoGre));
+
+        /// <summary>Registers the EoGRE / GRETAP driver with explicit auto-reconnect options (e.g. to disable it).</summary>
+        public VpnClientBuilder UseEoGre(EoGreConfig config, EoGreReconnectOptions reconnectOptions)
+            => AddDriver(new EoGreDriver(config, EoGreMode.EoGre, reconnectOptions));
+
+        /// <summary>
+        /// Registers the NVGRE (RFC 7637) driver (key <c>"nvgre"</c>): the same Ethernet-over-GRE-in-UDP L2 tunnel as
+        /// <see cref="UseEoGre(EoGreConfig)"/> but with a <b>mandatory</b> 24-bit Virtual Subnet ID (VSID) plus an 8-bit
+        /// FlowID packed into the GRE Key, and the Checksum / Sequence Number forced off (RFC 7637). Inbound datagrams whose
+        /// VSID does not match are dropped (tenant isolation). The static <see cref="EoGreConfig"/> MUST set <c>Vsid</c>.
+        /// No elevation required. Auto-reconnect is enabled by default.
+        /// <para><b>NVGRE only tunnels the L2 frame - it does NOT encrypt</b> - use only on a trusted path or under IPsec ESP.</para>
+        /// </summary>
+        public VpnClientBuilder UseNvgre(EoGreConfig config) => AddDriver(new EoGreDriver(config, EoGreMode.Nvgre));
+
+        /// <summary>Registers the NVGRE driver with explicit auto-reconnect options (e.g. to disable it).</summary>
+        public VpnClientBuilder UseNvgre(EoGreConfig config, EoGreReconnectOptions reconnectOptions)
+            => AddDriver(new EoGreDriver(config, EoGreMode.Nvgre, reconnectOptions));
 
         /// <summary>Builds the client.</summary>
         public VpnClient Build() => new VpnClient(_drivers);

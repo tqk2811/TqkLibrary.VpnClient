@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>EoGRE / NVGRE over GRE-in-UDP (RFC 8086 + RFC 2784/2890 + RFC 7637) L2-over-UDP protocol driver in STATIC mode: a standard GRE header (protocol type 0x6558 Transparent Ethernet Bridging) carrying a full Ethernet frame inside a UDP payload (default port 4754) to a static unicast remote endpoint. The data session is an L2 IEthernetChannel that plugs into the userspace Ethernet fabric (ARP + VirtualHost), bridged down to a stable L3 packet channel — the direct L2 sibling of the GRE-in-UDP L3 driver and of VXLAN / Geneve. Two driver keys from one project: "eogre" (plain GRETAP — VSID optional via the RFC 2890 Key, Checksum/Sequence optional) and "nvgre" (RFC 7637 — a mandatory 24-bit VSID + 8-bit FlowID packed into the GRE Key, no Checksum/Sequence). The GRE codec is REUSED from TqkLibrary.VpnClient.IpEncap (GreCodec/GrePacket) — not re-implemented. No control plane (no registration, keepalive or transform). No encryption, no elevation. Static config (VSID/FlowID, overlay IP/prefix, local MAC, MTU) maps to a TunnelConfig (no DHCP); the remote host:port comes from the connect-time VpnEndpoint. Teardown and auto-reconnect via the shared supervisor.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.Core\TqkLibrary.VpnClient.Drivers.Core.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Ethernet\TqkLibrary.VpnClient.Ethernet.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.IpEncap\TqkLibrary.VpnClient.IpEncap.csproj" />
+  </ItemGroup>
+
+</Project>
