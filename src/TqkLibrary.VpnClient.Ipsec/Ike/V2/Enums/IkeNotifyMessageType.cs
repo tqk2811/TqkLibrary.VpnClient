@@ -26,5 +26,23 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2.Enums
 
         /// <summary>ESP packets may be sent over UDP (status).</summary>
         EspTfcPaddingNotSupported = 16394,
+
+        /// <summary>
+        /// The sender supports mixing a Post-quantum Preshared Key (PPK) into the IKE keys (RFC 8784 §4, status,
+        /// no data). The initiator sends it in IKE_SA_INIT; a responder that also supports PPK echoes it back.
+        /// </summary>
+        UsePpk = 16435,
+
+        /// <summary>
+        /// Names the PPK the initiator selected (RFC 8784 §4/§4.1): data = PPK_ID (octet 0 = PPK_ID Type,
+        /// 1 = PPK_ID_OPAQUE; the rest is the identifier value). Sent in the IKE_AUTH request when a PPK is used.
+        /// </summary>
+        PpkIdentity = 16436,
+
+        /// <summary>
+        /// Carries the initiator's AUTH computed with the <em>unmixed</em> SK_pi (RFC 8784 §4): lets a responder that
+        /// has no PPK for this peer still authenticate the initiator when the PPK is optional. Sent in IKE_AUTH.
+        /// </summary>
+        NoPpkAuth = 16437,
     }
 }

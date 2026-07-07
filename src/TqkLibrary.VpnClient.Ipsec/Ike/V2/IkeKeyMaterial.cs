@@ -98,6 +98,25 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             => DeriveRekey(HmacPrf.Sha256(), oldSkD, nonceInitiator, nonceResponder, sharedSecret, spiInitiator, spiResponder,
                 encryptionKeyLength: 32, integrityKeyLength: 32, prfKeyLength: 32);
 
+        /// <summary>
+        /// Returns a new key set with the Post-quantum Preshared Key mixed in (RFC 8784 §3): only the three keys that
+        /// depend on the PPK are replaced — <c>SK_d = prf(PPK, SK_d)</c>, <c>SK_pi = prf(PPK, SK_pi)</c>,
+        /// <c>SK_pr = prf(PPK, SK_pr)</c> — while SKEYSEED and the IKE-message keys (SK_ai/SK_ar/SK_ei/SK_er) are kept
+        /// unchanged, so a message already encrypted with SK_ei/SK_er stays readable. The instance is not mutated.
+        /// </summary>
+        public IkeKeyMaterial WithPpk(IPrf prf, byte[] ppk)
+            => new(SkeySeed, Prf(prf, ppk, SkD), SkAi, SkAr, SkEi, SkEr, Prf(prf, ppk, SkPi), Prf(prf, ppk, SkPr));
+
+        /// <summary>Mixes the PPK with the project's default PRF (HMAC-SHA-256); see <see cref="WithPpk(IPrf, byte[])"/>.</summary>
+        public IkeKeyMaterial WithPpk(byte[] ppk) => WithPpk(HmacPrf.Sha256(), ppk);
+
+        static byte[] Prf(IPrf prf, byte[] key, byte[] data)
+        {
+            byte[] output = new byte[prf.OutputSizeInBytes];
+            prf.Compute(key, data, output);
+            return output;
+        }
+
         // Common prf+ expansion: {SK_d | SK_ai | SK_ar | SK_ei | SK_er | SK_pi | SK_pr} = prf+(SKEYSEED, Ni|Nr|SPIi|SPIr).
         static IkeKeyMaterial Expand(
             IPrf prf, byte[] skeyseed, byte[] nonceInitiator, byte[] nonceResponder,

@@ -57,8 +57,11 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
 
         /// <summary>
         /// Builds the IKE_SA_INIT request (SAi1, KEi, Ni, NAT-detection notifies) and caches its encoded bytes.
+        /// When <paramref name="includeUsePpk"/> is set, a USE_PPK notification (RFC 8784 §4) is appended so it is
+        /// part of the signed request octets (the IKE_AUTH signature is taken over these bytes, RFC 7296 §2.15).
         /// </summary>
-        public IkeMessage BuildInitRequest(IPAddress localIp, ushort localPort, IPAddress remoteIp, ushort remotePort)
+        public IkeMessage BuildInitRequest(IPAddress localIp, ushort localPort, IPAddress remoteIp, ushort remotePort,
+            bool includeUsePpk = false)
         {
             var message = new IkeMessage
             {
@@ -86,6 +89,11 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             message.Payloads.Add(NotifyPayload.Create(
                 IkeNotifyMessageType.NatDetectionDestinationIp,
                 NatDetection.ComputeHash(InitiatorSpi, zeroResponderSpi, remoteIp, remotePort)));
+
+            // RFC 8784 §4: advertise PPK support so the responder can echo USE_PPK. Added before Encode() so the
+            // notify is inside the cached, signed request octets.
+            if (includeUsePpk)
+                message.Payloads.Add(NotifyPayload.Create(IkeNotifyMessageType.UsePpk, Array.Empty<byte>()));
 
             InitRequestBytes = message.Encode();
             return message;

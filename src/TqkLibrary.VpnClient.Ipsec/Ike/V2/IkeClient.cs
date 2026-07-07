@@ -29,6 +29,14 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
         readonly IkeCertificateTrust? _responderTrust;
         readonly IReadOnlyList<TrafficSelector>? _initiatorSelectors;
         readonly IReadOnlyList<TrafficSelector>? _responderSelectors;
+        readonly PpkConfiguration? _ppk;
+
+        // RFC 8784 (PPK) state, decided in ProcessInitResponse from whether the responder echoed USE_PPK:
+        //  - _ppkAuthKeys : the PPK-mixed key set (SK_d/SK_pi/SK_pr) used for AUTH + CHILD_SA when a PPK is active.
+        //  - _ppkFallbackNoAuth : optional PPK, responder declined → run without PPK but attach NO_PPK_AUTH.
+        // Only the PSK/cert IKE_AUTH path is PPK-aware; the EAP path ignores PPK (out of RFC 8784's PSK scope here).
+        IkeKeyMaterial? _ppkAuthKeys;
+        bool _ppkFallbackNoAuth;
 
         IkeCipher? _cipher;
         uint _nextMessageId = 2; // IKE_SA_INIT=0, IKE_AUTH=1; post-auth exchanges start here.
@@ -59,13 +67,19 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
         /// AUTH from the gateway is still accepted as a fallback). <paramref name="initiatorSelectors"/> /
         /// <paramref name="responderSelectors"/> offer several traffic selectors (multiple subnets, RFC 7296 §3.13);
         /// null/empty offers the usual single "match all IPv4" selector.</para>
+        /// <para>When <paramref name="ppk"/> is supplied, the client mixes a Post-quantum Preshared Key into the IKE
+        /// keys (RFC 8784): it advertises USE_PPK in IKE_SA_INIT and, if the responder echoes it, re-derives
+        /// SK_d/SK_pi/SK_pr with the PPK before computing AUTH and names the PPK via PPK_IDENTITY in IKE_AUTH. A
+        /// mandatory PPK aborts when the responder does not echo USE_PPK; an optional one falls back to standard
+        /// authentication and attaches NO_PPK_AUTH. Applies to the PSK/cert IKE_AUTH path only.</para>
         /// </summary>
         public IkeClient(byte[] preSharedKey, IdentificationPayload identity, bool requestTransportMode = true,
             byte[]? initiatorSpi = null, bool requestConfiguration = false,
             string? eapUserName = null, string? eapPassword = null,
             IkeCertificateTrust? responderTrust = null,
             IReadOnlyList<TrafficSelector>? initiatorSelectors = null,
-            IReadOnlyList<TrafficSelector>? responderSelectors = null)
+            IReadOnlyList<TrafficSelector>? responderSelectors = null,
+            PpkConfiguration? ppk = null)
         {
             _preSharedKey = preSharedKey;
             _identity = identity;
@@ -76,6 +90,7 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             _responderTrust = responderTrust;
             _initiatorSelectors = initiatorSelectors;
             _responderSelectors = responderSelectors;
+            _ppk = ppk;
             _initiator = new IkeSaInitiator(initiatorSpi);
             _currentInitiatorSpi = _initiator.InitiatorSpi;
             ChildInboundSpi = IkeRandom.NextBytes(4);
@@ -110,9 +125,16 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
         /// <summary>The current IKE SA key material — the IKE_SA_INIT set, or the rekeyed set after an IKE SA rekey.</summary>
         public IkeKeyMaterial? IkeKeys => _currentKeys ?? _initiator.Keys;
 
+        /// <summary>
+        /// True once a Post-quantum Preshared Key was negotiated (the responder echoed USE_PPK) and mixed into the IKE
+        /// keys (RFC 8784). Valid after <see cref="ProcessInitResponse"/>; false when no PPK was configured or the
+        /// responder declined an optional PPK.
+        /// </summary>
+        public bool PpkInUse => _ppkAuthKeys is not null;
+
         /// <summary>Builds the IKE_SA_INIT request (caller encodes &amp; sends it).</summary>
         public IkeMessage BuildInitRequest(IPAddress localIp, ushort localPort, IPAddress remoteIp, ushort remotePort)
-            => _initiator.BuildInitRequest(localIp, localPort, remoteIp, remotePort);
+            => _initiator.BuildInitRequest(localIp, localPort, remoteIp, remotePort, includeUsePpk: _ppk is not null);
 
         /// <summary>Processes the IKE_SA_INIT response, deriving the IKE SA keys and preparing the SK cipher.</summary>
         public void ProcessInitResponse(IkeMessage response)
@@ -122,7 +144,36 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             _currentResponderSpi = _initiator.ResponderSpi;
             _currentSkD = keys.SkD;
             _currentKeys = keys;
+            ApplyPpkDecision(response, keys);
         }
+
+        // RFC 8784 §4: react to the responder's USE_PPK echo. When present, mix the PPK into SK_d/SK_pi/SK_pr (§3) and
+        // adopt the mixed SK_d as the current one so later CHILD_SA/IKE-SA rekeys chain from it; when absent, a
+        // mandatory PPK aborts and an optional one arms the NO_PPK_AUTH fallback for IKE_AUTH.
+        void ApplyPpkDecision(IkeMessage response, IkeKeyMaterial keys)
+        {
+            if (_ppk is null) return;
+
+            bool echoed = response.Notifies().Any(n => n.KnownType == IkeNotifyMessageType.UsePpk);
+            if (echoed)
+            {
+                _ppkAuthKeys = keys.WithPpk(_prf, _ppk.Ppk);
+                _currentSkD = _ppkAuthKeys.SkD;
+            }
+            else if (_ppk.Mandatory)
+            {
+                throw new VpnServerRejectedException(
+                    "The IKEv2 gateway did not agree to a mandatory post-quantum PPK (RFC 8784): no USE_PPK echo in IKE_SA_INIT.");
+            }
+            else
+            {
+                _ppkFallbackNoAuth = true;
+            }
+        }
+
+        // The keys that authenticate IKE_AUTH and seed the CHILD_SA: the PPK-mixed set when a PPK is active, else the
+        // plain IKE_SA_INIT keys. SK_ei/SK_er (message encryption) are never mixed, so _cipher is unaffected.
+        IkeKeyMaterial AuthKeys => _ppkAuthKeys ?? _initiator.Keys!;
 
         /// <summary>Builds the encrypted IKE_AUTH request (IDi, AUTH, SAi2, TSi, TSr [, USE_TRANSPORT_MODE]).</summary>
         public byte[] BuildAuthRequest()
@@ -130,9 +181,10 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             if (_cipher is null || _initiator.Keys is null)
                 throw new InvalidOperationException("IKE_SA_INIT must complete before IKE_AUTH.");
 
+            // AUTH uses the PPK-mixed SK_pi when a PPK is active (RFC 8784 §4), else the plain SK_pi.
             byte[] auth = IkePskAuth.ComputeInitiatorAuth(
                 _prf, _preSharedKey, _initiator.InitRequestBytes, _initiator.PeerNonce,
-                _initiator.Keys.SkPi, _identity.BodyBytes());
+                AuthKeys.SkPi, _identity.BodyBytes());
 
             var message = new IkeMessage
             {
@@ -161,7 +213,27 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             if (_requestTransportMode)
                 message.Payloads.Add(NotifyPayload.Create(IkeNotifyMessageType.UseTransportMode, Array.Empty<byte>()));
 
+            AddPpkAuthNotifies(message);
+
             return _cipher.EncryptMessage(message);
+        }
+
+        // RFC 8784 §4 IKE_AUTH notifies: PPK_IDENTITY names the PPK in use (its wire PPK_ID, §4.1); NO_PPK_AUTH carries
+        // the AUTH computed with the *unmixed* SK_pi so a responder without this PPK can still authenticate us when the
+        // PPK is optional. At most one applies — a PPK is either active or being fallen back from.
+        void AddPpkAuthNotifies(IkeMessage message)
+        {
+            if (_ppkAuthKeys is not null)
+            {
+                message.Payloads.Add(NotifyPayload.Create(IkeNotifyMessageType.PpkIdentity, _ppk!.ToWirePpkId()));
+            }
+            else if (_ppkFallbackNoAuth)
+            {
+                byte[] noPpkAuth = IkePskAuth.ComputeInitiatorAuth(
+                    _prf, _preSharedKey, _initiator.InitRequestBytes, _initiator.PeerNonce,
+                    _initiator.Keys!.SkPi, _identity.BodyBytes());
+                message.Payloads.Add(NotifyPayload.Create(IkeNotifyMessageType.NoPpkAuth, noPpkAuth));
+            }
         }
 
         /// <summary>
@@ -191,7 +263,8 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             ChildOutboundSpi = proposal.Spi;
             NegotiatedEsp = selection;
             Configuration = response.Find<ConfigurationPayload>();
-            ChildKeys = ChildSaKeys.Derive(_prf, _initiator.Keys.SkD, _initiator.Nonce, _initiator.PeerNonce,
+            // CHILD_SA KEYMAT seeds from SK_d — the PPK-mixed one when a PPK is active (RFC 8784 §3).
+            ChildKeys = ChildSaKeys.Derive(_prf, AuthKeys.SkD, _initiator.Nonce, _initiator.PeerNonce,
                 selection.EncryptionKeyLengthBytes, selection.SecondSliceLengthBytes);
             return true;
         }
@@ -214,8 +287,9 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
                     throw new VpnServerRejectedException(
                         "The IKEv2 gateway authenticated with a pre-shared key, but a certificate was required (possible downgrade).");
 
+                // The responder's AUTH uses its SK_pr — the PPK-mixed one when a PPK is active (RFC 8784 §4).
                 byte[] expected = IkePskAuth.ComputeResponderAuth(
-                    _prf, _preSharedKey, _initiator.InitResponseBytes, _initiator.Nonce, _initiator.Keys!.SkPr, restOfIdR);
+                    _prf, _preSharedKey, _initiator.InitResponseBytes, _initiator.Nonce, AuthKeys.SkPr, restOfIdR);
                 return CryptoBytes.FixedTimeEquals(expected, auth.Data);
             }
 
@@ -243,7 +317,7 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
 
             bool valid = IkeSignatureAuth.VerifyResponderSignature(
                 _prf, auth.Method, certificate, auth.Data,
-                _initiator.InitResponseBytes, _initiator.Nonce, _initiator.Keys!.SkPr, restOfIdR);
+                _initiator.InitResponseBytes, _initiator.Nonce, AuthKeys.SkPr, restOfIdR);
             if (!valid)
             {
                 certificate.Dispose();
