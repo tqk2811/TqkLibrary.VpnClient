@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>464XLAT CLAT (RFC 6877) customer-side stateless translator: composes the SIIT engine (TqkLibrary.VpnClient.Siit) via IAddressTranslator (EAM for the device source + RFC 6052 for the NAT64 destination) plus PREF64 discovery codecs (RFC 8781 RA option + RFC 7050 ipv4only.arpa). Client-only; NAT64/DNS64 server-side is out of scope. Not wired into VpnClientBuilder.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Siit\TqkLibrary.VpnClient.Siit.csproj" />
+  </ItemGroup>
+
+</Project>
