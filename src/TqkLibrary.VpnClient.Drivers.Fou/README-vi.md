@@ -23,7 +23,7 @@ Project này là **một driver của tầng DRIVER** — điểm điều phối
   - [TqkLibrary.VpnClient.Drivers.Core](../TqkLibrary.VpnClient.Drivers.Core) — base supervisor [`ReconnectingVpnConnection`](../TqkLibrary.VpnClient.Drivers.Core/ReconnectingVpnConnection.cs#L24) + model reconnect chung [`VpnReconnectOptions`](../TqkLibrary.VpnClient.Drivers.Core/Models/VpnReconnectOptions.cs#L14).
   - [TqkLibrary.VpnClient.IpEncap](../TqkLibrary.VpnClient.IpEncap) — kênh data-plane [`GreTunnelChannel`](../TqkLibrary.VpnClient.IpEncap/Gre/GreTunnelChannel.cs#L21) + [`RawIpPassthroughChannel`](../TqkLibrary.VpnClient.IpEncap/RawIpPassthroughChannel.cs#L20) + [`GreTunnelOptions`](../TqkLibrary.VpnClient.IpEncap/Gre/GreTunnelOptions.cs#L9) + codec `GreCodec`/`GrePacket` (dùng lại nguyên, không sửa).
   - **Transport UDP** là concrete nội bộ [`FouUdpDatagramTransport`](FouUdpDatagramTransport.cs#L18) (socket UDP thường qua BCL) — không PackageReference đặc thù.
-- **Được dùng bởi:** [TqkLibrary.VpnClient](../TqkLibrary.VpnClient) (entry point — [`VpnClientBuilder.UseFou(...)`](../TqkLibrary.VpnClient/VpnClientBuilder.cs#L148) và [`UseGue(...)`](../TqkLibrary.VpnClient/VpnClientBuilder.cs#L163) đăng ký driver này với `Name` là `fou` / `gue`).
+- **Được dùng bởi:** [TqkLibrary.VpnClient](../TqkLibrary.VpnClient) (entry point — [`VpnClientBuilder.UseFou(...)`](../TqkLibrary.VpnClient/VpnClientBuilder.cs#L151) và [`UseGue(...)`](../TqkLibrary.VpnClient/VpnClientBuilder.cs#L166) đăng ký driver này với `Name` là `fou` / `gue`).
 
 ## Cấu trúc thư mục
 
