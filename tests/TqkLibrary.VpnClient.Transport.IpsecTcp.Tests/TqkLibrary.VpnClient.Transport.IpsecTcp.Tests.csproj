@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\TqkLibrary.VpnClient.Transport.IpsecTcp\TqkLibrary.VpnClient.Transport.IpsecTcp.csproj" />
+  </ItemGroup>
+
+</Project>

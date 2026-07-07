@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>TCP Encapsulation of IKE and ESP (RFC 8229): length-prefix framing adapter presenting an IDatagramTransport over an IByteStreamTransport (TCP or TLS).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Transport.Tcp\TqkLibrary.VpnClient.Transport.Tcp.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Transport.Tls\TqkLibrary.VpnClient.Transport.Tls.csproj" />
+  </ItemGroup>
+
+</Project>
