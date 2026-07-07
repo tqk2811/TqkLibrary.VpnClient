@@ -157,10 +157,10 @@
 - [ ] **SRv6** (RFC 8754 SRH + RFC 8986 network-programming + RFC 9800 cSID — ⚠️ cần control plane SR + thường cần kernel `seg6`; gần out-of-scope cho VPN client thuần userspace). Feasible low. Tier 3.
 
 ### V.25 — Mesh/overlay opensource (giao thức wire RIÊNG — cần codec mới; tái dùng Crypto/Noise + Ethernet + IpStack)
-- [ ] **Quicktun** (ucis.nl — NaCl Curve25519+Salsa20/Poly1305 `nacltai` + TAI64 timestamp, point-to-point tối giản — **dễ nhất**). Feasible high. Tier 2.
+- [ ] **Quicktun** (ucis.nl — NaCl Curve25519+Salsa20/Poly1305 `nacltai` + TAI64 timestamp, point-to-point tối giản — **dễ nhất**; **crypto XONG**: [`XSalsa20Poly1305Cipher`](../src/TqkLibrary.VpnClient.Crypto/Aead/XSalsa20Poly1305Cipher.cs) = NaCl `crypto_secretbox` + [`XSalsa20`](../src/TqkLibrary.VpnClient.Crypto/XSalsa20.cs)/[`HSalsa20`](../src/TqkLibrary.VpnClient.Crypto/HSalsa20.cs) + `Curve25519DhGroup` sẵn → **chỉ còn wire giao thức + TAI64**). Feasible high. Tier 2.
 - [ ] **PeerVPN / MeshVPN** (GPL-3 — AES-256+HMAC-SHA256 PSK, L2 TAP full-mesh gossip). Feasible medium-high. Tier 2.
 - [ ] **GVPE** (GNU VPE, GPL-3 — RSA auth + AES/Blowfish, **L2**, đa-transport UDP/TCP/ICMP/DNS), **fastd** (Freifunk — Curve25519 + salsa2012+UMAC ⚠️ UMAC chưa có sẵn, L2/L3), **FreeLAN** (FSCP — cert/RSA + ECDHE + AES-GCM, L2/L3 ⚠️ dự án ít hoạt động), **CIPE** (UDP Blowfish/IDEA ⚠️ obsolete + crypto yếu — cân nhắc bỏ). Feasible medium/low. Tier 3.
-- [ ] **cjdns** (CryptoAuth Curve25519+Salsa20/Poly1305 + crypto-routed IPv6 `fc00::/8` + DHT/source-routing ⚠️ routing engine khổng lồ, dự án gốc gần ngừng), **Yggdrasil** (Ed25519 + Noise + ChaCha20, IPv6 `200::/7`, tree-routing+DHT ⚠️ wire chưa ổn định, đa-transport TCP/TLS/QUIC/WS). Feasible low. Tier 3 (đắt).
+- [ ] **cjdns** (CryptoAuth Curve25519+Salsa20/Poly1305 + crypto-routed IPv6 `fc00::/8` + DHT/source-routing ⚠️ routing engine khổng lồ, dự án gốc gần ngừng; **crypto XONG**: XSalsa20-Poly1305/secretbox sẵn ở Crypto → còn lại là routing engine + wire), **Yggdrasil** (Ed25519 + Noise + ChaCha20, IPv6 `200::/7`, tree-routing+DHT ⚠️ wire chưa ổn định, đa-transport TCP/TLS/QUIC/WS). Feasible low. Tier 3 (đắt).
 
 ### V.26 — Biến thể control-plane trên WireGuard (tái dùng **NGUYÊN data plane** [`Drivers.WireGuard`](../src/TqkLibrary.VpnClient.Drivers.WireGuard) như Tailscale; chỉ khác control plane lấy peer-config)
 - [ ] **innernet** (MIT — control plane REST + invitation file, không hole-punch → **DỄ NHẤT, khởi đầu lý tưởng** để chứng minh pattern "WG-data-plane + control-plane-mới"). Feasible high. Tier 1.
