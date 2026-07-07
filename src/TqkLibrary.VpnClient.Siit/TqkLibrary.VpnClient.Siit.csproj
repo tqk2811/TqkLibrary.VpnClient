@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Stateless SIIT (RFC 7915) IPv4↔IPv6 header translation engine + RFC 6052 addressing + RFC 7757 EAM. Foundation for MAP-T / 464XLAT (not wired into VpnClientBuilder).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.IpStack\TqkLibrary.VpnClient.IpStack.csproj" />
+  </ItemGroup>
+
+</Project>
