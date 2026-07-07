@@ -14,6 +14,8 @@
 >
 > **Quy ước** (theo [CLAUDE.md](../CLAUDE.md)): mục hoàn thành thì **xóa khỏi file này** — không đánh dấu
 > `[x]`/✅; trạng thái as-built ghi ở file `10` + README từng project. Mỗi mục `- [ ]` dưới đây **chỉ còn phần CHƯA làm**.
+>
+> **Trình tự thực thi** (nền dùng chung → họ giao thức, phụ thuộc + seam tái dùng + gap crypto): xem [`12-opensource-vpn-support-plan.md`](12-opensource-vpn-support-plan.md).
 
 ---
 
