@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Client-side WebSocket transport (RFC 6455): an IByteStreamTransport that wraps an inner IByteStreamTransport (TCP or TLS), performs the HTTP Upgrade handshake and client-side frame masking/reassembly, so tunnelled data "looks like WebSocket/HTTPS" to bypass DPI. Foundation for wstunnel-style anti-DPI wrappers. Framing is implemented from the RFC (no System.Net.WebSockets.ClientWebSocket) so it works identically on netstandard2.0 and net8.0 over any transport.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Transport.Tcp\TqkLibrary.VpnClient.Transport.Tcp.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Transport.Tls\TqkLibrary.VpnClient.Transport.Tls.csproj" />
+  </ItemGroup>
+
+</Project>
