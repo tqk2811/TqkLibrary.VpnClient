@@ -72,13 +72,13 @@
 
 | Primitive | Trạng thái | Chặn gì | Hướng trám |
 |---|---|---|---|
-| **UMAC** | **THIẾU** | fastd (method mặc định salsa2012+umac) | Port UMAC (UHASH + AES) — đắt hơn |
+| ~~**UMAC**~~ **XONG** | **CÓ** ([`Umac`](../src/TqkLibrary.VpnClient.Crypto/Umac.cs), tag 32/64/96/128-bit, key AES-128/256) | (đã trám — fastd method mặc định salsa2012+umac; **còn phần giao thức wire**) | UHASH (NH little-endian + POLY mod 2^64-59 + inner-product 2^36-5) + AES-CTR KDF/PDF; KAT RFC 4418 §9 byte-exact (single-step POLY khớp vector & reference, KHÔNG ramp p128) |
 | ~~**BLAKE2b**~~ **XONG** | **CÓ** ([`Blake2b`](../src/TqkLibrary.VpnClient.Crypto/Blake2b.cs) + [`Blake2bKeyedMac`](../src/TqkLibrary.VpnClient.Crypto/Blake2bKeyedMac.cs), output 1..64B) | (đã trám — Yggdrasil node-ID/tree hash) | Wrapper BC `Blake2bDigest`; KAT RFC 7693 App.A + blake2b-kat.txt |
 | **ML-KEM / Kyber** | **Chưa wired** (BC 2.4 có Kyber tên cũ; `MLKem` FIPS 203 từ BC ≥2.5) | IKEv2 PQ hybrid (RFC 9370) | Nâng BC 2.4→2.5 rồi bind `MLKem` vào IKE transform |
 | ~~**P-256 ECDH keygen**~~ **XONG** | **CÓ** ([`NistP256DhGroup`](../src/TqkLibrary.VpnClient.Crypto/NistP256DhGroup.cs), IANA group 19, wire x‖y 64B / shared x 32B) | (đã trám — mở khóa Nebula-P256 networks + FreeLAN ECDHE; **còn phần giao thức wire**) | ECDH P-256 qua BC `CustomNamedCurves("P-256")` + `ECPoint.Multiply`; KAT RFC 5903 §8.1 byte-exact |
 | **RFC 8784 PPK** | Làm được NGAY | (PQ rẻ, không cần KEM) | Trộn PRF bằng `PrfPlus`/HMAC sẵn có |
 
-**Đã có đủ** (không phải gap): Salsa20 (full/12), **HSalsa20 + XSalsa20 + XSalsa20-Poly1305 (NaCl `crypto_secretbox`) + NaclBox (NaCl `crypto_box` = Curve25519 + XSalsa20-Poly1305, XONG — KAT byte-exact libsodium core2/core3 + secretbox.exp + box.c)**, ChaCha20, ChaCha20-Poly1305, XChaCha20-Poly1305, Poly1305, AES-CBC/CTR/GCM, Blowfish, RC4/MPPE, Speck, HMAC-SHA1/256/384/512+MD5, SHA-0/1/256/512, BLAKE2s, **BLAKE2b + BLAKE2b-keyed (XONG — RFC 7693 App.A + blake2b-kat.txt)**, MD4/5, Pearson, Curve25519/X25519, Ed25519, DH-modp(2/14), Noise `SymmetricState` (swap cipher/hash tự do). ⇒ **PeerVPN, GVPE, n2n-transform, vtun-cipher, IKEv2-PPK/8229, EAP-pack, obfuscation, WG-control-plane, translation-engine đều KHÔNG vướng crypto; nacltai/cjdns hết vướng crypto (còn wire giao thức), Yggdrasil hết vướng BLAKE2b.**
+**Đã có đủ** (không phải gap): Salsa20 (full/12), **HSalsa20 + XSalsa20 + XSalsa20-Poly1305 (NaCl `crypto_secretbox`) + NaclBox (NaCl `crypto_box` = Curve25519 + XSalsa20-Poly1305, XONG — KAT byte-exact libsodium core2/core3 + secretbox.exp + box.c)**, ChaCha20, ChaCha20-Poly1305, XChaCha20-Poly1305, Poly1305, **UMAC (XONG — RFC 4418 §9 byte-exact, tag 32/64/96/128)**, AES-CBC/CTR/GCM, Blowfish, RC4/MPPE, Speck, HMAC-SHA1/256/384/512+MD5, SHA-0/1/256/512, BLAKE2s, **BLAKE2b + BLAKE2b-keyed (XONG — RFC 7693 App.A + blake2b-kat.txt)**, MD4/5, Pearson, Curve25519/X25519, Ed25519, DH-modp(2/14), Noise `SymmetricState` (swap cipher/hash tự do). ⇒ **PeerVPN, GVPE, n2n-transform, vtun-cipher, IKEv2-PPK/8229, EAP-pack, obfuscation, WG-control-plane, translation-engine đều KHÔNG vướng crypto; nacltai/cjdns hết vướng crypto (còn wire giao thức), Yggdrasil hết vướng BLAKE2b, fastd hết vướng UMAC (còn wire salsa2012+umac + handshake Curve25519).**
 
 ---
 
@@ -97,9 +97,9 @@ F.A ─▶ V.29 (AmneziaWG, stunnel, wstunnel, OpenVPN-XOR...)
 F.B ─▶ V.26 (innernet ─▶ wesher/Pritunl/Netmaker-static)
 F.C ─▶ V.16 (EAP-pack) ─▶ (dùng lại) V.9/V.13
 F.D ─▶ V.9 / V.13 / V.27  (SSL-VPN doanh nghiệp)
-F.E (XSalsa20-Poly1305/secretbox + NaclBox crypto_box XONG) ─▶ mesh NaCl (Quicktun/cjdns) chỉ còn wire giao thức; BLAKE2b XONG ─▶ Yggdrasil hết vướng crypto (còn wire); P-256 ECDH XONG ─▶ Nebula-P256/FreeLAN ECDHE hết vướng crypto (còn wire); PQ, fastd(UMAC) vẫn chờ primitive khác
+F.E (XSalsa20-Poly1305/secretbox + NaclBox crypto_box XONG) ─▶ mesh NaCl (Quicktun/cjdns) chỉ còn wire giao thức; BLAKE2b XONG ─▶ Yggdrasil hết vướng crypto (còn wire); P-256 ECDH XONG ─▶ Nebula-P256/FreeLAN ECDHE hết vướng crypto (còn wire); UMAC XONG ─▶ fastd hết vướng crypto (còn wire); PQ vẫn chờ primitive khác
 F.9b ─▶ V.18 (6to4/6rd/ISATAP/DS-Lite/MAP-E)
 F.F ─▶ V.26-NetBird, disco, hole-punch  (chặn Wave 3)
 SIIT ─▶ MAP-T + 464XLAT + NAT64  (V.19)
 ```
-**Đòn bẩy cao nhất, làm-offline-được, bắt đầu trước:** ① **F.A → AmneziaWG** (mở họ anti-DPI phổ biến nhất) · ② **F.B → innernet** (dễ nhất, chứng minh pattern control-plane) · ③ **F.C → EAP-TTLS/PEAP** (dùng lại cho IKEv2 + doanh nghiệp) · ④ **IKEv2 PPK (8784) + IPsec-over-TCP (8229)** (không vướng crypto/nền) · ⑤ **SIIT engine** (dùng cho 3). Các nhánh `[LIVE]` (V.9/V.13/V.27/DMVPN) và cần-crypto-lớn (PQ/cjdns/Yggdrasil/fastd) để sau.
+**Đòn bẩy cao nhất, làm-offline-được, bắt đầu trước:** ① **F.A → AmneziaWG** (mở họ anti-DPI phổ biến nhất) · ② **F.B → innernet** (dễ nhất, chứng minh pattern control-plane) · ③ **F.C → EAP-TTLS/PEAP** (dùng lại cho IKEv2 + doanh nghiệp) · ④ **IKEv2 PPK (8784) + IPsec-over-TCP (8229)** (không vướng crypto/nền) · ⑤ **SIIT engine** (dùng cho 3). Các nhánh `[LIVE]` (V.9/V.13/V.27/DMVPN), cần-crypto-lớn (PQ) và wire-phức-tạp (cjdns/Yggdrasil/fastd — crypto đã đủ) để sau.
