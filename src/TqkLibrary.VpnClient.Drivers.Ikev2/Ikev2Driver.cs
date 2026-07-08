@@ -15,6 +15,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
         readonly IkeCertificateTrust? _responderTrust;
         readonly IReadOnlyList<TrafficSelector>? _initiatorSelectors;
         readonly IReadOnlyList<TrafficSelector>? _responderSelectors;
+        readonly PpkConfiguration? _ppk;
         readonly bool _requestIpComp;
 
         /// <summary>
@@ -25,6 +26,10 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
         /// signature is rejected with <see cref="Abstractions.Drivers.VpnServerRejectedException"/>. The optional
         /// <paramref name="initiatorSelectors"/> / <paramref name="responderSelectors"/> request several traffic
         /// selectors (split-tunnel subnets, RFC 7296 §3.13); null offers a single match-all IPv4 selector as before.</para>
+        /// <para>When <paramref name="ppk"/> is supplied the driver mixes a Post-quantum Preshared Key into the IKE keys
+        /// (RFC 8784): USE_PPK is advertised in IKE_SA_INIT and, if the gateway agrees, PPK_IDENTITY names it in IKE_AUTH;
+        /// an optional PPK the gateway declines falls back with NO_PPK_AUTH, a mandatory one aborts. Applies to the
+        /// PSK/cert path only (the EAP path ignores it). Default null ⇒ no USE_PPK is advertised.</para>
         /// <para>When <paramref name="requestIpComp"/> is true, the driver negotiates RFC 3173 IPComp payload
         /// compression (DEFLATE) via IPCOMP_SUPPORTED (RFC 7296 §3.10.1); the gateway must also offer it or the tunnel
         /// runs over plain ESP (graceful downgrade). Default off ⇒ unchanged behaviour.</para>
@@ -33,6 +38,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
             IkeCertificateTrust? responderTrust = null,
             IReadOnlyList<TrafficSelector>? initiatorSelectors = null,
             IReadOnlyList<TrafficSelector>? responderSelectors = null,
+            PpkConfiguration? ppk = null,
             bool requestIpComp = false)
         {
             _reconnectOptions = reconnectOptions;
@@ -40,6 +46,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
             _responderTrust = responderTrust;
             _initiatorSelectors = initiatorSelectors;
             _responderSelectors = responderSelectors;
+            _ppk = ppk;
             _requestIpComp = requestIpComp;
         }
 
@@ -85,6 +92,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
                 responderTrust: _responderTrust,
                 initiatorSelectors: _initiatorSelectors,
                 responderSelectors: _responderSelectors,
+                ppk: _ppk,
                 requestIpComp: _requestIpComp,
                 loggerFactory: _loggerFactory);
             try

@@ -35,6 +35,7 @@ using TqkLibrary.VpnClient.Drivers.Tinc;
 using TqkLibrary.VpnClient.Drivers.Tinc.Config;
 using TqkLibrary.VpnClient.Drivers.WireGuard;
 using TqkLibrary.VpnClient.Drivers.WireGuard.Transport;
+using TqkLibrary.VpnClient.Ipsec.Ike.V2.Models;
 using TqkLibrary.VpnClient.IpStack;
 using TqkLibrary.VpnClient.OpenVpn.Config;
 using TqkLibrary.VpnClient.Tinc.Hosts;
@@ -195,8 +196,10 @@ namespace Vpn2ProxyDemo
         /// đều khác null thì initiator dùng EAP-MSCHAPv2 (RFC 7296 §2.16) thay cho PSK AUTH; null ⇒ PSK-only.
         /// <paramref name="preferOuterIpv6"/>: ưu tiên IPv6 cho transport NGOÀI (resolve AAAA, IKE/ESP-in-UDP over IPv6) — P1.2.
         /// <paramref name="ipComp"/>: thương lượng IPComp (RFC 3173 DEFLATE) qua IPCOMP_SUPPORTED trong IKE_AUTH (RFC 7296 §3.10.1);
-        /// server phải cùng chào (strongSwan `compress=yes`) nếu không tunnel chạy ESP thường (graceful downgrade). Mặc định tắt.</summary>
-        public static async Task<VpnTunnel> ConnectIkev2Async(string host, string preSharedKey, string? eapUser, string? eapPass, CancellationToken ct, bool preferOuterIpv6 = false, bool ipComp = false)
+        /// server phải cùng chào (strongSwan `compress=yes`) nếu không tunnel chạy ESP thường (graceful downgrade). Mặc định tắt.
+        /// <paramref name="ppk"/>: Post-quantum Preshared Key (RFC 8784) trộn vào SK_d/SK_pi/SK_pr — client chào USE_PPK
+        /// (IKE_SA_INIT) rồi PPK_IDENTITY (IKE_AUTH); server phải cấu hình cùng id/secret (strongSwan `ppk`). Null ⇒ không dùng PPK.</summary>
+        public static async Task<VpnTunnel> ConnectIkev2Async(string host, string preSharedKey, string? eapUser, string? eapPass, CancellationToken ct, bool preferOuterIpv6 = false, bool ipComp = false, PpkConfiguration? ppk = null)
         {
             Console.WriteLine("=== [IKEv2-native] ===");
             ILoggerFactory loggerFactory = CreateDriverLoggerFactory();
@@ -205,6 +208,7 @@ namespace Vpn2ProxyDemo
                 addressFamilyPreference: outerPref,
                 eapUserName: string.IsNullOrEmpty(eapUser) ? null : eapUser,
                 eapPassword: string.IsNullOrEmpty(eapPass) ? null : eapPass,
+                ppk: ppk,
                 requestIpComp: ipComp,
                 loggerFactory: loggerFactory);
             try
@@ -214,7 +218,8 @@ namespace Vpn2ProxyDemo
 
                 string auth = string.IsNullOrEmpty(eapUser) ? "PSK" : "EAP-MSCHAPv2";
                 string ipcompTag = ipComp ? ", IPComp DEFLATE" : "";
-                Console.WriteLine($"[ikev2] connecting to {host} (IKEv2 forced NAT-T UDP 500->4500, auth {auth}{ipcompTag}) ...");
+                string ppkTag = ppk is not null ? $", PPK RFC8784 ({(ppk.Mandatory ? "mandatory" : "optional")})" : "";
+                Console.WriteLine($"[ikev2] connecting to {host} (IKEv2 forced NAT-T UDP 500->4500, auth {auth}{ipcompTag}{ppkTag}) ...");
                 await vpn.ConnectAsync(cts.Token);
                 Console.WriteLine($"[ikev2] tunnel up. assigned IP = {vpn.AssignedAddress}, dns = {vpn.AssignedDns?.ToString() ?? "(none)"}");
 

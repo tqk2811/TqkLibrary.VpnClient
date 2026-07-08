@@ -183,6 +183,18 @@ namespace TqkLibrary.VpnClient
             => AddDriver(new Ikev2Driver(reconnectOptions, requestIpComp: true));
 
         /// <summary>
+        /// Registers the IKEv2-native driver with a <b>Post-quantum Preshared Key</b> mixed into the IKE keys
+        /// (RFC 8784): the client advertises USE_PPK in IKE_SA_INIT and, when the gateway agrees, keys
+        /// <c>prf(PPK, SK_d/SK_pi/SK_pr)</c> and names the PPK with PPK_IDENTITY in IKE_AUTH, so an attacker who later
+        /// breaks the Diffie-Hellman exchange (e.g. with a quantum computer) still cannot derive the session keys. When
+        /// <paramref name="ppk"/> is not <see cref="Ipsec.Ike.V2.Models.PpkConfiguration.Mandatory"/> and the gateway
+        /// declines, the client falls back to standard PSK auth (NO_PPK_AUTH); when mandatory, it aborts. Applies to the
+        /// PSK/cert path only. Auto-reconnect is enabled by default unless <paramref name="reconnectOptions"/> disables it.
+        /// </summary>
+        public VpnClientBuilder UseIkev2WithPpk(Ipsec.Ike.V2.Models.PpkConfiguration ppk, Ikev2ReconnectOptions? reconnectOptions = null)
+            => AddDriver(new Ikev2Driver(reconnectOptions, ppk: ppk));
+
+        /// <summary>
         /// Registers the IKEv2-native driver that verifies the gateway by <b>certificate</b> (RFC 7296 §2.15 digital
         /// signature): the responder's CERT must be trusted by <paramref name="responderTrust"/> and its AUTH signature
         /// must verify, otherwise the connection is refused. Auto-reconnect is enabled by default unless

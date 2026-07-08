@@ -82,5 +82,24 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2.Tests
             Assert.Single(connection.Sessions);
             await Assert.ThrowsAsync<NotSupportedException>(() => connection.OpenSessionAsync());
         }
+
+        [Fact]
+        public async Task Ppk_IsAcceptedBy_ConnectionAndDriver_Plumbing()
+        {
+            // Plumbing surface (RFC 8784): both the connection and the driver take an optional PpkConfiguration that
+            // defaults to null. Constructing with a PPK must not throw (the handshake wiring is covered by IkePpkTests).
+            var ppk = new PpkConfiguration
+            {
+                PpkId = System.Text.Encoding.UTF8.GetBytes("ppk1"),
+                Ppk = new byte[32],
+                Mandatory = true,
+            };
+            await using var connection = new Ikev2Connection("vpn.example.com", System.Text.Encoding.ASCII.GetBytes("vpn"), ppk: ppk);
+            var driver = new Ikev2Driver(ppk: ppk);
+
+            Assert.Equal("ikev2", driver.Name);
+            // PPK is a key-mix, not an auth method — it does not change the advertised capability surface.
+            Assert.Equal(VpnAuthMethod.PreSharedKey | VpnAuthMethod.Eap, driver.Capabilities.AuthMethods);
+        }
     }
 }

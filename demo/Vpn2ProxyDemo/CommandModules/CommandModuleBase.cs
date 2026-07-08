@@ -1,5 +1,7 @@
 using System.CommandLine;
+using TqkLibrary.VpnClient.Ipsec.Ike.V2.Models;
 using Vpn2ProxyDemo.CommandModules.Enums;
+using Vpn2ProxyDemo.CommandModules.Helpers;
 using Vpn2ProxyDemo.CommandModules.Interfaces;
 using Vpn2ProxyDemo.CommandModules.Models;
 
@@ -25,6 +27,9 @@ namespace Vpn2ProxyDemo.CommandModules
         Option<int> ExtraSessionsOption { get; }
         Option<bool> Ikev2EapOption { get; }
         Option<bool> IpCompOption { get; }
+        Option<string> PpkOption { get; }
+        Option<string> PpkIdOption { get; }
+        Option<bool> PpkMandatoryOption { get; }
         Option<bool> OpenConnectDtlsOption { get; }
 
         readonly Command _command;
@@ -110,6 +115,31 @@ namespace Vpn2ProxyDemo.CommandModules
             };
             _command.Options.Add(IpCompOption);
 
+            PpkOption = new Option<string>("--ppk")
+            {
+                Description = "(Chỉ IKEv2) bí mật Post-quantum Preshared Key (RFC 8784) trộn vào SK_d/SK_pi/SK_pr — client "
+                    + "chào USE_PPK trong IKE_SA_INIT rồi gửi PPK_IDENTITY ở IKE_AUTH. Chuỗi UTF-8, hoặc '0x'+hex ⇒ byte thô. "
+                    + "Chỉ đường PSK (?psk=); KHÔNG dùng chung --ikev2-eap. Scheme khác IKEv2 ⇒ bỏ qua. Trống ⇒ không dùng PPK.",
+                DefaultValueFactory = _ => string.Empty,
+            };
+            _command.Options.Add(PpkOption);
+
+            PpkIdOption = new Option<string>("--ppk-id")
+            {
+                Description = "(Chỉ IKEv2, kèm --ppk) định danh PPK (PPK_ID, RFC 8784 §4.1) gửi trong PPK_IDENTITY. Chuỗi "
+                    + "UTF-8 hoặc '0x'+hex. Mặc định 'ppk1' khi có --ppk mà không đặt id. Phải khớp id cấu hình trên gateway (swanctl).",
+                DefaultValueFactory = _ => string.Empty,
+            };
+            _command.Options.Add(PpkIdOption);
+
+            PpkMandatoryOption = new Option<bool>("--ppk-mandatory")
+            {
+                Description = "(Chỉ IKEv2, kèm --ppk) bắt buộc dùng PPK: gateway không chào USE_PPK ⇒ hủy kết nối. Mặc định "
+                    + "tắt ⇒ tùy chọn (server từ chối ⇒ fallback PSK thường kèm NO_PPK_AUTH).",
+                DefaultValueFactory = _ => false,
+            };
+            _command.Options.Add(PpkMandatoryOption);
+
             OpenConnectDtlsOption = new Option<bool>("--openconnect-dtls")
             {
                 Description = "(Chỉ OpenConnect) bật đường data DTLS 1.2 (UDP) song song khi gateway quảng bá X-DTLS-* (V5.c) — "
@@ -150,6 +180,9 @@ namespace Vpn2ProxyDemo.CommandModules
             int extraSessions = parseResult.GetValue(ExtraSessionsOption);
             bool ikev2Eap = parseResult.GetValue(Ikev2EapOption);
             bool ipComp = parseResult.GetValue(IpCompOption);
+            string ppkSecret = parseResult.GetValue(PpkOption) ?? string.Empty;
+            string ppkId = parseResult.GetValue(PpkIdOption) ?? string.Empty;
+            bool ppkMandatory = parseResult.GetValue(PpkMandatoryOption);
             bool openConnectDtls = parseResult.GetValue(OpenConnectDtlsOption);
 
             // --native-esp chỉ áp cho L2TP/IPsec (P0.8c). Bật với scheme khác ⇒ bỏ qua + cảnh báo rõ (không crash).
@@ -190,6 +223,30 @@ namespace Vpn2ProxyDemo.CommandModules
                 Console.WriteLine($"  !! --ipcomp chỉ dùng cho IKEv2; scheme '{tag}' bỏ qua cờ này.");
                 ipComp = false;
             }
+            // --ppk chỉ áp cho IKEv2 (RFC 8784 PPK wire vào IKEv2). Bật với scheme khác ⇒ bỏ qua + cảnh báo.
+            bool usePpk = !string.IsNullOrEmpty(ppkSecret);
+            if (usePpk && target!.Protocol != VpnProtocol.Ikev2)
+            {
+                Console.WriteLine($"  !! --ppk chỉ dùng cho IKEv2; scheme '{tag}' bỏ qua cờ này.");
+                usePpk = false;
+            }
+            // PPK trộn khóa cho đường PSK/cert; đường EAP bỏ qua PPK (RFC 8784). Bật cả --ppk lẫn --ikev2-eap ⇒ ưu tiên PSK+PPK, tắt EAP.
+            if (usePpk && ikev2Eap)
+            {
+                Console.WriteLine("  !! --ppk (đường PSK) không dùng chung --ikev2-eap; bỏ --ikev2-eap, chạy PSK + PPK.");
+                ikev2Eap = false;
+            }
+            // Dựng cấu hình PPK (RFC 8784) khi hợp lệ: bí mật/định danh UTF-8 hoặc '0x'+hex, id mặc định 'ppk1'.
+            PpkConfiguration? ppk = null;
+            if (usePpk)
+            {
+                try { ppk = PpkOptionFactory.Create(ppkSecret, ppkId, ppkMandatory); }
+                catch (FormatException ex)
+                {
+                    Console.WriteLine($"  !! --ppk/--ppk-id có tiền tố 0x nhưng không phải hex hợp lệ: {ex.Message}");
+                    return 1;
+                }
+            }
             // --openconnect-dtls chỉ áp cho OpenConnect (V.5). Bật với scheme khác ⇒ bỏ qua + cảnh báo.
             if (openConnectDtls && target!.Protocol != VpnProtocol.OpenConnect)
             {
@@ -200,7 +257,7 @@ namespace Vpn2ProxyDemo.CommandModules
             try
             {
                 // Connect VPN theo giao thức đã chọn và trả về tunnel (giữ vòng đời kết nối).
-                await using VpnTunnel tunnel = await ConnectAsync(target, watermarkPath, enableIpv6, useNativeEsp, extraSessions, preferOuterIpv6, ikev2Eap, ipComp, openConnectDtls, ct);
+                await using VpnTunnel tunnel = await ConnectAsync(target, watermarkPath, enableIpv6, useNativeEsp, extraSessions, preferOuterIpv6, ikev2Eap, ipComp, ppk, openConnectDtls, ct);
 
                 // Panel "VPN này hỗ trợ gì" — probe (UDP/LAN ảo) + suy luận (IPv6/listen-external) ngay sau khi tunnel lên,
                 // TRƯỚC hành động (tự bao timeout, nuốt lỗi nên không làm hỏng lệnh).
@@ -257,7 +314,7 @@ namespace Vpn2ProxyDemo.CommandModules
         protected virtual string? ValidateOptions(ParseResult parseResult) => null;
 
         /// <summary>Dispatch connect theo giao thức đã parse về hàm static tương ứng của <see cref="VpnTunnel"/>.</summary>
-        Task<VpnTunnel> ConnectAsync(VpnTarget target, string watermarkPath, bool enableIpv6, bool useNativeEsp, int extraSessions, bool preferOuterIpv6, bool ikev2Eap, bool ipComp, bool openConnectDtls, CancellationToken ct)
+        Task<VpnTunnel> ConnectAsync(VpnTarget target, string watermarkPath, bool enableIpv6, bool useNativeEsp, int extraSessions, bool preferOuterIpv6, bool ikev2Eap, bool ipComp, PpkConfiguration? ppk, bool openConnectDtls, CancellationToken ct)
             => target.Protocol switch
             {
                 // enableIpv6 chỉ áp cho đường PPP (SSTP/L2TP — P1.1); SoftEther/OpenVPN bật IPv6 theo cấu hình driver riêng.
@@ -265,9 +322,10 @@ namespace Vpn2ProxyDemo.CommandModules
                 // useNativeEsp + extraSessions chỉ áp cho L2TP/IPsec (P0.8c native ESP / P1.7 multi-session); caller đã chặn scheme khác.
                 VpnProtocol.Sstp => VpnTunnel.ConnectSstpAsync(target.Host, target.Port, target.User, target.Pass, ct, enableIpv6, preferOuterIpv6),
                 VpnProtocol.L2tp => VpnTunnel.ConnectL2tpAsync(target.Host, target.User, target.Pass, target.PreSharedKey, ct, enableIpv6, useNativeEsp, extraSessions, preferOuterIpv6),
-                // IKEv2-native (V.1): PSK group từ ?psk= (như L2TP). --ikev2-eap ⇒ thêm EAP-MSCHAPv2 với user:pass của URI; --ipcomp ⇒ IPComp DEFLATE (RFC 3173).
+                // IKEv2-native (V.1): PSK group từ ?psk= (như L2TP). --ikev2-eap ⇒ thêm EAP-MSCHAPv2 với user:pass của URI;
+                // --ipcomp ⇒ IPComp DEFLATE (RFC 3173); --ppk ⇒ Post-quantum Preshared Key (RFC 8784) trên đường PSK.
                 VpnProtocol.Ikev2 => VpnTunnel.ConnectIkev2Async(target.Host, target.PreSharedKey,
-                    ikev2Eap ? target.User : null, ikev2Eap ? target.Pass : null, ct, preferOuterIpv6, ipComp),
+                    ikev2Eap ? target.User : null, ikev2Eap ? target.Pass : null, ct, preferOuterIpv6, ipComp, ppk),
                 // Cisco IPsec/EzVPN (V.12): group name từ ?group= + group PSK từ ?psk= (Aggressive Mode) + XAUTH user:pass của URI.
                 VpnProtocol.CiscoIpsec => VpnTunnel.ConnectCiscoIpsecAsync(target.Host, target.GroupName, target.PreSharedKey, target.User, target.Pass, ct),
                 VpnProtocol.SoftEther => VpnTunnel.ConnectSoftEtherAsync(target.Host, target.Port, target.User, target.Pass, target.HubName, watermarkPath, ct),

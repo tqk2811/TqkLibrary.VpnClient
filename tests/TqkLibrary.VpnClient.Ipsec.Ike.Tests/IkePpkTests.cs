@@ -77,10 +77,12 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.Tests
 
             IkeKeyMaterial mixed = keys.WithPpk(PpkSecret);
 
-            // Only SK_d / SK_pi / SK_pr change, each to prf(PPK, original) — computed independently here.
-            Assert.Equal(Hmac(PpkSecret, keys.SkD), mixed.SkD);
-            Assert.Equal(Hmac(PpkSecret, keys.SkPi), mixed.SkPi);
-            Assert.Equal(Hmac(PpkSecret, keys.SkPr), mixed.SkPr);
+            // Only SK_d / SK_pi / SK_pr change, each to prf+(PPK, original) truncated to the original length
+            // (RFC 8784 §3). All three are 32 bytes and the PRF (HMAC-SHA-256) outputs 32, so prf+ is a single
+            // block = prf(PPK, original | 0x01) — the 0x01 counter byte is what RFC 8784 responders compute.
+            Assert.Equal(Hmac(PpkSecret, WithCounter(keys.SkD)), mixed.SkD);
+            Assert.Equal(Hmac(PpkSecret, WithCounter(keys.SkPi)), mixed.SkPi);
+            Assert.Equal(Hmac(PpkSecret, WithCounter(keys.SkPr)), mixed.SkPr);
 
             // Everything else is untouched (so a message already encrypted with SK_ei/SK_er stays readable).
             Assert.Equal(keys.SkeySeed, mixed.SkeySeed);
@@ -226,6 +228,15 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.Tests
         {
             using var h = new HMACSHA256(key);
             return h.ComputeHash(data);
+        }
+
+        // Appends the prf+ first-block counter byte (0x01) — prf+(K, S) starts with T1 = prf(K, S | 0x01) (RFC 7296 §2.13).
+        static byte[] WithCounter(byte[] data)
+        {
+            byte[] result = new byte[data.Length + 1];
+            System.Buffer.BlockCopy(data, 0, result, 0, data.Length);
+            result[data.Length] = 0x01;
+            return result;
         }
 
         static byte[] Bytes(byte seed, int length)

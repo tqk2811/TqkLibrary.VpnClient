@@ -1,0 +1,43 @@
+# =====================================================================
+# lab/ikev2-ppk — compose RIÊNG để VALIDATE LIVE IKEv2 PPK (RFC 8784).
+#
+# 2 container trên CÙNG một Docker bridge tùy biến 'labppknet':
+#   - ikev2-ppk-server : strongSwan 5.9.13 (swanctl) IKEv2 PSK + **PPK** + ESP tunnel + CP
+#   - dotnet-client    : binary demo .NET self-contained (scheme ikev2:// + --ppk)
+#
+# AN TOÀN (giống ikev2-native): KHÔNG network_mode host, KHÔNG privileged-host,
+# strongSwan đụng XFRM chỉ trong netns container ⇒ KHÔNG phá mạng VM.
+# KHÔNG publish cổng ra ngoài: test hoàn toàn nội bộ bridge.
+# =====================================================================
+services:
+  ikev2-ppk-server:
+    build:
+      context: .
+    image: lab-ikev2-ppk:24.04
+    container_name: lab-ikev2-ppk-server
+    restart: "no"
+    cap_add:
+      - NET_ADMIN          # tạo XFRM SA tunnel + virtual-IP route trong netns container (KHÔNG đụng VM)
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv6.conf.all.forwarding=1
+    networks:
+      - labppknet
+
+  dotnet-client:
+    image: mcr.microsoft.com/dotnet/runtime-deps:8.0
+    container_name: lab-ikev2-ppk-client
+    restart: "no"
+    networks:
+      - labppknet
+    volumes:
+      # Mount thư mục publish của VM (đặt binary demo vào ./client-bin trên VM trước).
+      - ./client-bin:/opt/client:ro
+    working_dir: /opt/client
+    entrypoint: ["sleep", "infinity"]
+    depends_on:
+      - ikev2-ppk-server
+
+networks:
+  labppknet:
+    driver: bridge

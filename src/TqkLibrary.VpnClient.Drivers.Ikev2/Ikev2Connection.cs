@@ -54,6 +54,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
         readonly IkeCertificateTrust? _responderTrust;
         readonly IReadOnlyList<TrafficSelector>? _initiatorSelectors;
         readonly IReadOnlyList<TrafficSelector>? _responderSelectors;
+        readonly PpkConfiguration? _ppk;
         readonly bool _requestIpComp;
         readonly AddressFamilyPreference _addressFamilyPreference;
         readonly IHostResolver _hostResolver;
@@ -92,6 +93,11 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
         /// compression (DEFLATE) via IPCOMP_SUPPORTED in IKE_AUTH (RFC 7296 §3.10.1); if the gateway agrees, the ESP
         /// data plane compresses compressible inner packets, otherwise it runs over plain ESP (graceful downgrade).
         /// Default off ⇒ no notify and unchanged behaviour.</para>
+        /// <para>When <paramref name="ppk"/> is supplied, the client mixes a Post-quantum Preshared Key into the IKE
+        /// keys (RFC 8784): it advertises USE_PPK in IKE_SA_INIT and, if the gateway agrees, keys prf(PPK, SK_d/SK_pi/SK_pr)
+        /// and names the PPK with PPK_IDENTITY in IKE_AUTH; an optional (non-mandatory) PPK the gateway declines falls
+        /// back to standard PSK auth with NO_PPK_AUTH, a mandatory one aborts. PPK applies to the PSK/cert path only —
+        /// the EAP path ignores it. Default null ⇒ no USE_PPK is advertised and behaviour is unchanged.</para>
         /// </summary>
         public Ikev2Connection(string host, byte[] preSharedKey, Ikev2ReconnectOptions? reconnectOptions = null,
             AddressFamilyPreference addressFamilyPreference = AddressFamilyPreference.Auto, IHostResolver? hostResolver = null,
@@ -99,6 +105,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
             IkeCertificateTrust? responderTrust = null,
             IReadOnlyList<TrafficSelector>? initiatorSelectors = null,
             IReadOnlyList<TrafficSelector>? responderSelectors = null,
+            PpkConfiguration? ppk = null,
             bool requestIpComp = false,
             ILoggerFactory? loggerFactory = null)
             : base(DriverNameConst, reconnectOptions ?? new Ikev2ReconnectOptions(), clock: null, loggerFactory: loggerFactory)
@@ -110,6 +117,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
             _responderTrust = responderTrust;
             _initiatorSelectors = initiatorSelectors;
             _responderSelectors = responderSelectors;
+            _ppk = ppk;
             _requestIpComp = requestIpComp;
             _addressFamilyPreference = addressFamilyPreference;
             _hostResolver = hostResolver ?? DnsHostResolver.Default;
@@ -150,6 +158,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
                 eapUserName: _eapUserName, eapPassword: _eapPassword,
                 responderTrust: _responderTrust,
                 initiatorSelectors: _initiatorSelectors, responderSelectors: _responderSelectors,
+                ppk: _ppk,
                 requestIpComp: _requestIpComp);
             _ike = ike;
 
