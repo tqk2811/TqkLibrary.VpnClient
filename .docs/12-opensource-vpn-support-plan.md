@@ -62,7 +62,7 @@
 
 - **NAT-traversal `[sau F.F ICE]`:** **NetBird** *(gRPC management + signal + ICE/STUN/TURN)* · Tailscale **disco + DERP** ↔V.7.5 *(Curve25519-boxed ping/pong + WS relay)* · hole-punching **n2n-P2P** (QUERY_PEER/PEER_INFO) + **Nebula relay/punchy** ↔V.7.1/V.7.4.
 - **Post-quantum ↔V.15** *(thứ tự 7383→9242→9370):* Intermediate-Exchange (9242) · Multiple-KE hybrid (9370, `[sau nâng BC 2.5 → ML-KEM]`).
-- **Mesh đắt ↔V.25:** fastd `[sau UMAC]` *(Curve25519+salsa2012+UMAC)* · FreeLAN `[sau P-256 ECDH]` *(FSCP cert/RSA+ECDHE+AES-GCM)* · cjdns `[XSalsa20-Poly1305 + crypto_box XONG — chỉ còn routing engine]` *(CryptoAuth + crypto-routed IPv6 fc00::/8 + DHT — routing engine khổng lồ, dự án gần ngừng)* · Yggdrasil `[BLAKE2b XONG — chỉ còn wire tree-routing/DHT]` *(Ed25519+Noise+ChaCha20, IPv6 200::/7, tree-routing+DHT — wire chưa ổn định)*.
+- **Mesh đắt ↔V.25:** fastd `[sau UMAC]` *(Curve25519+salsa2012+UMAC)* · FreeLAN `[P-256 ECDH XONG — chỉ còn FSCP wire]` *(FSCP cert/RSA+ECDHE+AES-GCM)* · cjdns `[XSalsa20-Poly1305 + crypto_box XONG — chỉ còn routing engine]` *(CryptoAuth + crypto-routed IPv6 fc00::/8 + DHT — routing engine khổng lồ, dự án gần ngừng)* · Yggdrasil `[BLAKE2b XONG — chỉ còn wire tree-routing/DHT]` *(Ed25519+Noise+ChaCha20, IPv6 200::/7, tree-routing+DHT — wire chưa ổn định)*.
 - **Routing nhà mạng (gần out-of-scope userspace) ↔V.24/V.23:** SRv6 (8754 SRH + 8986 + 9800 cSID — cần SR control + kernel seg6) · PWE3/Ethernet-over-MPLS (3985/4448/4385 — cần control plane MPLS/LDP).
 - **Phần cứng ↔V.16:** EAP-SIM/AKA/AKA' (4186/4187/9048 — cần SIM/USIM qua PC/SC).
 
@@ -75,7 +75,7 @@
 | **UMAC** | **THIẾU** | fastd (method mặc định salsa2012+umac) | Port UMAC (UHASH + AES) — đắt hơn |
 | ~~**BLAKE2b**~~ **XONG** | **CÓ** ([`Blake2b`](../src/TqkLibrary.VpnClient.Crypto/Blake2b.cs) + [`Blake2bKeyedMac`](../src/TqkLibrary.VpnClient.Crypto/Blake2bKeyedMac.cs), output 1..64B) | (đã trám — Yggdrasil node-ID/tree hash) | Wrapper BC `Blake2bDigest`; KAT RFC 7693 App.A + blake2b-kat.txt |
 | **ML-KEM / Kyber** | **Chưa wired** (BC 2.4 có Kyber tên cũ; `MLKem` FIPS 203 từ BC ≥2.5) | IKEv2 PQ hybrid (RFC 9370) | Nâng BC 2.4→2.5 rồi bind `MLKem` vào IKE transform |
-| **P-256 ECDH keygen** | Chỉ **verify** ECDSA (X509/BCL) | Nebula-P256 networks, FreeLAN ECDHE | Thêm ECDH P-256 (BC `ECDHBasicAgreement`) |
+| ~~**P-256 ECDH keygen**~~ **XONG** | **CÓ** ([`NistP256DhGroup`](../src/TqkLibrary.VpnClient.Crypto/NistP256DhGroup.cs), IANA group 19, wire x‖y 64B / shared x 32B) | (đã trám — mở khóa Nebula-P256 networks + FreeLAN ECDHE; **còn phần giao thức wire**) | ECDH P-256 qua BC `CustomNamedCurves("P-256")` + `ECPoint.Multiply`; KAT RFC 5903 §8.1 byte-exact |
 | **RFC 8784 PPK** | Làm được NGAY | (PQ rẻ, không cần KEM) | Trộn PRF bằng `PrfPlus`/HMAC sẵn có |
 
 **Đã có đủ** (không phải gap): Salsa20 (full/12), **HSalsa20 + XSalsa20 + XSalsa20-Poly1305 (NaCl `crypto_secretbox`) + NaclBox (NaCl `crypto_box` = Curve25519 + XSalsa20-Poly1305, XONG — KAT byte-exact libsodium core2/core3 + secretbox.exp + box.c)**, ChaCha20, ChaCha20-Poly1305, XChaCha20-Poly1305, Poly1305, AES-CBC/CTR/GCM, Blowfish, RC4/MPPE, Speck, HMAC-SHA1/256/384/512+MD5, SHA-0/1/256/512, BLAKE2s, **BLAKE2b + BLAKE2b-keyed (XONG — RFC 7693 App.A + blake2b-kat.txt)**, MD4/5, Pearson, Curve25519/X25519, Ed25519, DH-modp(2/14), Noise `SymmetricState` (swap cipher/hash tự do). ⇒ **PeerVPN, GVPE, n2n-transform, vtun-cipher, IKEv2-PPK/8229, EAP-pack, obfuscation, WG-control-plane, translation-engine đều KHÔNG vướng crypto; nacltai/cjdns hết vướng crypto (còn wire giao thức), Yggdrasil hết vướng BLAKE2b.**
@@ -97,7 +97,7 @@ F.A ─▶ V.29 (AmneziaWG, stunnel, wstunnel, OpenVPN-XOR...)
 F.B ─▶ V.26 (innernet ─▶ wesher/Pritunl/Netmaker-static)
 F.C ─▶ V.16 (EAP-pack) ─▶ (dùng lại) V.9/V.13
 F.D ─▶ V.9 / V.13 / V.27  (SSL-VPN doanh nghiệp)
-F.E (XSalsa20-Poly1305/secretbox + NaclBox crypto_box XONG) ─▶ mesh NaCl (Quicktun/cjdns) chỉ còn wire giao thức; BLAKE2b XONG ─▶ Yggdrasil hết vướng crypto (còn wire); PQ, fastd(UMAC), FreeLAN(P-256) vẫn chờ primitive khác
+F.E (XSalsa20-Poly1305/secretbox + NaclBox crypto_box XONG) ─▶ mesh NaCl (Quicktun/cjdns) chỉ còn wire giao thức; BLAKE2b XONG ─▶ Yggdrasil hết vướng crypto (còn wire); P-256 ECDH XONG ─▶ Nebula-P256/FreeLAN ECDHE hết vướng crypto (còn wire); PQ, fastd(UMAC) vẫn chờ primitive khác
 F.9b ─▶ V.18 (6to4/6rd/ISATAP/DS-Lite/MAP-E)
 F.F ─▶ V.26-NetBird, disco, hole-punch  (chặn Wave 3)
 SIIT ─▶ MAP-T + 464XLAT + NAT64  (V.19)
