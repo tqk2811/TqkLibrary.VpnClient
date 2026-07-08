@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <Description>IPsec: ESP transform (RFC 4303) under Esp/, IKE under Ike/ — IKEv1 Main+Quick Mode (Ike/V1) and IKEv2 (Ike/V2) — NAT-T UDP framing/channel (RFC 3948, port 500/4500) under Nat/, and IP payload compression (IPComp, RFC 3173 DEFLATE) codec under IpComp/.</Description>
+    <Description>IPsec: ESP transform (RFC 4303) under Esp/, IKE under Ike/ — IKEv1 Main+Quick Mode (Ike/V1) and IKEv2 (Ike/V2) — NAT-T UDP framing/channel (RFC 3948, port 500/4500) under Nat/, IP payload compression (IPComp, RFC 3173 DEFLATE) codec under IpComp/, and Authentication Header (AH, RFC 4302) SA under Ah/.</Description>
   </PropertyGroup>
 
   <ItemGroup>
