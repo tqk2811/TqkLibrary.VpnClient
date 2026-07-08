@@ -8,6 +8,7 @@ using TqkLibrary.VpnClient.Ipsec.Ike.V2.Eap;
 using TqkLibrary.VpnClient.Ipsec.Ike.V2.Enums;
 using TqkLibrary.VpnClient.Ipsec.Ike.V2.Models;
 using TqkLibrary.VpnClient.Ipsec.Ike.V2.Payloads;
+using TqkLibrary.VpnClient.Ipsec.IpComp.Enums;
 
 namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
 {
@@ -30,6 +31,12 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
         readonly IReadOnlyList<TrafficSelector>? _initiatorSelectors;
         readonly IReadOnlyList<TrafficSelector>? _responderSelectors;
         readonly PpkConfiguration? _ppk;
+        readonly bool _requestIpComp;
+
+        // RFC 3173 §4.1: the CPI we advertise for our own inbound direction. We use the well-known DEFLATE CPI (2)
+        // rather than a per-SA allocated CPI (>=256) so the responder stamps CPI=2 on packets it sends us, which the
+        // receive-side IpCompCodec (DEFLATE-only) accepts unchanged; outbound we stamp the responder's CPI instead.
+        const ushort IpCompInboundCpi = (ushort)IpCompTransform.Deflate;
 
         // RFC 8784 (PPK) state, decided in ProcessInitResponse from whether the responder echoed USE_PPK:
         //  - _ppkAuthKeys : the PPK-mixed key set (SK_d/SK_pi/SK_pr) used for AUTH + CHILD_SA when a PPK is active.
@@ -72,6 +79,11 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
         /// SK_d/SK_pi/SK_pr with the PPK before computing AUTH and names the PPK via PPK_IDENTITY in IKE_AUTH. A
         /// mandatory PPK aborts when the responder does not echo USE_PPK; an optional one falls back to standard
         /// authentication and attaches NO_PPK_AUTH. Applies to the PSK/cert IKE_AUTH path only.</para>
+        /// <para>When <paramref name="requestIpComp"/> is true, the client advertises IPCOMP_SUPPORTED (RFC 7296
+        /// §3.10.1, DEFLATE) beside the CHILD_SA in IKE_AUTH and, if the responder answers with its own
+        /// IPCOMP_SUPPORTED, exposes the responder's CPI via <see cref="NegotiatedIpCompCpi"/> for the ESP data plane
+        /// (RFC 3173 compress-then-encrypt). A responder that omits it leaves IPComp inactive — the tunnel still runs
+        /// over plain ESP (graceful downgrade). Default off ⇒ no notify is sent and behaviour is unchanged.</para>
         /// </summary>
         public IkeClient(byte[] preSharedKey, IdentificationPayload identity, bool requestTransportMode = true,
             byte[]? initiatorSpi = null, bool requestConfiguration = false,
@@ -79,7 +91,8 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             IkeCertificateTrust? responderTrust = null,
             IReadOnlyList<TrafficSelector>? initiatorSelectors = null,
             IReadOnlyList<TrafficSelector>? responderSelectors = null,
-            PpkConfiguration? ppk = null)
+            PpkConfiguration? ppk = null,
+            bool requestIpComp = false)
         {
             _preSharedKey = preSharedKey;
             _identity = identity;
@@ -91,6 +104,7 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             _initiatorSelectors = initiatorSelectors;
             _responderSelectors = responderSelectors;
             _ppk = ppk;
+            _requestIpComp = requestIpComp;
             _initiator = new IkeSaInitiator(initiatorSpi);
             _currentInitiatorSpi = _initiator.InitiatorSpi;
             ChildInboundSpi = IkeRandom.NextBytes(4);
@@ -114,6 +128,14 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
 
         /// <summary>The ESP suite the responder selected in IKE_AUTH, valid after a successful <see cref="ProcessAuthResponse"/>.</summary>
         public EspSuiteSelection? NegotiatedEsp { get; private set; }
+
+        /// <summary>
+        /// The IPComp CPI the responder advertised in its IKE_AUTH IPCOMP_SUPPORTED (RFC 7296 §3.10.1) — the CPI we
+        /// stamp in the IPComp header of packets we send it (RFC 3173). Null when IPComp was not requested or the
+        /// responder offered no DEFLATE IPCOMP_SUPPORTED, in which case the tunnel runs over plain ESP (graceful
+        /// downgrade). Valid after a successful <see cref="ProcessAuthResponse"/> / EAP completion.
+        /// </summary>
+        public ushort? NegotiatedIpCompCpi { get; private set; }
 
         /// <summary>
         /// The Configuration Payload the responder returned (virtual IP/DNS), or null when none was requested or sent.
@@ -214,8 +236,17 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
                 message.Payloads.Add(NotifyPayload.Create(IkeNotifyMessageType.UseTransportMode, Array.Empty<byte>()));
 
             AddPpkAuthNotifies(message);
+            AddIpCompNotify(message);
 
             return _cipher.EncryptMessage(message);
+        }
+
+        // RFC 7296 §3.10.1: when IPComp is requested, advertise IPCOMP_SUPPORTED (our inbound CPI ‖ DEFLATE transform)
+        // beside the CHILD_SA so the responder may compress packets it sends us and echo its own CPI for our outbound.
+        void AddIpCompNotify(IkeMessage message)
+        {
+            if (_requestIpComp)
+                message.Payloads.Add(IpCompSupportedNotify.Deflate(IpCompInboundCpi).ToNotifyPayload());
         }
 
         // RFC 8784 §4 IKE_AUTH notifies: PPK_IDENTITY names the PPK in use (its wire PPK_ID, §4.1); NO_PPK_AUTH carries
@@ -266,8 +297,14 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             // CHILD_SA KEYMAT seeds from SK_d — the PPK-mixed one when a PPK is active (RFC 8784 §3).
             ChildKeys = ChildSaKeys.Derive(_prf, AuthKeys.SkD, _initiator.Nonce, _initiator.PeerNonce,
                 selection.EncryptionKeyLengthBytes, selection.SecondSliceLengthBytes);
+            NegotiatedIpCompCpi = ParseResponderIpCompCpi(response);
             return true;
         }
+
+        // RFC 7296 §3.10.1: adopt the responder's IPComp CPI (from its DEFLATE IPCOMP_SUPPORTED) as the CPI we stamp
+        // outbound. No such notify (or IPComp not requested) → null, so IPComp stays inactive and ESP runs plain.
+        ushort? ParseResponderIpCompCpi(IkeMessage response)
+            => _requestIpComp ? IpCompSupportedNotify.FindDeflateCpi(response.Notifies()) : null;
 
         /// <summary>
         /// Verifies the responder's AUTH. When the responder authenticated with a digital signature (RFC 7296 §2.15
@@ -374,6 +411,7 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             message.Payloads.Add(BuildResponderTs());
             if (_requestTransportMode)
                 message.Payloads.Add(NotifyPayload.Create(IkeNotifyMessageType.UseTransportMode, Array.Empty<byte>()));
+            AddIpCompNotify(message);
 
             return _cipher.EncryptMessage(message);
         }
@@ -459,6 +497,7 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2
             Configuration = response.Find<ConfigurationPayload>();
             ChildKeys = ChildSaKeys.Derive(_prf, _initiator.Keys.SkD, _initiator.Nonce, _initiator.PeerNonce,
                 selection.EncryptionKeyLengthBytes, selection.SecondSliceLengthBytes);
+            NegotiatedIpCompCpi = ParseResponderIpCompCpi(response);
 
             _nextMessageId = _eapMessageId; // post-auth exchanges continue after the EAP message IDs
             EapEstablished = true;

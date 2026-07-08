@@ -15,6 +15,9 @@ namespace TqkLibrary.VpnClient.Ipsec.Esp
         /// <summary>Tunnel-mode Next Header for an encapsulated IPv6 packet (IP protocol 41).</summary>
         public const byte NextHeaderIpv6 = 41;
 
+        /// <summary>Next Header for an IPComp datagram carried inside ESP (IP protocol 108, RFC 3173 payload compression).</summary>
+        public const byte NextHeaderIpComp = 108;
+
         /// <summary>The "no next header" dummy-packet marker (RFC 4303 §2.6).</summary>
         public const byte NextHeaderNone = 59;
 

@@ -34,6 +34,19 @@ namespace TqkLibrary.VpnClient.Ipsec.IpComp
         /// <param name="nextHeader">The IP protocol number of <paramref name="payload"/>, recorded in the IPComp header.</param>
         /// <param name="ipcompDatagram">The IPComp datagram when <c>true</c> is returned; otherwise an empty array.</param>
         public static bool TryCompress(ReadOnlySpan<byte> payload, byte nextHeader, out byte[] ipcompDatagram)
+            => TryCompress(payload, nextHeader, (ushort)IpCompTransform.Deflate, out ipcompDatagram);
+
+        /// <summary>
+        /// Same as <see cref="TryCompress(ReadOnlySpan{byte}, byte, out byte[])"/> but stamps an explicit
+        /// <paramref name="cpi"/> in the IPComp header (RFC 3173 §3). IKEv2 negotiates a per-SA CPI in the peer's
+        /// IPCOMP_SUPPORTED notification (RFC 7296 §3.10.1) — the CPI the peer expects on packets we send it — so the
+        /// outbound data plane passes that CPI here. The transform is still DEFLATE (RFC 2394); only the CPI changes.
+        /// </summary>
+        /// <param name="payload">The IP payload to compress.</param>
+        /// <param name="nextHeader">The IP protocol number of <paramref name="payload"/>, recorded in the IPComp header.</param>
+        /// <param name="cpi">The Compression Parameter Index to stamp in the IPComp header (the peer's negotiated CPI).</param>
+        /// <param name="ipcompDatagram">The IPComp datagram when <c>true</c> is returned; otherwise an empty array.</param>
+        public static bool TryCompress(ReadOnlySpan<byte> payload, byte nextHeader, ushort cpi, out byte[] ipcompDatagram)
         {
             byte[] compressed = Deflate(payload);
             // Non-expansion policy (RFC 3173 §2.2): the IPComp datagram (header + compressed) must be STRICTLY smaller
@@ -45,7 +58,7 @@ namespace TqkLibrary.VpnClient.Ipsec.IpComp
             }
 
             byte[] datagram = new byte[IpCompHeader.Size + compressed.Length];
-            IpCompHeader.Deflate(nextHeader).WriteTo(datagram);
+            new IpCompHeader(nextHeader, cpi).WriteTo(datagram);
             compressed.CopyTo(datagram.AsSpan(IpCompHeader.Size));
             ipcompDatagram = datagram;
             return true;

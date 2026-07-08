@@ -15,6 +15,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
         readonly IkeCertificateTrust? _responderTrust;
         readonly IReadOnlyList<TrafficSelector>? _initiatorSelectors;
         readonly IReadOnlyList<TrafficSelector>? _responderSelectors;
+        readonly bool _requestIpComp;
 
         /// <summary>
         /// Creates the driver; <paramref name="reconnectOptions"/> tunes (or disables) auto-reconnect and
@@ -24,17 +25,22 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
         /// signature is rejected with <see cref="Abstractions.Drivers.VpnServerRejectedException"/>. The optional
         /// <paramref name="initiatorSelectors"/> / <paramref name="responderSelectors"/> request several traffic
         /// selectors (split-tunnel subnets, RFC 7296 §3.13); null offers a single match-all IPv4 selector as before.</para>
+        /// <para>When <paramref name="requestIpComp"/> is true, the driver negotiates RFC 3173 IPComp payload
+        /// compression (DEFLATE) via IPCOMP_SUPPORTED (RFC 7296 §3.10.1); the gateway must also offer it or the tunnel
+        /// runs over plain ESP (graceful downgrade). Default off ⇒ unchanged behaviour.</para>
         /// </summary>
         public Ikev2Driver(Ikev2ReconnectOptions? reconnectOptions = null, ILoggerFactory? loggerFactory = null,
             IkeCertificateTrust? responderTrust = null,
             IReadOnlyList<TrafficSelector>? initiatorSelectors = null,
-            IReadOnlyList<TrafficSelector>? responderSelectors = null)
+            IReadOnlyList<TrafficSelector>? responderSelectors = null,
+            bool requestIpComp = false)
         {
             _reconnectOptions = reconnectOptions;
             _loggerFactory = loggerFactory;
             _responderTrust = responderTrust;
             _initiatorSelectors = initiatorSelectors;
             _responderSelectors = responderSelectors;
+            _requestIpComp = requestIpComp;
         }
 
         /// <inheritdoc/>
@@ -79,6 +85,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
                 responderTrust: _responderTrust,
                 initiatorSelectors: _initiatorSelectors,
                 responderSelectors: _responderSelectors,
+                requestIpComp: _requestIpComp,
                 loggerFactory: _loggerFactory);
             try
             {

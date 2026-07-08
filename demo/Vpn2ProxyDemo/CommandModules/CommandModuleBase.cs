@@ -24,6 +24,7 @@ namespace Vpn2ProxyDemo.CommandModules
         Option<bool> NativeEspOption { get; }
         Option<int> ExtraSessionsOption { get; }
         Option<bool> Ikev2EapOption { get; }
+        Option<bool> IpCompOption { get; }
         Option<bool> OpenConnectDtlsOption { get; }
 
         readonly Command _command;
@@ -100,6 +101,15 @@ namespace Vpn2ProxyDemo.CommandModules
             };
             _command.Options.Add(Ikev2EapOption);
 
+            IpCompOption = new Option<bool>("--ipcomp")
+            {
+                Description = "(Chỉ IKEv2) thương lượng IPComp nén payload (RFC 3173 DEFLATE) qua IPCOMP_SUPPORTED trong "
+                    + "IKE_AUTH (RFC 7296 §3.10.1). Server phải cùng chào (strongSwan compress=yes) — nếu không tunnel "
+                    + "chạy ESP thường (graceful downgrade). Scheme khác IKEv2 ⇒ bỏ qua. Mặc định tắt.",
+                DefaultValueFactory = _ => false,
+            };
+            _command.Options.Add(IpCompOption);
+
             OpenConnectDtlsOption = new Option<bool>("--openconnect-dtls")
             {
                 Description = "(Chỉ OpenConnect) bật đường data DTLS 1.2 (UDP) song song khi gateway quảng bá X-DTLS-* (V5.c) — "
@@ -139,6 +149,7 @@ namespace Vpn2ProxyDemo.CommandModules
             bool useNativeEsp = parseResult.GetValue(NativeEspOption);
             int extraSessions = parseResult.GetValue(ExtraSessionsOption);
             bool ikev2Eap = parseResult.GetValue(Ikev2EapOption);
+            bool ipComp = parseResult.GetValue(IpCompOption);
             bool openConnectDtls = parseResult.GetValue(OpenConnectDtlsOption);
 
             // --native-esp chỉ áp cho L2TP/IPsec (P0.8c). Bật với scheme khác ⇒ bỏ qua + cảnh báo rõ (không crash).
@@ -173,6 +184,12 @@ namespace Vpn2ProxyDemo.CommandModules
                 Console.WriteLine($"  !! --ikev2-eap chỉ dùng cho IKEv2; scheme '{tag}' bỏ qua cờ này.");
                 ikev2Eap = false;
             }
+            // --ipcomp chỉ áp cho IKEv2 (RFC 3173 wire vào IKEv2). Bật với scheme khác ⇒ bỏ qua + cảnh báo.
+            if (ipComp && target!.Protocol != VpnProtocol.Ikev2)
+            {
+                Console.WriteLine($"  !! --ipcomp chỉ dùng cho IKEv2; scheme '{tag}' bỏ qua cờ này.");
+                ipComp = false;
+            }
             // --openconnect-dtls chỉ áp cho OpenConnect (V.5). Bật với scheme khác ⇒ bỏ qua + cảnh báo.
             if (openConnectDtls && target!.Protocol != VpnProtocol.OpenConnect)
             {
@@ -183,7 +200,7 @@ namespace Vpn2ProxyDemo.CommandModules
             try
             {
                 // Connect VPN theo giao thức đã chọn và trả về tunnel (giữ vòng đời kết nối).
-                await using VpnTunnel tunnel = await ConnectAsync(target, watermarkPath, enableIpv6, useNativeEsp, extraSessions, preferOuterIpv6, ikev2Eap, openConnectDtls, ct);
+                await using VpnTunnel tunnel = await ConnectAsync(target, watermarkPath, enableIpv6, useNativeEsp, extraSessions, preferOuterIpv6, ikev2Eap, ipComp, openConnectDtls, ct);
 
                 // Panel "VPN này hỗ trợ gì" — probe (UDP/LAN ảo) + suy luận (IPv6/listen-external) ngay sau khi tunnel lên,
                 // TRƯỚC hành động (tự bao timeout, nuốt lỗi nên không làm hỏng lệnh).
@@ -240,7 +257,7 @@ namespace Vpn2ProxyDemo.CommandModules
         protected virtual string? ValidateOptions(ParseResult parseResult) => null;
 
         /// <summary>Dispatch connect theo giao thức đã parse về hàm static tương ứng của <see cref="VpnTunnel"/>.</summary>
-        Task<VpnTunnel> ConnectAsync(VpnTarget target, string watermarkPath, bool enableIpv6, bool useNativeEsp, int extraSessions, bool preferOuterIpv6, bool ikev2Eap, bool openConnectDtls, CancellationToken ct)
+        Task<VpnTunnel> ConnectAsync(VpnTarget target, string watermarkPath, bool enableIpv6, bool useNativeEsp, int extraSessions, bool preferOuterIpv6, bool ikev2Eap, bool ipComp, bool openConnectDtls, CancellationToken ct)
             => target.Protocol switch
             {
                 // enableIpv6 chỉ áp cho đường PPP (SSTP/L2TP — P1.1); SoftEther/OpenVPN bật IPv6 theo cấu hình driver riêng.
@@ -248,9 +265,9 @@ namespace Vpn2ProxyDemo.CommandModules
                 // useNativeEsp + extraSessions chỉ áp cho L2TP/IPsec (P0.8c native ESP / P1.7 multi-session); caller đã chặn scheme khác.
                 VpnProtocol.Sstp => VpnTunnel.ConnectSstpAsync(target.Host, target.Port, target.User, target.Pass, ct, enableIpv6, preferOuterIpv6),
                 VpnProtocol.L2tp => VpnTunnel.ConnectL2tpAsync(target.Host, target.User, target.Pass, target.PreSharedKey, ct, enableIpv6, useNativeEsp, extraSessions, preferOuterIpv6),
-                // IKEv2-native (V.1): PSK group từ ?psk= (như L2TP). --ikev2-eap ⇒ thêm EAP-MSCHAPv2 với user:pass của URI.
+                // IKEv2-native (V.1): PSK group từ ?psk= (như L2TP). --ikev2-eap ⇒ thêm EAP-MSCHAPv2 với user:pass của URI; --ipcomp ⇒ IPComp DEFLATE (RFC 3173).
                 VpnProtocol.Ikev2 => VpnTunnel.ConnectIkev2Async(target.Host, target.PreSharedKey,
-                    ikev2Eap ? target.User : null, ikev2Eap ? target.Pass : null, ct, preferOuterIpv6),
+                    ikev2Eap ? target.User : null, ikev2Eap ? target.Pass : null, ct, preferOuterIpv6, ipComp),
                 // Cisco IPsec/EzVPN (V.12): group name từ ?group= + group PSK từ ?psk= (Aggressive Mode) + XAUTH user:pass của URI.
                 VpnProtocol.CiscoIpsec => VpnTunnel.ConnectCiscoIpsecAsync(target.Host, target.GroupName, target.PreSharedKey, target.User, target.Pass, ct),
                 VpnProtocol.SoftEther => VpnTunnel.ConnectSoftEtherAsync(target.Host, target.Port, target.User, target.Pass, target.HubName, watermarkPath, ct),

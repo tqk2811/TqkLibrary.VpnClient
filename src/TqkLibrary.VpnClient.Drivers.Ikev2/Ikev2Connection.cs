@@ -54,6 +54,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
         readonly IkeCertificateTrust? _responderTrust;
         readonly IReadOnlyList<TrafficSelector>? _initiatorSelectors;
         readonly IReadOnlyList<TrafficSelector>? _responderSelectors;
+        readonly bool _requestIpComp;
         readonly AddressFamilyPreference _addressFamilyPreference;
         readonly IHostResolver _hostResolver;
         readonly SemaphoreSlim _exchangeGate = new(1, 1); // one post-handshake request/response in flight at a time
@@ -87,6 +88,10 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
         /// several traffic selectors (RFC 7296 §3.13); null offers the usual single match-all IPv4 selector.
         /// <paramref name="loggerFactory"/> receives diagnostic traces (handshake/DPD/rekey/reconnect); null logs to a
         /// no-op logger.
+        /// <para>When <paramref name="requestIpComp"/> is true, the client negotiates RFC 3173 IPComp payload
+        /// compression (DEFLATE) via IPCOMP_SUPPORTED in IKE_AUTH (RFC 7296 §3.10.1); if the gateway agrees, the ESP
+        /// data plane compresses compressible inner packets, otherwise it runs over plain ESP (graceful downgrade).
+        /// Default off ⇒ no notify and unchanged behaviour.</para>
         /// </summary>
         public Ikev2Connection(string host, byte[] preSharedKey, Ikev2ReconnectOptions? reconnectOptions = null,
             AddressFamilyPreference addressFamilyPreference = AddressFamilyPreference.Auto, IHostResolver? hostResolver = null,
@@ -94,6 +99,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
             IkeCertificateTrust? responderTrust = null,
             IReadOnlyList<TrafficSelector>? initiatorSelectors = null,
             IReadOnlyList<TrafficSelector>? responderSelectors = null,
+            bool requestIpComp = false,
             ILoggerFactory? loggerFactory = null)
             : base(DriverNameConst, reconnectOptions ?? new Ikev2ReconnectOptions(), clock: null, loggerFactory: loggerFactory)
         {
@@ -104,6 +110,7 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
             _responderTrust = responderTrust;
             _initiatorSelectors = initiatorSelectors;
             _responderSelectors = responderSelectors;
+            _requestIpComp = requestIpComp;
             _addressFamilyPreference = addressFamilyPreference;
             _hostResolver = hostResolver ?? DnsHostResolver.Default;
         }
@@ -142,7 +149,8 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
             var ike = new IkeClient(_preSharedKey, BuildIdentity(useEap), requestTransportMode: false, requestConfiguration: true,
                 eapUserName: _eapUserName, eapPassword: _eapPassword,
                 responderTrust: _responderTrust,
-                initiatorSelectors: _initiatorSelectors, responderSelectors: _responderSelectors);
+                initiatorSelectors: _initiatorSelectors, responderSelectors: _responderSelectors,
+                requestIpComp: _requestIpComp);
             _ike = ike;
 
             // --- IKE_SA_INIT on UDP/500 ---
@@ -176,7 +184,12 @@ namespace TqkLibrary.VpnClient.Drivers.Ikev2
 
             // --- ESP tunnel-mode data plane straight to the IP channel ---
             EspSession esp = BuildEspSession(ike, Logger);
-            var dataPlane = new EspTunnelChannel(esp, datagram => natt.SendEspAsync(datagram), Mtu);
+            // IPComp (RFC 3173): active only when we asked and the gateway echoed IPCOMP_SUPPORTED (RFC 7296 §3.10.1);
+            // otherwise the CPI is null and the data plane runs plain ESP (graceful downgrade).
+            if (ike.NegotiatedIpCompCpi is ushort ipcompCpi)
+                Logger.LogHandshake(DriverName, $"IPComp negotiated (RFC 3173 DEFLATE, peer CPI=0x{ipcompCpi:x4})");
+            var dataPlane = new EspTunnelChannel(esp, datagram => natt.SendEspAsync(datagram), Mtu,
+                outboundIpCompCpi: ike.NegotiatedIpCompCpi);
             dataPlane.RekeyNeeded += OnRekeyNeeded; // outbound ESP sequence nearing 2^32 → rekey before it wraps
             _dataPlane = dataPlane;
             _espActive = true;

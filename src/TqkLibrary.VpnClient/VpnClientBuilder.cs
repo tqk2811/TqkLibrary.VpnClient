@@ -173,6 +173,16 @@ namespace TqkLibrary.VpnClient
         public VpnClientBuilder UseIkev2(Ikev2ReconnectOptions reconnectOptions) => AddDriver(new Ikev2Driver(reconnectOptions));
 
         /// <summary>
+        /// Registers the IKEv2-native driver with RFC 3173 IPComp payload compression (DEFLATE) negotiated in IKE_AUTH
+        /// via IPCOMP_SUPPORTED (RFC 7296 §3.10.1). When the gateway also offers it, compressible inner packets are
+        /// DEFLATE-compressed before ESP ("compress-then-encrypt"); when it does not, the tunnel runs over plain ESP
+        /// unchanged (graceful downgrade). Auto-reconnect is enabled by default unless <paramref name="reconnectOptions"/>
+        /// disables it.
+        /// </summary>
+        public VpnClientBuilder UseIkev2WithIpComp(Ikev2ReconnectOptions? reconnectOptions = null)
+            => AddDriver(new Ikev2Driver(reconnectOptions, requestIpComp: true));
+
+        /// <summary>
         /// Registers the IKEv2-native driver that verifies the gateway by <b>certificate</b> (RFC 7296 §2.15 digital
         /// signature): the responder's CERT must be trusted by <paramref name="responderTrust"/> and its AUTH signature
         /// must verify, otherwise the connection is refused. Auto-reconnect is enabled by default unless

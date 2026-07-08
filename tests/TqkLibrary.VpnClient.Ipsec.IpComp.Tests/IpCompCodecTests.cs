@@ -80,6 +80,23 @@ namespace TqkLibrary.VpnClient.Ipsec.IpComp.Tests
             Assert.Equal((byte)0, datagram[1]); // Flags reserved (RFC 3173 §3)
         }
 
+        [Fact]
+        public void TryCompress_WithExplicitCpi_StampsThatCpiInHeader()
+        {
+            // IKEv2 stamps the peer's negotiated per-SA CPI (RFC 7296 §3.10.1) instead of the well-known DEFLATE 2.
+            const ushort peerCpi = 0x0100; // an allocated CPI (>=256), the strongSwan-style form
+            byte[] payload = Repeated(1000, 0x00);
+
+            Assert.True(IpCompCodec.TryCompress(payload, NextHeaderIpv4, peerCpi, out byte[] datagram));
+
+            IpCompHeader header = IpCompHeader.Parse(datagram);
+            Assert.Equal(NextHeaderIpv4, header.NextHeader);
+            Assert.Equal(peerCpi, header.Cpi);                       // the explicit CPI travelled onto the wire
+            // The default overload is unchanged — still stamps the well-known DEFLATE CPI (2).
+            Assert.True(IpCompCodec.TryCompress(payload, NextHeaderIpv4, out byte[] deflateDatagram));
+            Assert.Equal((ushort)IpCompTransform.Deflate, IpCompHeader.Parse(deflateDatagram).Cpi);
+        }
+
         [Theory]
         [InlineData(1)]
         [InlineData(3)]

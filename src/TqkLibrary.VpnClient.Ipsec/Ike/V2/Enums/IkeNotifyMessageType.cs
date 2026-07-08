@@ -12,6 +12,14 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V2.Enums
         /// <summary>This is the initiator's only/first SA (status).</summary>
         InitialContact = 16384,
 
+        /// <summary>
+        /// The sender supports IP Payload Compression for this CHILD_SA (RFC 7296 §3.10.1, status). Notification data =
+        /// a 2-octet IPComp CPI followed by a 1-octet IPComp transform ID (2 = DEFLATE, RFC 2394). Sent beside the
+        /// CHILD_SA in IKE_AUTH; the CPI a side advertises is the CPI its peer stamps in the IPComp header of packets
+        /// sent back to it. When the responder omits it, IPComp is simply not active (the tunnel runs over plain ESP).
+        /// </summary>
+        IpcompSupported = 16387,
+
         /// <summary>Hash of initiator's IP+port for NAT detection.</summary>
         NatDetectionSourceIp = 16388,
 

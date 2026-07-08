@@ -193,8 +193,10 @@ namespace Vpn2ProxyDemo
         /// Driver chạy forced NAT-T (UDP 500→4500) → IKE_SA_INIT → IKE_AUTH → Config Payload (virtual IP/DNS) → ESP
         /// tunnel mode → <see cref="TcpIpStack"/> trực tiếp (KHÔNG PPP, V.1). Khi <paramref name="eapUser"/>/<paramref name="eapPass"/>
         /// đều khác null thì initiator dùng EAP-MSCHAPv2 (RFC 7296 §2.16) thay cho PSK AUTH; null ⇒ PSK-only.
-        /// <paramref name="preferOuterIpv6"/>: ưu tiên IPv6 cho transport NGOÀI (resolve AAAA, IKE/ESP-in-UDP over IPv6) — P1.2.</summary>
-        public static async Task<VpnTunnel> ConnectIkev2Async(string host, string preSharedKey, string? eapUser, string? eapPass, CancellationToken ct, bool preferOuterIpv6 = false)
+        /// <paramref name="preferOuterIpv6"/>: ưu tiên IPv6 cho transport NGOÀI (resolve AAAA, IKE/ESP-in-UDP over IPv6) — P1.2.
+        /// <paramref name="ipComp"/>: thương lượng IPComp (RFC 3173 DEFLATE) qua IPCOMP_SUPPORTED trong IKE_AUTH (RFC 7296 §3.10.1);
+        /// server phải cùng chào (strongSwan `compress=yes`) nếu không tunnel chạy ESP thường (graceful downgrade). Mặc định tắt.</summary>
+        public static async Task<VpnTunnel> ConnectIkev2Async(string host, string preSharedKey, string? eapUser, string? eapPass, CancellationToken ct, bool preferOuterIpv6 = false, bool ipComp = false)
         {
             Console.WriteLine("=== [IKEv2-native] ===");
             ILoggerFactory loggerFactory = CreateDriverLoggerFactory();
@@ -203,6 +205,7 @@ namespace Vpn2ProxyDemo
                 addressFamilyPreference: outerPref,
                 eapUserName: string.IsNullOrEmpty(eapUser) ? null : eapUser,
                 eapPassword: string.IsNullOrEmpty(eapPass) ? null : eapPass,
+                requestIpComp: ipComp,
                 loggerFactory: loggerFactory);
             try
             {
@@ -210,7 +213,8 @@ namespace Vpn2ProxyDemo
                 cts.CancelAfter(TimeSpan.FromSeconds(90));
 
                 string auth = string.IsNullOrEmpty(eapUser) ? "PSK" : "EAP-MSCHAPv2";
-                Console.WriteLine($"[ikev2] connecting to {host} (IKEv2 forced NAT-T UDP 500->4500, auth {auth}) ...");
+                string ipcompTag = ipComp ? ", IPComp DEFLATE" : "";
+                Console.WriteLine($"[ikev2] connecting to {host} (IKEv2 forced NAT-T UDP 500->4500, auth {auth}{ipcompTag}) ...");
                 await vpn.ConnectAsync(cts.Token);
                 Console.WriteLine($"[ikev2] tunnel up. assigned IP = {vpn.AssignedAddress}, dns = {vpn.AssignedDns?.ToString() ?? "(none)"}");
 

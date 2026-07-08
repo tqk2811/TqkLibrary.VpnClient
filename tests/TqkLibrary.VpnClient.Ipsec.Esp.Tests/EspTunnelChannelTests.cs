@@ -75,6 +75,84 @@ namespace TqkLibrary.VpnClient.Ipsec.Esp.Tests
             Assert.Equal(4, received);
         }
 
+        // ---- IPComp (RFC 3173) wiring: compress → ESP (Next Header 108) → decompress round-trip ----
+
+        // Our IKEv2 advertises the well-known DEFLATE CPI (2) for its inbound direction, so a peer using the same
+        // DEFLATE-only codec stamps CPI 2 and the receive-side IpCompCodec accepts it.
+        const ushort DeflateCpi = 2;
+
+        // Highly compressible IP packet: the version nibble the channel demuxes on, then zero fill DEFLATE collapses.
+        static byte[] Compressible(byte firstByte, int length)
+        {
+            byte[] b = new byte[length];
+            b[0] = firstByte; // 0x45 = IPv4/IHL5, 0x60 = IPv6 — only the version nibble matters to the demux
+            return b;
+        }
+
+        [Theory]
+        [InlineData(0x45, 4)]   // IPv4 (Next Header 4 under IPComp)
+        [InlineData(0x60, 6)]   // IPv6 (Next Header 41 under IPComp)
+        public async Task IpComp_CompressesLargePacket_ThenInboundInflatesItBack(byte firstByte, int _)
+        {
+            (EspSession client, EspSession server) = Pair(0x0A0A0A0A, 0x0B0B0B0B, seed: 7);
+
+            byte[]? sentEsp = null;
+            var serverInbound = new EspTunnelChannel(server, _ => Task.CompletedTask, mtu: 1400, outboundIpCompCpi: DeflateCpi);
+            var client_ = new EspTunnelChannel(client, esp => { sentEsp = esp.ToArray(); serverInbound.OnEspPacket(esp); return Task.CompletedTask; },
+                mtu: 1400, outboundIpCompCpi: DeflateCpi);
+
+            byte[]? received = null;
+            serverInbound.InboundIpPacket += p => received = p.ToArray();
+
+            byte[] sent = Compressible(firstByte, 1000);
+            await client_.WriteIpPacketAsync(sent);
+
+            Assert.NotNull(received);
+            Assert.Equal(sent, received);                          // recovered exactly through compress→Protect→TryUnprotect→decompress
+            Assert.NotNull(sentEsp);
+            Assert.True(sentEsp!.Length < sent.Length, "IPComp must shrink the ESP payload for a highly compressible packet.");
+        }
+
+        [Fact]
+        public async Task IpComp_SmallPacketThatCannotShrink_FallsBackToPlainEsp_AndStillRoundTrips()
+        {
+            (EspSession client, EspSession server) = Pair(0x0A0A0A0A, 0x0B0B0B0B, seed: 9);
+
+            var serverInbound = new EspTunnelChannel(server, _ => Task.CompletedTask, mtu: 1400, outboundIpCompCpi: DeflateCpi);
+            var client_ = new EspTunnelChannel(client, esp => { serverInbound.OnEspPacket(esp); return Task.CompletedTask; },
+                mtu: 1400, outboundIpCompCpi: DeflateCpi);
+
+            byte[]? received = null;
+            serverInbound.InboundIpPacket += p => received = p.ToArray();
+
+            // A 20-byte packet cannot shrink below itself (non-expansion, RFC 3173 §2.2) → sent uncompressed (Next
+            // Header 4); the IPComp-active receiver passes it straight through (no IPComp header to inflate).
+            byte[] sent = Ipv4Packet(0x42);
+            await client_.WriteIpPacketAsync(sent);
+
+            Assert.NotNull(received);
+            Assert.Equal(sent, received);
+        }
+
+        [Fact]
+        public async Task IpComp_Inactive_LeavesLargeCompressiblePacketUntouched()
+        {
+            // Peer omitted IPCOMP_SUPPORTED ⇒ null CPI both sides ⇒ no compression, no IPComp demux (graceful downgrade).
+            (EspSession client, EspSession server) = Pair(0x0A0A0A0A, 0x0B0B0B0B, seed: 11);
+
+            var serverInbound = new EspTunnelChannel(server, _ => Task.CompletedTask, mtu: 1400);
+            var client_ = new EspTunnelChannel(client, esp => { serverInbound.OnEspPacket(esp); return Task.CompletedTask; }, mtu: 1400);
+
+            byte[]? received = null;
+            serverInbound.InboundIpPacket += p => received = p.ToArray();
+
+            byte[] sent = Compressible(0x45, 1000);
+            await client_.WriteIpPacketAsync(sent);
+
+            Assert.NotNull(received);
+            Assert.Equal(sent, received);
+        }
+
         static (EspSession client, EspSession server) Pair(uint spiClientToServer, uint spiServerToClient, byte seed)
         {
             byte[] encCs = Fill(32, seed), intCs = Fill(32, (byte)(seed + 1));
