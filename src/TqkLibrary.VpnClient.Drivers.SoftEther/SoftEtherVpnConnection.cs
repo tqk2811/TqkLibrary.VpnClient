@@ -14,6 +14,12 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
     public sealed class SoftEtherVpnConnection : IVpnConnection
     {
         readonly SoftEtherConnection _inner;
+
+        /// <summary>
+        /// The supervised connection underneath, so a host holding the tunnel open can watch its
+        /// <c>State</c>/<c>StateChanged</c> rather than invent a health check the driver already has.
+        /// </summary>
+        public SoftEtherConnection Connection => _inner;
         readonly IVpnSession _primary;
         readonly object _sync = new object();
         readonly List<IVpnSession> _extraSessions = new List<IVpnSession>();
