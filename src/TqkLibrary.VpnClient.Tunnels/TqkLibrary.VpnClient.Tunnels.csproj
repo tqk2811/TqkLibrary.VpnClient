@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Dial a VPN by protocol from a profile or a configuration file, and get back a live tunnel exposed as a userspace TcpIpStack.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      The drivers referenced here are exactly the protocols VpnDialer speaks: adding one is a
+      ProjectReference plus a ConnectXxxAsync method. The TqkLibrary.VpnClient façade is
+      deliberately NOT referenced — it pulls all 28 drivers, and a consumer of this package should
+      only pay for the protocols it dials.
+    -->
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.Sstp\TqkLibrary.VpnClient.Drivers.Sstp.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.L2tpIpsec\TqkLibrary.VpnClient.Drivers.L2tpIpsec.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.Ikev2\TqkLibrary.VpnClient.Drivers.Ikev2.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.SoftEther\TqkLibrary.VpnClient.Drivers.SoftEther.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.OpenVpn\TqkLibrary.VpnClient.Drivers.OpenVpn.csproj" />
+    <ProjectReference Include="..\TqkLibrary.VpnClient.Drivers.WireGuard\TqkLibrary.VpnClient.Drivers.WireGuard.csproj" />
+    <!-- TcpIpStack is part of VpnTunnel's public surface. -->
+    <ProjectReference Include="..\TqkLibrary.VpnClient.IpStack\TqkLibrary.VpnClient.IpStack.csproj" />
+  </ItemGroup>
+
+</Project>
