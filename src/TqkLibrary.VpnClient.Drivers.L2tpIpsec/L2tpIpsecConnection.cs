@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using Microsoft.Extensions.Logging;
 using TqkLibrary.VpnClient.Abstractions.Channels;
@@ -333,8 +334,8 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
             var ike = new IkeV1Client(_preSharedKey, IPAddress.Any, serverIp, logger: Logger);
             _ike = ike;
 
-            ike.ProcessMainMode2(await ExchangeIkeAsync(natt, ike.BuildMainMode1(), cancellationToken).ConfigureAwait(false));
-            ike.ProcessMainMode4(await ExchangeIkeAsync(natt, ike.BuildMainMode3(IPAddress.Any, serverIp), cancellationToken).ConfigureAwait(false));
+            ike.ProcessMainMode2(await ExchangeIkeAsync(natt, ike.BuildMainMode1(), cancellationToken, IsMainMode2Reply).ConfigureAwait(false));
+            ike.ProcessMainMode4(await ExchangeIkeAsync(natt, ike.BuildMainMode3(IPAddress.Any, serverIp), cancellationToken, IsMainMode4Reply).ConfigureAwait(false));
             natt.SwitchToNatTPort();
             return (natt, ike);
         }
@@ -358,9 +359,9 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
             var ike = new IkeV1Client(_preSharedKey, localIp, serverIp, logger: Logger);
             _ike = ike;
 
-            ike.ProcessMainMode2(await ExchangeIkeAsync(natt, ike.BuildMainMode1(), cancellationToken).ConfigureAwait(false));
+            ike.ProcessMainMode2(await ExchangeIkeAsync(natt, ike.BuildMainMode1(), cancellationToken, IsMainMode2Reply).ConfigureAwait(false));
             ike.ProcessMainMode4(await ExchangeIkeAsync(natt,
-                ike.BuildMainMode3(localIp, localPort, serverIp, (ushort)NatTraversal.IkePort), cancellationToken).ConfigureAwait(false));
+                ike.BuildMainMode3(localIp, localPort, serverIp, (ushort)NatTraversal.IkePort), cancellationToken, IsMainMode4Reply).ConfigureAwait(false));
 
             IkeV1NatDetectionResult nat = ike.DetectNat(localIp, localPort, serverIp, (ushort)NatTraversal.IkePort);
             switch (L2tpIpsecNatStrategy.Decide(nat, rawIpAvailable: _rawIpFactory?.IsAvailable == true, port500Bound: true))
@@ -464,28 +465,66 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
             return new EspSession(ToSpi(outboundSpi), outbound, ToSpi(inboundSpi), inbound, logger);
         }
 
-        async Task<byte[]> ExchangeIkeAsync(NatTraversalChannel natt, byte[] request, CancellationToken cancellationToken)
+        /// <param name="isExpectedReply">
+        /// Says whether a datagram is the answer this step is waiting for. Anything else is skipped
+        /// and the wait resumes within the same attempt.
+        /// </param>
+        /// <remarks>
+        /// A reply is not simply "the next datagram to arrive". IKE runs on UDP, so the gateway
+        /// retransmits earlier messages of the exchange when ours are lost or late, sends
+        /// informationals of its own, and a stray reply for another SA can land on the same socket.
+        /// Taking the first datagram let a retransmitted MM2 be handed to ProcessMainMode4, where
+        /// the missing KE payload came out as a NullReferenceException.
+        /// </remarks>
+        async Task<byte[]> ExchangeIkeAsync(NatTraversalChannel natt, byte[] request, CancellationToken cancellationToken,
+            Func<byte[], bool>? isExpectedReply = null)
         {
             for (int attempt = 0; attempt < _timeouts.IkeMaxAttempts; attempt++)
             {
-                var waiter = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
-                _ikeWaiter = waiter;
                 await natt.SendIkeAsync(request).ConfigureAwait(false);
+                // Stopwatch rather than the wall clock: this is a timeout, and it must not move when
+                // the system time is adjusted.
+                var elapsed = Stopwatch.StartNew();
+                long budgetMs = (long)WithRetransmitJitter(_timeouts.IkeIntervalFor(attempt)).TotalMilliseconds;
 
-                Task completed = await Task.WhenAny(waiter.Task, Task.Delay(WithRetransmitJitter(_timeouts.IkeIntervalFor(attempt)), cancellationToken)).ConfigureAwait(false);
-                if (completed == waiter.Task)
+                // Several datagrams may arrive inside one attempt; only one of them is the reply.
+                while (true)
                 {
+                    long remaining = budgetMs - elapsed.ElapsedMilliseconds;
+                    if (remaining <= 0) break;   // out of time for this attempt: retransmit the request
+
+                    var waiter = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    _ikeWaiter = waiter;
+
+                    Task completed = await Task.WhenAny(waiter.Task, Task.Delay((int)remaining, cancellationToken)).ConfigureAwait(false);
+                    if (completed != waiter.Task)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        break;
+                    }
+
                     byte[] reply = await waiter.Task.ConfigureAwait(false);
                     // A gateway that refuses the exchange in the clear (e.g. NO-PROPOSAL-CHOSEN) sends an Informational
                     // NOTIFY where a Main/Quick Mode reply is expected; surface it rather than mis-decoding it downstream.
                     if (IkeV1Client.TryReadRejectNotify(reply, out ushort notifyType))
                         throw IkeRejected(notifyType, natt.RemotePort);
-                    return reply;
+                    if (isExpectedReply is null || isExpectedReply(reply)) return reply;
+
+                    Logger.LogHandshake(DriverName, "IKE: ignored a datagram that is not the reply this step is waiting for");
                 }
                 cancellationToken.ThrowIfCancellationRequested();
             }
             throw IkeTimedOut(natt.RemotePort);
         }
+
+        // What each Phase 1 step is waiting for. MM2 and MM4 are both Main Mode messages from the
+        // same SA, so cookies cannot tell them apart — the payload can: MM2 carries the negotiated
+        // SA, MM4 the responder's key exchange.
+        static bool IsMainMode2Reply(byte[] wire)
+            => IkeV1Client.CarriesPayload(wire, IsakmpPayloadType.SecurityAssociation);
+
+        static bool IsMainMode4Reply(byte[] wire)
+            => IkeV1Client.CarriesPayload(wire, IsakmpPayloadType.KeyExchange);
 
         // Diagnose a failed handshake exchange by the port it stalled on. Past the NAT-T float (UDP/4500) silence is the
         // signature of a gateway that refuses forced NAT-T: not behind a NAT, it expects native ESP. Such a gateway can be
@@ -535,8 +574,11 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
                         TaskCompletionSource<byte[]>? p1Rekey = _phase1RekeyWaiter;
                         IkeV1Client? p1Ike = _rekeyIke;
                         TaskCompletionSource<byte[]>? rekey = _rekeyWaiter;
-                        if (waiter != null)
-                            waiter.TrySetResult(payload);                  // a handshake reply
+                        // TrySetResult fails when the exchange has already taken a datagram and is
+                        // between waits (it skipped one that was not its reply). Falling through
+                        // then is what stops the next datagram from being swallowed by a waiter
+                        // nobody is waiting on any more.
+                        if (waiter != null && waiter.TrySetResult(payload)) { }  // a handshake reply
                         else if (p1Rekey != null && p1Ike != null && p1Ike.IsForThisSa(payload))
                             p1Rekey.TrySetResult(payload);                 // a Phase 1 rekey Main/Quick Mode reply (new SA cookie)
                         else if (rekey != null && _ike != null && _ike.IsRekeyReply(payload))
