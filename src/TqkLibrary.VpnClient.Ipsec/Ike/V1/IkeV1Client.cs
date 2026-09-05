@@ -173,7 +173,7 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
             IsakmpMessage message = IsakmpMessage.Decode(wire);
             ResponderCookie = message.ResponderCookie;
 
-            IsakmpTransform chosen = message.Find<IsakmpSaPayload>()!.Proposals[0].Transforms[0];
+            IsakmpTransform chosen = RequiredTransform(message, "AG2");
             ushort keyBits = (ushort)AttributeOr(chosen, IkeV1Constants.Phase1Attribute.KeyLength, 256);
             ushort hashId = (ushort)AttributeOr(chosen, IkeV1Constants.Phase1Attribute.Hash, IkeV1Constants.HashAlgorithm.Sha1);
             _cipherKeyLength = keyBits / 8;
@@ -186,9 +186,9 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
                     NatDiscoveryType = (IsakmpPayloadType)130;
             }
 
-            _keResponder = message.FindRaw(IsakmpPayloadType.KeyExchange)!.Body;
-            _nonceResponder = message.FindRaw(IsakmpPayloadType.Nonce)!.Body;
-            _idResponderBody = message.FindRaw(IsakmpPayloadType.Identification)!.Body;
+            _keResponder = Required(message, IsakmpPayloadType.KeyExchange, "AG2").Body;
+            _nonceResponder = Required(message, IsakmpPayloadType.Nonce, "AG2").Body;
+            _idResponderBody = Required(message, IsakmpPayloadType.Identification, "AG2").Body;
             _responderNatD = message.Payloads.OfType<IsakmpRawPayload>()
                 .Where(p => p.Type == NatDiscoveryType).Select(p => p.Body).ToArray();
 
@@ -246,7 +246,7 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
             IsakmpMessage message = IsakmpMessage.Decode(wire);
             ResponderCookie = message.ResponderCookie;
 
-            IsakmpTransform chosen = message.Find<IsakmpSaPayload>()!.Proposals[0].Transforms[0];
+            IsakmpTransform chosen = RequiredTransform(message, "MM2");
             ushort keyBits = (ushort)AttributeOr(chosen, IkeV1Constants.Phase1Attribute.KeyLength, 256);
             ushort hashId = (ushort)AttributeOr(chosen, IkeV1Constants.Phase1Attribute.Hash, IkeV1Constants.HashAlgorithm.Sha1);
             ushort groupId = (ushort)AttributeOr(chosen, IkeV1Constants.Phase1Attribute.Group, IkeV1Constants.Group.Modp1024);
@@ -300,8 +300,8 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
         public void ProcessMainMode4(byte[] wire)
         {
             IsakmpMessage message = IsakmpMessage.Decode(wire);
-            _keResponder = message.FindRaw(IsakmpPayloadType.KeyExchange)!.Body;
-            _nonceResponder = message.FindRaw(IsakmpPayloadType.Nonce)!.Body;
+            _keResponder = Required(message, IsakmpPayloadType.KeyExchange, "MM4").Body;
+            _nonceResponder = Required(message, IsakmpPayloadType.Nonce, "MM4").Body;
             // Keep the responder's NAT-D hashes so an honest handshake can read its NAT verdict (see DetectNat).
             _responderNatD = message.Payloads.OfType<IsakmpRawPayload>()
                 .Where(p => p.Type == NatDiscoveryType).Select(p => p.Body).ToArray();
@@ -1065,5 +1065,49 @@ namespace TqkLibrary.VpnClient.Ipsec.Ike.V1
             return true;
         }
 
+        // ---- reading what the gateway actually sent ----
+        //
+        // A step reads the payloads it cannot continue without. When one is missing the gateway did
+        // not answer the question we asked: it retransmitted an earlier message of the exchange,
+        // sent an informational, or replied for a different SA. That has to say so — the whole
+        // reason this exists is that it used to be a bare NullReferenceException naming neither the
+        // step nor what arrived, which is unreadable from a stack trace and impossible to act on.
+
+        static IsakmpRawPayload Required(IsakmpMessage message, IsakmpPayloadType type, string step)
+            => message.FindRaw(type) ?? throw new VpnServerRejectedException(
+                $"{step}: the gateway's reply carries no {type} payload — it was {Describe(message)}.");
+
+        static IsakmpTransform RequiredTransform(IsakmpMessage message, string step)
+        {
+            IsakmpSaPayload? sa = message.Find<IsakmpSaPayload>();
+            if (sa is null || sa.Proposals.Count == 0 || sa.Proposals[0].Transforms.Count == 0)
+                throw new VpnServerRejectedException(
+                    $"{step}: the gateway's reply names no transform to use — it was {Describe(message)}.");
+            return sa.Proposals[0].Transforms[0];
+        }
+
+        // Enough to tell a retransmitted earlier message from an informational, and either from a
+        // reply that belongs to another exchange.
+        static string Describe(IsakmpMessage message)
+        {
+            string payloads = message.Payloads.Count == 0
+                ? "no payloads"
+                : string.Join(" + ", message.Payloads.Select(p => p.Type.ToString()));
+            return $"{message.ExchangeType} carrying {payloads}";
+        }
+
+        /// <summary>
+        /// True when this cleartext message carries a payload of the given type. Used by the
+        /// transport to tell the reply it is waiting for from anything else that arrives on the
+        /// same socket; an encrypted or unparseable datagram answers false.
+        /// </summary>
+        public static bool CarriesPayload(byte[] wire, IsakmpPayloadType type)
+        {
+            if (wire is null || wire.Length < IsakmpMessage.HeaderSize) return false;
+            // Any payload, not FindRaw: an SA arrives decoded as IsakmpSaPayload rather than a raw one,
+            // and the SA is exactly what tells an MM2 from an MM4.
+            try { return IsakmpMessage.Decode(wire).Payloads.Any(p => p.Type == type); }
+            catch { return false; }
+        }
     }
 }
