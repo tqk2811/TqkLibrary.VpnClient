@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -157,6 +158,16 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
         bool _terminal;
         Exception? _terminalError;   // fault that terminated the connection (null = graceful close); surfaced to SendAsync writers
 
+        // Diagnostic counters, reported in one Debug line when the connection terminates. They exist to tell apart the
+        // three ways a tunnelled connection can end with nothing received, which look identical from the outside:
+        // our data never reached the peer (sent > acked, retransmits climbing), the peer took it and stayed silent
+        // (sent == acked, segments arriving, no payload), or nothing came back at all (no inbound segments).
+        long _txDataBytes;      // application bytes handed to the wire, first transmission only
+        long _txRetxSegments;   // segments put back on the wire by RTO / fast retransmit / a PMTU drop
+        long _ackedBytes;       // sequence space the peer has cumulatively acknowledged (SYN and FIN included)
+        long _rxSegments;       // inbound segments accepted by the state machine, payload or not
+        long _rxDataBytes;      // in-order payload handed to the reader
+
         /// <summary>Raised once when the connection reaches a terminal state — graceful CLOSED or a fault (RST / retransmission give-up); lets the stack drop and dispose it.</summary>
         public event Action? Closed;
 
@@ -221,7 +232,11 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
         /// <summary>Feeds one inbound TCP segment (the IP payload) into the state machine.</summary>
         public void OnSegment(ReadOnlyMemory<byte> segment)
         {
-            lock (_sync) Handle(segment);
+            lock (_sync)
+            {
+                _rxSegments++;
+                Handle(segment);
+            }
         }
 
         /// <summary>Queues application data to send (flushed within the peer's advertised window).</summary>
@@ -501,6 +516,21 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
             }
         }
 
+        // One line per connection, at Debug, saying what actually crossed the tunnel. Read it as: sent vs acked says
+        // whether our data reached the peer, rxseg vs rcvd says whether the peer answered at all, and retx says how hard
+        // the stack tried. A stall with sent > acked and retx climbing is the path dropping our segments; sent == acked
+        // with rcvd 0 is a peer that took the request and said nothing; rxseg 0 after the handshake is a return path that
+        // died. Costs two longs and one formatted string per connection, and only when Debug is on.
+        void LogOutcome(Exception? error)
+        {
+            if (!_logger.IsEnabled(LogLevel.Debug)) return;
+            _logger.LogProtocolFlowSummary(Layer, string.Format(CultureInfo.InvariantCulture,
+                "{0}->{1}:{2} closed in {3}: sent={4} acked={5} rcvd={6} rxseg={7} retx={8} mss={9} sndwnd={10}{11}",
+                _localPort, _remoteIp, _remotePort, _state,
+                _txDataBytes, _ackedBytes, _rxDataBytes, _rxSegments, _txRetxSegments, _sendMss, _sndWnd,
+                error is null ? string.Empty : " error=" + error.Message));
+        }
+
         void EnterTimeWait()
         {
             TransitionTo(TcpState.TimeWait);
@@ -594,6 +624,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
                     node = next;
                 }
                 _sndUna = ack;
+                _ackedBytes += acked;
                 _retxAttempts = 0;                  // forward progress resets the give-up counter
                 if (sampled) UpdateRto(sampleMs);
                 if (_sackEnabled) RecomputeSacked(); // some SACKed units were just cumulatively acked and removed
@@ -683,6 +714,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
             RetxUnit u = node.Value;
             bool isSyn = (u.Flags & TcpFlags.Syn) != 0;
             EmitSegment(u.Seq, u.Flags, u.Payload, isSyn ? _localMss : (ushort)0, isSyn ? RcvWScale : TcpSegment.NoWindowScale, sackPermitted: isSyn);
+            _txRetxSegments++;
             u.Retransmitted = true;
             u.SentTicks = Now();
         }
@@ -701,6 +733,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
                 bool isSyn = (u.Flags & TcpFlags.Syn) != 0;
                 EmitSegment(u.Seq, u.Flags, u.Payload, isSyn ? _localMss : (ushort)0, isSyn ? RcvWScale : TcpSegment.NoWindowScale, sackPermitted: isSyn);
                 u.ResentInRecovery = true;
+                _txRetxSegments++;
                 u.Retransmitted = true;
                 u.SentTicks = Now();
                 injected += u.SeqLen;
@@ -775,6 +808,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
                 if (u.Sacked) continue;
                 bool isSyn = (u.Flags & TcpFlags.Syn) != 0;
                 EmitSegment(u.Seq, u.Flags, u.Payload, isSyn ? _localMss : (ushort)0, isSyn ? RcvWScale : TcpSegment.NoWindowScale, sackPermitted: isSyn);
+                _txRetxSegments++;
                 u.Retransmitted = true;
                 u.SentTicks = Now();
                 injected += u.SeqLen;
@@ -833,6 +867,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
 
         void EmitData(uint seq, byte[] payload)
         {
+            _txDataBytes += payload.Length;
             EmitSegment(seq, TcpFlags.Psh | TcpFlags.Ack, payload);
             EnqueueRetx(seq, TcpFlags.Psh | TcpFlags.Ack, payload, seqLen: payload.Length);
             _sndNxt += (uint)payload.Length;
@@ -1019,6 +1054,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
 
         void DeliverReceived(ReadOnlyMemory<byte> payload)
         {
+            _rxDataBytes += payload.Length;   // reached only from Handle, under _sync, as is the terminate path that reads it
             byte[] copy = payload.ToArray();
             lock (_recvLock)
             {
@@ -1052,6 +1088,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
             if (_terminal) return;
             _terminal = true;
             _terminalError = error;
+            LogOutcome(error);
             _rtoTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
             _persistTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
             _closeTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);

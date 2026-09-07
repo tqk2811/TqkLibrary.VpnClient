@@ -54,5 +54,11 @@ namespace TqkLibrary.VpnClient.Abstractions.Diagnostics
         /// install/swap, a PPP LCP/IPCP option-negotiation transition, a TCP state change). Trace level — emitted per
         /// step/packet, so it is off unless a consumer raises a protocol category to <see cref="LogLevel.Trace"/>.</summary>
         public static readonly EventId ProtocolStep = new(500, nameof(ProtocolStep));
+
+        /// <summary>What one finished flow inside a protocol layer actually carried — the tally a userspace TCP
+        /// connection reports when it closes (bytes sent, acknowledged and received, segments and retransmissions).
+        /// Debug level: one line per flow rather than per packet, which is what makes "it connected and then nothing
+        /// came back" answerable without a packet capture.</summary>
+        public static readonly EventId ProtocolFlowSummary = new(501, nameof(ProtocolFlowSummary));
     }
 }

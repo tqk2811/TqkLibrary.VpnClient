@@ -3,6 +3,8 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using TqkLibrary.VpnClient.Abstractions.Channels.Interfaces;
 using TqkLibrary.VpnClient.IpStack.Tcp;
 using TqkLibrary.VpnClient.IpStack.Tcp.Enums;
@@ -21,6 +23,7 @@ namespace TqkLibrary.VpnClient.IpStack
         static readonly byte[] DefaultPingData = System.Text.Encoding.ASCII.GetBytes("abcdefghijklmnopqrstuvwabcdefghi");
 
         readonly IPacketChannel _channel;
+        readonly ILogger _logger;
         readonly IPAddress? _localV4;
         readonly IPAddress? _localV6;
         readonly ConcurrentDictionary<ushort, TcpConnection> _connections = new();
@@ -34,11 +37,14 @@ namespace TqkLibrary.VpnClient.IpStack
         int _replyIpId;
         int _fragId;
 
-        /// <summary>Creates the stack over the given channel, sourcing packets from a single local address (IPv4 or IPv6).</summary>
-        public TcpIpStack(IPacketChannel channel, IPAddress localAddress)
+        /// <summary>Creates the stack over the given channel, sourcing packets from a single local address (IPv4 or IPv6).
+        /// <paramref name="logger"/> is handed to every connection this stack opens (per-flow summary at Debug, TCP state
+        /// transitions at Trace); null logs to a no-op logger.</summary>
+        public TcpIpStack(IPacketChannel channel, IPAddress localAddress, ILogger? logger = null)
             : this(channel,
                    localAddress.AddressFamily == AddressFamily.InterNetwork ? localAddress : null,
-                   localAddress.AddressFamily == AddressFamily.InterNetworkV6 ? localAddress : null)
+                   localAddress.AddressFamily == AddressFamily.InterNetworkV6 ? localAddress : null,
+                   logger)
         {
         }
 
@@ -46,8 +52,9 @@ namespace TqkLibrary.VpnClient.IpStack
         /// Creates a dual-stack capable stack over the given channel. Provide an IPv4 address, an IPv6 address, or both
         /// (at least one). Inbound packets are demultiplexed by version; outbound flows pick the matching source.
         /// </summary>
-        public TcpIpStack(IPacketChannel channel, IPAddress? localV4, IPAddress? localV6)
+        public TcpIpStack(IPacketChannel channel, IPAddress? localV4, IPAddress? localV6, ILogger? logger = null)
         {
+            _logger = logger ?? NullLogger.Instance;
             if (localV4 is null && localV6 is null)
                 throw new ArgumentException("At least one local address (IPv4 or IPv6) is required.");
             if (localV4 is not null && localV4.AddressFamily != AddressFamily.InterNetwork)
@@ -68,7 +75,8 @@ namespace TqkLibrary.VpnClient.IpStack
         public async Task<TcpConnection> ConnectAsync(IPAddress remoteAddress, ushort remotePort, CancellationToken cancellationToken = default)
         {
             ushort localPort = (ushort)Interlocked.Increment(ref _nextPort);
-            var connection = new TcpConnection(LocalFor(remoteAddress), localPort, remoteAddress, remotePort, SendIp, linkMtu: _channel.Mtu);
+            var connection = new TcpConnection(LocalFor(remoteAddress), localPort, remoteAddress, remotePort, SendIp,
+                linkMtu: _channel.Mtu, logger: _logger);
             _connections[localPort] = connection;
             connection.Closed += () => { _connections.TryRemove(localPort, out _); connection.Dispose(); }; // drop faulted connections (RST / RTO give-up)
 

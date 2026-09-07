@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using Microsoft.Extensions.Logging;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Interfaces;
 using TqkLibrary.VpnClient.Abstractions.Drivers.Models;
 using TqkLibrary.VpnClient.Abstractions.Net;
@@ -47,7 +48,7 @@ namespace TqkLibrary.VpnClient.Tunnels
                 await vpn.ConnectAsync(user, pass, cts.Token).ConfigureAwait(false);
 
                 IPAddress? v6 = GlobalV6(vpn.AssignedAddressV6);
-                var stack = new TcpIpStack(vpn.PacketChannel, vpn.AssignedAddress, v6);
+                var stack = new TcpIpStack(vpn.PacketChannel, vpn.AssignedAddress, v6, StackLogger(o));
                 return new VpnTunnel(vpn, stack, () => { vpn.Dispose(); return default; },
                     vpn.AssignedAddress, vpn.PacketChannel.Mtu, new SstpDriver().Name, vpn.AssignedDns, v6);
             }
@@ -74,7 +75,7 @@ namespace TqkLibrary.VpnClient.Tunnels
                 await vpn.ConnectAsync(user, pass, cts.Token).ConfigureAwait(false);
 
                 IPAddress? v6 = GlobalV6(vpn.AssignedAddressV6);
-                var stack = new TcpIpStack(vpn.PacketChannel, vpn.AssignedAddress, v6);
+                var stack = new TcpIpStack(vpn.PacketChannel, vpn.AssignedAddress, v6, StackLogger(o));
                 return new VpnTunnel(vpn, stack, async () => await vpn.DisposeAsync().ConfigureAwait(false),
                     vpn.AssignedAddress, vpn.PacketChannel.Mtu, new L2tpIpsecDriver().Name, vpn.AssignedDns, v6);
             }
@@ -105,7 +106,7 @@ namespace TqkLibrary.VpnClient.Tunnels
                 await vpn.ConnectAsync(cts.Token).ConfigureAwait(false);
 
                 // The IKEv2 driver assigns IPv4 only, so the stack is built single-stack here.
-                var stack = new TcpIpStack(vpn.PacketChannel, vpn.AssignedAddress, null);
+                var stack = new TcpIpStack(vpn.PacketChannel, vpn.AssignedAddress, null, StackLogger(o));
                 return new VpnTunnel(vpn, stack, async () => await vpn.DisposeAsync().ConfigureAwait(false),
                     vpn.AssignedAddress, vpn.PacketChannel.Mtu, new Ikev2Driver().Name, vpn.AssignedDns);
             }
@@ -140,7 +141,7 @@ namespace TqkLibrary.VpnClient.Tunnels
                 new VpnCredentials { Username = user, Password = pass },
                 cts.Token).ConfigureAwait(false);
 
-            return Wrap(connection, ((SoftEtherVpnConnection)connection).Connection, driver.Name);
+            return Wrap(connection, ((SoftEtherVpnConnection)connection).Connection, driver.Name, StackLogger(o));
         }
 
         /// <summary>Connects from a <c>.ovpn</c> profile: its first <c>remote</c> is the endpoint.</summary>
@@ -166,7 +167,7 @@ namespace TqkLibrary.VpnClient.Tunnels
                 },
                 cts.Token).ConfigureAwait(false);
 
-            return Wrap(connection, ((OpenVpnVpnConnection)connection).Connection, driver.Name);
+            return Wrap(connection, ((OpenVpnVpnConnection)connection).Connection, driver.Name, StackLogger(o));
         }
 
         /// <summary>
@@ -191,7 +192,7 @@ namespace TqkLibrary.VpnClient.Tunnels
                 IPAddress assigned = vpn.AssignedAddress ?? IPAddress.Any;
                 IPAddress? dns = vpn.Config.DnsServers.Count > 0 ? vpn.Config.DnsServers[0] : null;
                 IPAddress? v6 = GlobalV6(vpn.Config.AssignedAddressV6);
-                var stack = new TcpIpStack(vpn.PacketChannel, assigned, v6);
+                var stack = new TcpIpStack(vpn.PacketChannel, assigned, v6, StackLogger(o));
                 return new VpnTunnel(vpn, stack, async () => await vpn.DisposeAsync().ConfigureAwait(false),
                     assigned, vpn.PacketChannel.Mtu, new WireGuardDriver(config).Name, dns, v6);
             }
@@ -204,7 +205,12 @@ namespace TqkLibrary.VpnClient.Tunnels
 
         // The two driver-façade protocols land here: take the primary session's channel and address,
         // and let the IVpnConnection wrapper own the teardown of everything below it.
-        static VpnTunnel Wrap(IVpnConnection connection, Drivers.Core.ReconnectingVpnConnection inner, string protocolName)
+        // The logger every connection opened through the tunnel reports to. Its own category rather than the driver's:
+        // a flow summary belongs to the IP stack, not to the protocol that carried it, and a consumer that wants to
+        // silence per-flow lines while keeping the handshake trace needs the two apart.
+        static ILogger? StackLogger(VpnTunnelOptions options) => options.LoggerFactory?.CreateLogger("ipstack");
+
+        static VpnTunnel Wrap(IVpnConnection connection, Drivers.Core.ReconnectingVpnConnection inner, string protocolName, ILogger? logger)
         {
             try
             {
@@ -213,7 +219,7 @@ namespace TqkLibrary.VpnClient.Tunnels
                 IPAddress? dns = session.Config.DnsServers.Count > 0 ? session.Config.DnsServers[0] : null;
                 IPAddress? v6 = GlobalV6(session.Config.AssignedAddressV6);
 
-                var stack = new TcpIpStack(session.PacketChannel, assigned, v6);
+                var stack = new TcpIpStack(session.PacketChannel, assigned, v6, logger);
                 return new VpnTunnel(inner, stack,
                     async () => await connection.DisposeAsync().ConfigureAwait(false),
                     assigned, session.PacketChannel.Mtu, protocolName, dns, v6);

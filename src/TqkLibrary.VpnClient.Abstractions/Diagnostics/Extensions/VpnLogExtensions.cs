@@ -58,6 +58,10 @@ namespace TqkLibrary.VpnClient.Abstractions.Diagnostics.Extensions
             LoggerMessage.Define<string, string>(LogLevel.Trace, VpnEventIds.ProtocolStep,
                 "[{Layer}] {Step}");
 
+        static readonly Action<ILogger, string, string, Exception?> _protocolFlowSummary =
+            LoggerMessage.Define<string, string>(LogLevel.Debug, VpnEventIds.ProtocolFlowSummary,
+                "[{Layer}] {Summary}");
+
         /// <summary>Logs a lifecycle state transition (Information).</summary>
         public static void LogStateChanged(this ILogger logger, string driver, string state)
             => _stateChanged(logger, driver, state, null);
@@ -106,5 +110,13 @@ namespace TqkLibrary.VpnClient.Abstractions.Diagnostics.Extensions
         /// </summary>
         public static void LogProtocolStep(this ILogger logger, string layer, string step)
             => _protocolStep(logger, layer, step, null);
+
+        /// <summary>
+        /// Logs what one finished flow inside a protocol layer carried — bytes sent/acknowledged/received, segment and
+        /// retransmission counts — at <see cref="LogLevel.Debug"/>. One line per flow, not per packet, so it stays
+        /// affordable on a live tunnel; guard the message composition with <c>logger.IsEnabled(LogLevel.Debug)</c>.
+        /// </summary>
+        public static void LogProtocolFlowSummary(this ILogger logger, string layer, string summary)
+            => _protocolFlowSummary(logger, layer, summary, null);
     }
 }
