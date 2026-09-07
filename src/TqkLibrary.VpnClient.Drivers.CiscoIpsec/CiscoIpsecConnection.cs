@@ -41,7 +41,13 @@ namespace TqkLibrary.VpnClient.Drivers.CiscoIpsec
         static readonly TimeSpan RekeyGrace = TimeSpan.FromSeconds(10);
         static readonly TimeSpan ExchangeTimeout = TimeSpan.FromSeconds(2.5);
         const int ExchangeMaxAttempts = 5;
-        const int Mtu = 1400;
+        // Inner MTU for the ESP data plane, which becomes the TCP MSS (1300 - 40 = 1260 for IPv4). ESP header/IV (24) +
+        // padding/trailer + ICV (12) + UDP for NAT-T (8) + outer IP (20) is ≈ 70-80 bytes, so the conventional 1400 puts
+        // a full-size segment right at Ethernet's 1500 and over a PPPoE path's 1492: large inbound segments are then
+        // dropped while the handshake's small packets get through, and a connection establishes only to stall with
+        // nothing coming back. PMTUD would report it, but the ICMP that carries the report is widely filtered, so the
+        // margin is taken up front. Same reasoning as L2tpIpsecConnection.PppMtu.
+        const int Mtu = 1300;
         const string DriverNameConst = "cisco-ipsec";
 
         // KEY_ID identity type for the Aggressive Mode group name (RFC 2407 §4.6.2.1, what Cisco/strongSwan expect).

@@ -53,6 +53,16 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
         static readonly TimeSpan RekeyGrace = TimeSpan.FromSeconds(10);
         const string DriverNameConst = "l2tp-ipsec";
 
+        // MTU advertised to the IP stack for PPP-carried traffic, which becomes the TCP MSS (1300 - 40 = 1260 for IPv4).
+        // Everything wrapping an inner packet has to fit inside the path MTU: PPP (4) + L2TP data header (6-8) + ESP
+        // header/IV (24) + padding/trailer + ICV (12) + UDP for NAT-T (8) + outer IP (20) is ≈ 80-95 bytes, so the
+        // conventional 1400 puts a full-size segment at ≈ 1495 bytes on the wire. That fits Ethernet's 1500 and nothing
+        // less: on a PPPoE path (1492) — the common consumer link here — the largest inbound segments are dropped while
+        // the handshake's small packets sail through, so a connection establishes and then stalls forever with zero
+        // bytes returned. RFC 1191 Path MTU Discovery is meant to report this, and TcpConnection acts on it, but the
+        // ICMP that carries the report is widely filtered, so the margin is taken up front instead of discovered.
+        const int PppMtu = 1300;
+
         readonly string _host;
         readonly byte[] _preSharedKey;
         readonly uint _magic;
@@ -167,7 +177,7 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
 
             var pppChannel = new L2tpPppFrameChannel(session);
             var authenticator = new MsChapV2Authenticator(_userName ?? string.Empty, _password ?? string.Empty);
-            var ppp = new PppEngine(pppChannel, _magic, IPAddress.Any, authenticator: authenticator, logger: Logger);
+            var ppp = new PppEngine(pppChannel, _magic, IPAddress.Any, authenticator: authenticator, mtu: PppMtu, logger: Logger);
 
             var linkUp = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             ppp.LinkUp += () => linkUp.TrySetResult(true);
@@ -252,7 +262,7 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
 
             var pppChannel = new L2tpPppFrameChannel(l2tp.PrimarySession);
             var authenticator = new MsChapV2Authenticator(_userName ?? string.Empty, _password ?? string.Empty);
-            var ppp = new PppEngine(pppChannel, _magic, IPAddress.Any, authenticator: authenticator, enableIpv6: _enableIpv6, logger: Logger);
+            var ppp = new PppEngine(pppChannel, _magic, IPAddress.Any, authenticator: authenticator, mtu: PppMtu, enableIpv6: _enableIpv6, logger: Logger);
             _ppp = ppp;
             _ipv6Config = null;   // fresh per attempt; the previous attempt's global address must not leak
 
