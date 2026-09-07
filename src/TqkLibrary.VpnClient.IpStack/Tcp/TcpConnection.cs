@@ -388,7 +388,22 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
                     // Clamp our outbound segment size to the peer's advertised MSS (RFC 1122: assume 536 if absent).
                     ushort peerMss = TcpSegment.MaxSegmentSize(span);
                     _sendMss = (ushort)Math.Max(MinMss, Math.Min(_localMss, peerMss > 0 ? peerMss : AssumedPeerMss));
-                    ProcessAck(ack, seq, wnd, 0, flags, span);  // acks our SYN, seeds the send window (SYN-ACK window is unscaled)
+                    // RFC 9293 §3.10.7.3 (SYN-SENT, step 5): the SYN-ACK sets the send window outright — SND.WND =
+                    // SEG.WND, SND.WL1 = SEG.SEQ, SND.WL2 = SEG.ACK — instead of going through the window-update
+                    // sequencing test every later segment takes. Doing it here is not a shortcut: that test asks
+                    // whether the segment is newer than SND.WL1, which has never been set and so is still zero, and
+                    // the comparison is signed 32-bit. A peer whose initial sequence number lands at 2^31 or above —
+                    // half of them, drawn afresh per connection — fails it, and fails it again on every subsequent
+                    // segment, since WL1 stays zero. The send window would then sit at its initial zero for the life
+                    // of the connection: the request never leaves except as one-byte zero-window persist probes, and
+                    // the peer eventually gives up on a request it never saw in full. The window carried by a SYN or
+                    // SYN-ACK is never scaled (RFC 7323 §2.2), which is why this runs before the scale is recorded.
+                    _sndWnd = wnd;
+                    _maxSndWnd = wnd;
+                    _sndWl1 = seq;
+                    _sndWl2 = ack;
+
+                    ProcessAck(ack, seq, wnd, 0, flags, span);  // acks our SYN and advances congestion control
                     // Window scaling takes effect only if the peer also offered it (RFC 7323); its window is scaled hereafter.
                     byte peerWScale = TcpSegment.WindowScale(span);
                     if (peerWScale != TcpSegment.NoWindowScale)
