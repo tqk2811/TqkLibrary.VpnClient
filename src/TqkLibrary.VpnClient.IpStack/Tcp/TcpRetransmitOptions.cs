@@ -36,6 +36,17 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
         public TimeSpan TimeWait { get; }
 
         /// <summary>
+        /// How long to wait in FIN-WAIT-2 for the peer's FIN before resetting the connection.
+        /// </summary>
+        /// <remarks>
+        /// RFC 9293 gives this wait no bound, which is fine for a kernel that can afford idle
+        /// sockets and wrong for a tunnel: a peer that is simply not finished talking never sends
+        /// a FIN, and the half-closed connection keeps its port and its receive queue for the life
+        /// of the tunnel. Linux bounds it the same way (tcp_fin_timeout, 60 s by default).
+        /// </remarks>
+        public TimeSpan FinWait2 { get; }
+
+        /// <summary>
         /// High-water mark (bytes) for unsent application data buffered by <see cref="TcpConnection.SendAsync"/>: once the
         /// buffer reaches this, a writer awaits until the peer's window drains it (backpressure) instead of buffering without
         /// bound. Tests set a tiny value so the blocking path is reached with small writes.
@@ -51,7 +62,8 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
             TimeSpan? persistMin = null,
             TimeSpan? persistMax = null,
             TimeSpan? timeWait = null,
-            int sendBufferHighWaterMark = 64 * 1024)
+            int sendBufferHighWaterMark = 64 * 1024,
+            TimeSpan? finWait2 = null)
         {
             InitialRto = initialRto ?? TimeSpan.FromSeconds(1);
             MinRto = minRto ?? TimeSpan.FromSeconds(1);
@@ -60,6 +72,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
             PersistMin = persistMin ?? TimeSpan.FromSeconds(1);
             PersistMax = persistMax ?? TimeSpan.FromSeconds(60);
             TimeWait = timeWait ?? TimeSpan.FromSeconds(2);
+            FinWait2 = finWait2 ?? TimeSpan.FromSeconds(60);
             SendBufferHighWaterMark = sendBufferHighWaterMark > 0 ? sendBufferHighWaterMark : 64 * 1024;
         }
 

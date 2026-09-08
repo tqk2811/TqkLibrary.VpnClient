@@ -57,6 +57,19 @@ namespace TqkLibrary.VpnClient.Sockets
         /// <inheritdoc/>
         public override void SetLength(long value) => throw new NotSupportedException();
 
+        /// <summary>
+        /// Ends the connection immediately with an RST, instead of the half-close
+        /// <see cref="Stream.Dispose()"/> performs.
+        /// </summary>
+        /// <remarks>
+        /// Disposing sends a FIN, which only says we have finished sending. A peer that is not
+        /// finished — or simply has nothing more to say — never answers with its own, and the
+        /// connection sits in FIN-WAIT-2 holding a port and a receive queue inside the tunnel. A
+        /// caller abandoning a request (a cancelled download, a browser closing a tab) should say
+        /// so with this: the peer frees its side too.
+        /// </remarks>
+        public void Abort() => _connection.Abort();
+
         /// <inheritdoc/>
         protected override void Dispose(bool disposing)
         {

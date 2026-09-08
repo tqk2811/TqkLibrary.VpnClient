@@ -21,5 +21,11 @@ namespace TqkLibrary.VpnClient.Sockets
 
         /// <summary>Gets the duplex stream for this connection.</summary>
         public Stream GetStream() => new VpnNetworkStream(_connection);
+
+        /// <summary>
+        /// Ends the connection immediately with an RST. See <see cref="VpnNetworkStream.Abort"/>
+        /// for why abandoning a connection needs this rather than a plain dispose.
+        /// </summary>
+        public void Abort() => _connection.Abort();
     }
 }

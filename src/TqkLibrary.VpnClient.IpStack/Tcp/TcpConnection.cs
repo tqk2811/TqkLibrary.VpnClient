@@ -353,6 +353,29 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
         }
 
         /// <summary>
+        /// Ends the connection now, telling the peer with an RST rather than starting a close
+        /// handshake and waiting for it to answer.
+        /// </summary>
+        /// <remarks>
+        /// This is what a caller that has given up on a connection wants, and <see cref="CloseSend"/>
+        /// is not it. A FIN says "I have finished sending" and leaves the peer free to hold its half
+        /// open indefinitely — a server has no reason to close a connection it thinks is idle. Every
+        /// such connection keeps a port and a receive queue alive inside the tunnel, and a browser
+        /// cancelling requests produces them steadily, so a tunnel that stays up for days
+        /// accumulates them until nothing works.
+        /// </remarks>
+        public void Abort()
+        {
+            lock (_sync)
+            {
+                if (_terminal) return;
+                // Before the handshake, or in TIME-WAIT, there is no peer connection left to reset.
+                if (_state != TcpState.Closed && _state != TcpState.TimeWait) EmitRst();
+                Terminate(null);
+            }
+        }
+
+        /// <summary>
         /// Reports an ICMP "fragmentation needed" (IPv4, RFC 1191) or ICMPv6 "packet too big" (RFC 8201) for a segment we
         /// sent: <paramref name="nextHopMtu"/> is the path MTU the router could forward, <paramref name="offendingSeq"/> the
         /// sequence number the quoted segment carried. Lowers the send MSS below the link MTU and re-segments the in-flight
@@ -430,7 +453,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
             TryConsumePeerFin();
             if (len > 0 || fin) EmitAck(); // cumulative / dup ACK (carries SACK blocks when out-of-order data is buffered)
             AdvanceClose();
-            if (_state == TcpState.TimeWait && fin) ArmCloseTimer(); // refresh linger on a retransmitted peer FIN
+            if (_state == TcpState.TimeWait && fin) ArmCloseTimer(_opts.TimeWait); // refresh linger on a retransmitted peer FIN
         }
 
         // ---- Receive reassembly + half-close FSM -----------------------------------------------------------
@@ -517,7 +540,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
                 case TcpState.FinWait1:
                     if (_peerFinReceived && OurFinAcked) EnterTimeWait();    // peer FIN+ACK in one segment
                     else if (_peerFinReceived) TransitionTo(TcpState.Closing);   // simultaneous close
-                    else if (OurFinAcked) TransitionTo(TcpState.FinWait2);   // our FIN acked, awaiting peer FIN
+                    else if (OurFinAcked) EnterFinWait2();                    // our FIN acked, awaiting peer FIN
                     break;
                 case TcpState.FinWait2:
                     if (_peerFinReceived) EnterTimeWait();
@@ -549,7 +572,18 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
         void EnterTimeWait()
         {
             TransitionTo(TcpState.TimeWait);
-            ArmCloseTimer();
+            ArmCloseTimer(_opts.TimeWait);
+        }
+
+        /// <summary>
+        /// Our FIN is acknowledged and we are waiting for the peer's. Bounded, because that wait
+        /// has no natural end: a peer with nothing to say never sends a FIN, and the connection
+        /// would hold its port and its receive queue for as long as the tunnel lives.
+        /// </summary>
+        void EnterFinWait2()
+        {
+            TransitionTo(TcpState.FinWait2);
+            ArmCloseTimer(_opts.FinWait2);
         }
 
         // Sets the TCP state and emits a Trace-level state-transition step. Additive: behaviour is identical to a bare
@@ -562,14 +596,22 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
                 _logger.LogProtocolStep(Layer, $"{_localPort}->{_remotePort} state {previous} -> {next}");
         }
 
-        void ArmCloseTimer() => _closeTimer.Change(_opts.TimeWait, Timeout.InfiniteTimeSpan);
+        // One timer for both bounded waits: TIME-WAIT and FIN-WAIT-2 cannot be occupied at once.
+        void ArmCloseTimer(TimeSpan after) => _closeTimer.Change(after, Timeout.InfiniteTimeSpan);
 
         void OnCloseTimer()
         {
             lock (_sync)
             {
                 if (_terminal) return;
-                if (_state == TcpState.TimeWait) Terminate(null); // linger elapsed → CLOSED
+                if (_state == TcpState.TimeWait) { Terminate(null); return; } // linger elapsed → CLOSED
+                if (_state == TcpState.FinWait2)
+                {
+                    // The peer acked our FIN and then went quiet. Reset rather than wait it out, so
+                    // it also stops holding state for a connection neither side is using.
+                    EmitRst();
+                    Terminate(new IOException("FIN-WAIT-2 timed out: the peer never closed its half"));
+                }
             }
         }
 
@@ -910,6 +952,14 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
             byte[] tcp = TcpSegment.Build(_localIp, _remoteIp, _localPort, _remotePort, seq, _rcvNxt, flags, ReceiveWindow, payload, mss, windowScale, sackPermitted, sackBlocks);
             byte[] ip = IpLayer.Build(_localIp, _remoteIp, Ipv4.ProtocolTcp, tcp, _ipId++); // TCP protocol number 6 is shared by IPv4/IPv6
             _sendIp(ip);
+        }
+
+        // Tells the peer to drop the connection outright. Best effort: the tunnel may already be
+        // gone, and the local teardown has to happen either way.
+        void EmitRst()
+        {
+            try { EmitSegment(_sndNxt, TcpFlags.Rst | TcpFlags.Ack, ReadOnlySpan<byte>.Empty); }
+            catch { }
         }
 
         // Sends a bare ACK, attaching SACK blocks describing the buffered out-of-order data when SACK is in effect (RFC 2018).
