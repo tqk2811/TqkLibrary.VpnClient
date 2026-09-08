@@ -87,7 +87,9 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
         public async Task FinWait2_DoesNotWaitForever_WhenThePeerNeverSendsItsFin()
         {
             var sent = new List<byte[]>();
-            var options = new TcpRetransmitOptions(finWait2: TimeSpan.FromMilliseconds(150));
+            // Long enough that a loaded machine cannot get here late and find the timer already
+            // fired, short enough that the test does not sit waiting for it.
+            var options = new TcpRetransmitOptions(finWait2: TimeSpan.FromMilliseconds(750));
             using var conn = new TcpConnection(ClientIp, ClientPort, ServerIp, ServerPort, sent.Add, options, linkMtu: 1400);
             uint peerNext = Handshake(conn, sent);
 
@@ -99,7 +101,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             conn.OnSegment(Segment(peerNext, finSeq + 1, TcpFlags.Ack));
             Assert.Equal(TcpState.FinWait2, conn.State);
 
-            await WaitForClosedAsync(conn, TimeSpan.FromSeconds(5));
+            await WaitForClosedAsync(conn, TimeSpan.FromSeconds(30));
 
             Assert.Equal(TcpState.Closed, conn.State);
             Assert.Contains(Drain(sent), ip => HasFlag(ip, TcpFlags.Rst));
@@ -109,8 +111,11 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
         public async Task FinWait2_EndsNormally_WhenThePeerDoesSendItsFin()
         {
             var sent = new List<byte[]>();
+            // The FIN-WAIT-2 bound is deliberately far away here: this test is about the ordinary
+            // close, and a short one would let a stalled machine reset the connection before the
+            // peer's FIN was delivered — a failure of the test harness, not of the code.
             var options = new TcpRetransmitOptions(
-                finWait2: TimeSpan.FromMilliseconds(150), timeWait: TimeSpan.FromMilliseconds(50));
+                finWait2: TimeSpan.FromMinutes(5), timeWait: TimeSpan.FromMilliseconds(50));
             using var conn = new TcpConnection(ClientIp, ClientPort, ServerIp, ServerPort, sent.Add, options, linkMtu: 1400);
             uint peerNext = Handshake(conn, sent);
 
