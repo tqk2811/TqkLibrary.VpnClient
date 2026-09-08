@@ -32,7 +32,13 @@ namespace TqkLibrary.VpnClient.IpStack
         readonly Ipv4Reassembler _reassembler = new();
         readonly Ipv6Reassembler _reassemblerV6 = new();
         readonly ushort _pingIdentifier;
-        int _nextPort = 49152;
+        /// <summary>The IANA ephemeral range, which is the whole of what this stack hands out.</summary>
+        const int FirstEphemeralPort = 49152;
+        const int EphemeralPortCount = 65536 - FirstEphemeralPort;
+
+        // Counts allocations rather than holding a port: NextEphemeralPort folds it into the range,
+        // so it may run past 65535 (and past int.MaxValue) without leaving it.
+        int _nextPort;
         int _nextPingSequence;
         int _replyIpId;
         int _fragId;
@@ -74,10 +80,25 @@ namespace TqkLibrary.VpnClient.IpStack
         /// <summary>Opens a TCP connection to <paramref name="remoteAddress"/>:<paramref name="remotePort"/> through the tunnel.</summary>
         public async Task<TcpConnection> ConnectAsync(IPAddress remoteAddress, ushort remotePort, CancellationToken cancellationToken = default)
         {
-            ushort localPort = (ushort)Interlocked.Increment(ref _nextPort);
-            var connection = new TcpConnection(LocalFor(remoteAddress), localPort, remoteAddress, remotePort, SendIp,
-                linkMtu: _channel.Mtu, logger: _logger);
-            _connections[localPort] = connection;
+            TcpConnection connection;
+            ushort localPort;
+            int attempt = 0;
+            while (true)
+            {
+                if (++attempt > EphemeralPortCount)
+                    throw new InvalidOperationException("The tunnel's stack has no free ephemeral TCP port left.");
+
+                localPort = NextEphemeralPort();
+                connection = new TcpConnection(LocalFor(remoteAddress), localPort, remoteAddress, remotePort, SendIp,
+                    linkMtu: _channel.Mtu, logger: _logger);
+
+                // TryAdd rather than an assignment: taking a port that is still in the table used
+                // to replace a live connection with this one, and then the OLD connection's Closed
+                // handler removed THIS one's entry — a connection nothing could deliver to.
+                if (_connections.TryAdd(localPort, connection)) break;
+                connection.Dispose();
+            }
+
             connection.Closed += () => { _connections.TryRemove(localPort, out _); connection.Dispose(); }; // drop faulted connections (RST / RTO give-up)
 
             connection.StartConnect();
@@ -89,7 +110,35 @@ namespace TqkLibrary.VpnClient.IpStack
         }
 
         /// <summary>Binds a userspace UDP socket on an ephemeral local port for datagrams through the tunnel.</summary>
-        public UdpConnection BindUdp() => BindUdp((ushort)Interlocked.Increment(ref _nextPort));
+        public UdpConnection BindUdp()
+        {
+            for (int attempt = 0; attempt < EphemeralPortCount; attempt++)
+            {
+                ushort localPort = NextEphemeralPort();
+                var socket = new UdpConnection(_localV4, _localV6, localPort, SendIp);
+
+                // A port still in the table belongs to a socket somebody is reading; handing it out
+                // again would silently move that socket's inbound datagrams onto this one.
+                if (_udpSockets.TryAdd(localPort, socket)) return socket;
+            }
+
+            throw new InvalidOperationException("The tunnel's stack has no free ephemeral UDP port left.");
+        }
+
+        /// <summary>
+        /// The next ephemeral port to try: forward from the last one handed out, wrapping inside the
+        /// range rather than out of it.
+        /// </summary>
+        /// <remarks>
+        /// This used to be <c>(ushort)Interlocked.Increment(ref _nextPort)</c> over a counter that
+        /// started at 49152. After 16 384 flows the cast wrapped to 0 and the stack began handing
+        /// out port 0, then 1, and so on through the well-known ports — and then round again onto
+        /// ports still in use. A caller that opens a short-lived flow per operation reaches that in
+        /// one session: the in-tunnel DNS resolver binds a socket per query.
+        /// </remarks>
+        ushort NextEphemeralPort()
+            => (ushort)(FirstEphemeralPort
+                + (uint)Interlocked.Increment(ref _nextPort) % (uint)EphemeralPortCount);
 
         /// <summary>Binds a userspace UDP socket on a specific local port.</summary>
         public UdpConnection BindUdp(ushort localPort)
