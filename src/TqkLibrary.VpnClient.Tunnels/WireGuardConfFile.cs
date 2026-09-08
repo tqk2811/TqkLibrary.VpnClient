@@ -19,11 +19,26 @@ namespace TqkLibrary.VpnClient.Tunnels
         public const int DefaultPort = 51820;
 
         /// <summary>Parses the file at <paramref name="path"/>.</summary>
-        public static (WireGuardConfig Config, string Host, int Port) Load(string path)
-            => Parse(File.ReadAllText(path));
+        /// <param name="path">The wg-quick file.</param>
+        /// <param name="defaultPersistentKeepaliveSeconds">
+        /// Used when the file sets no <c>PersistentKeepalive</c>; 0 keeps the file's answer, which is
+        /// WireGuard's own default of off. See <see cref="Parse(string, int)"/>.
+        /// </param>
+        public static (WireGuardConfig Config, string Host, int Port) Load(
+            string path, int defaultPersistentKeepaliveSeconds = 0)
+            => Parse(File.ReadAllText(path), defaultPersistentKeepaliveSeconds);
 
         /// <summary>Parses wg-quick configuration text.</summary>
-        public static (WireGuardConfig Config, string Host, int Port) Parse(string text)
+        /// <param name="text">The file's contents.</param>
+        /// <param name="defaultPersistentKeepaliveSeconds">
+        /// What to use when the text sets no <c>PersistentKeepalive</c>. 0 — the default here — reads
+        /// the file exactly as written, which is what a parser should do. A caller that has to hold
+        /// the tunnel up passes a real interval instead: most providers' files leave the key out, and
+        /// a peer behind NAT that sends nothing for a minute loses its mapping, after which the
+        /// tunnel is silently dead in one direction with nothing in the protocol to report it.
+        /// </param>
+        public static (WireGuardConfig Config, string Host, int Port) Parse(
+            string text, int defaultPersistentKeepaliveSeconds = 0)
         {
             if (text is null) throw new ArgumentNullException(nameof(text));
 
@@ -129,7 +144,9 @@ namespace TqkLibrary.VpnClient.Tunnels
                 // A file that routes nothing is a file with no purpose here, so an absent AllowedIPs
                 // is read as "everything" rather than left empty.
                 AllowedIps = allowedIps.Count > 0 ? allowedIps : new List<string> { "0.0.0.0/0", "::/0" },
-                PersistentKeepaliveSeconds = keepalive,
+                PersistentKeepaliveSeconds = keepalive > 0
+                    ? keepalive
+                    : Math.Max(0, defaultPersistentKeepaliveSeconds),
             };
             return (config, host, port);
         }

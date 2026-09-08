@@ -32,6 +32,21 @@ namespace TqkLibrary.VpnClient.Tunnels
         /// </summary>
         public string? SoftEtherWatermarkPath { get; set; }
 
+        /// <summary>
+        /// Keepalive interval, in seconds, given to a WireGuard peer whose <c>.conf</c> sets no
+        /// <c>PersistentKeepalive</c>. 0 leaves the file alone.
+        /// </summary>
+        /// <remarks>
+        /// WireGuard's own default is off, and that default assumes something else keeps the path
+        /// open. Nothing here does: this tunnel exists only while this process holds it, the peer
+        /// is almost always behind NAT, and a mapping the far side drops after a minute of silence
+        /// takes the tunnel with it — silently, since WireGuard has no link-loss to report. Most
+        /// providers' files leave the key out, so 25 seconds is the interval a tunnel gets unless
+        /// its file asks for another; it is also what wg-quick users are told to write, and what
+        /// wireproxy uses.
+        /// </remarks>
+        public int WireGuardKeepaliveSeconds { get; set; } = 25;
+
         /// <summary>Where the drivers' handshake/rekey/link-loss traces go. Null means no logging.</summary>
         public ILoggerFactory? LoggerFactory { get; set; }
 

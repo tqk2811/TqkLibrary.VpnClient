@@ -179,7 +179,8 @@ namespace TqkLibrary.VpnClient.Tunnels
             VpnTunnelOptions? options = null, CancellationToken cancellationToken = default)
         {
             VpnTunnelOptions o = VpnTunnelOptions.OrDefault(options);
-            (WireGuardConfig config, string host, int port) = WireGuardConfFile.Load(configPath);
+            (WireGuardConfig config, string host, int port)
+                = WireGuardConfFile.Load(configPath, o.WireGuardKeepaliveSeconds);
 
             var vpn = new WireGuardConnection(host, port, config, new WireGuardSocketTransportFactory(),
                 addressFamilyPreference: OuterPreference(o),

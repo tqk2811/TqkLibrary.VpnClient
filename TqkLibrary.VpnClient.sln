@@ -262,6 +262,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TqkLibrary.VpnClient.Transp
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TqkLibrary.VpnClient.Tunnels", "src\TqkLibrary.VpnClient.Tunnels\TqkLibrary.VpnClient.Tunnels.csproj", "{264B8290-98E1-4F4C-9F91-6B573D2342CE}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TqkLibrary.VpnClient.Tunnels.Tests", "tests\TqkLibrary.VpnClient.Tunnels.Tests\TqkLibrary.VpnClient.Tunnels.Tests.csproj", "{AE74A191-DBAC-47AE-8231-C79E4DCBC53F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -1736,6 +1738,18 @@ Global
 		{264B8290-98E1-4F4C-9F91-6B573D2342CE}.Release|x64.Build.0 = Release|Any CPU
 		{264B8290-98E1-4F4C-9F91-6B573D2342CE}.Release|x86.ActiveCfg = Release|Any CPU
 		{264B8290-98E1-4F4C-9F91-6B573D2342CE}.Release|x86.Build.0 = Release|Any CPU
+		{AE74A191-DBAC-47AE-8231-C79E4DCBC53F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AE74A191-DBAC-47AE-8231-C79E4DCBC53F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AE74A191-DBAC-47AE-8231-C79E4DCBC53F}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{AE74A191-DBAC-47AE-8231-C79E4DCBC53F}.Debug|x64.Build.0 = Debug|Any CPU
+		{AE74A191-DBAC-47AE-8231-C79E4DCBC53F}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{AE74A191-DBAC-47AE-8231-C79E4DCBC53F}.Debug|x86.Build.0 = Debug|Any CPU
+		{AE74A191-DBAC-47AE-8231-C79E4DCBC53F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AE74A191-DBAC-47AE-8231-C79E4DCBC53F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AE74A191-DBAC-47AE-8231-C79E4DCBC53F}.Release|x64.ActiveCfg = Release|Any CPU
+		{AE74A191-DBAC-47AE-8231-C79E4DCBC53F}.Release|x64.Build.0 = Release|Any CPU
+		{AE74A191-DBAC-47AE-8231-C79E4DCBC53F}.Release|x86.ActiveCfg = Release|Any CPU
+		{AE74A191-DBAC-47AE-8231-C79E4DCBC53F}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -1863,6 +1877,7 @@ Global
 		{14196595-9EFD-4E1A-9F37-38DB1AABC6E3} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{D8640612-97FD-492A-9926-6D26BD1F140F} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{264B8290-98E1-4F4C-9F91-6B573D2342CE} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{AE74A191-DBAC-47AE-8231-C79E4DCBC53F} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {009866DB-2C18-4FC0-84E8-A53C4AE4010E}
