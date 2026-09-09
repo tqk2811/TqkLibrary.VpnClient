@@ -224,6 +224,13 @@ namespace TqkLibrary.VpnClient.Drivers.Sstp
                 Logger.LogHandshakeFailed(DriverName, "PPP MS-CHAPv2 authentication failed");
                 linkUp.TrySetException(new VpnAuthenticationException("SSTP PPP MS-CHAPv2 authentication failed."));
             };
+            // A layer that has run out of retransmits will never open, and saying so here is what
+            // keeps the handshake wait from running to the caller's timeout on a dial already lost.
+            engine.NegotiationFailed += reason =>
+            {
+                Logger.LogHandshakeFailed(DriverName, reason);
+                linkUp.TrySetException(new VpnNetworkTimeoutException(reason));
+            };
             engine.LinkUp += () => linkUp.TrySetResult(true);
 
             var loopCts = CancellationTokenSource.CreateLinkedTokenSource(LifetimeToken, cancellationToken);

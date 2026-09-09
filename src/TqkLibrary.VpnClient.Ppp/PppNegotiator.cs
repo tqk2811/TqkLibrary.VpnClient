@@ -47,6 +47,7 @@ namespace TqkLibrary.VpnClient.Ppp
         int _requestAttempts;     // how many times the current Configure-Request has been transmitted
         bool _localAcked;
         bool _peerAcked;
+        bool _gaveUp;             // GaveUp is raised once, however often the timer comes back around
         bool _disposed;
 
         /// <summary>
@@ -70,6 +71,19 @@ namespace TqkLibrary.VpnClient.Ppp
 
         /// <summary>Raised once when the negotiator reaches <see cref="PppNegotiationState.Opened"/>.</summary>
         public event Action? Opened;
+
+        /// <summary>
+        /// Raised once when the Restart timer has sent this layer's Configure-Request as often as it is
+        /// allowed to and the peer has still not answered. The layer will never open now.
+        /// </summary>
+        /// <remarks>
+        /// RFC 1661 §4.6 says only to stop transmitting, and stopping in silence is what this used to do —
+        /// which left whoever was waiting for the link waiting on nothing. On a lossy UDP/ESP carrier one
+        /// dropped Configure-Request is enough to reach here, and the cost of not saying so is the whole of
+        /// the caller's connect timeout: measured on L2TP/IPsec, ~30s of retransmits followed by a further
+        /// 60s of a dial that had already failed, and then a retry that connects in seconds.
+        /// </remarks>
+        public event Action<string>? GaveUp;
 
         /// <summary>Sends the first Configure-Request to begin negotiation and arms the Restart timer.</summary>
         public void Start()
@@ -189,14 +203,35 @@ namespace TqkLibrary.VpnClient.Ppp
         void OnRestartTick()
         {
             byte[]? wire = null;
+            bool gaveUp = false;
             lock (_lock)
             {
                 if (_disposed || _localAcked || State == PppNegotiationState.Opened || _lastRequest == null) return;
-                if (_requestAttempts >= _maxRequests) return; // give up; the outer connect timeout surfaces the failure
-                _requestAttempts++;
-                wire = _lastRequest;
-                TryChangeTimer(_restartInterval);
+                if (_requestAttempts >= _maxRequests)
+                {
+                    if (_gaveUp) return;
+                    _gaveUp = true;
+                    gaveUp = true;
+                }
+                else
+                {
+                    _requestAttempts++;
+                    wire = _lastRequest;
+                    TryChangeTimer(_restartInterval);
+                }
             }
+
+            if (gaveUp)
+            {
+                string reason = $"{Layer}: the peer never answered our Configure-Request "
+                    + $"({_maxRequests} sent, {(int)_restartInterval.TotalSeconds}s apart)";
+                Logger.LogProtocolStep(Layer, "gave up: the peer never answered our Configure-Request");
+                // Same rule as the send below: this runs on a pool thread, and a subscriber that throws
+                // must not take the timer callback down with it.
+                try { GaveUp?.Invoke(reason); } catch { }
+                return;
+            }
+
             // The timer fires on a pool thread; a send against a torn-down channel must not crash the callback.
             try { _send(wire); } catch { }
         }

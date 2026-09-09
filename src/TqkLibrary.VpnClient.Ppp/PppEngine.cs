@@ -74,6 +74,10 @@ namespace TqkLibrary.VpnClient.Ppp
             _packetChannel = new PppPacketChannel(SendIpAsync, mtu);
             _lcp.Opened += OnLcpOpened;
             _ipcp.Opened += OnIpcpOpened;
+            // IPV6CP is deliberately NOT wired to this: IPv6 is best-effort here, and a server that
+            // never opens it must not fail a link that carries IPv4 perfectly well.
+            _lcp.GaveUp += OnNegotiationGaveUp;
+            _ipcp.GaveUp += OnNegotiationGaveUp;
             if (enableIpv6)
             {
                 _ipv6cp = new Ipv6cpNegotiator(p => SendControl(PppProtocol.Ipv6cp, p), interfaceId ?? DeriveInterfaceId(magic), assignPeerInterfaceId, _logger);
@@ -92,6 +96,13 @@ namespace TqkLibrary.VpnClient.Ppp
 
         /// <summary>Raised when authentication fails.</summary>
         public event Action? AuthFailed;
+
+        /// <summary>
+        /// Raised once when LCP or IPCP has retransmitted its Configure-Request as often as it may and the
+        /// peer has still not answered. The link will not come up, and a caller waiting on
+        /// <see cref="LinkUp"/> has to be told so rather than left waiting for its own timeout.
+        /// </summary>
+        public event Action<string>? NegotiationFailed;
 
         /// <summary>The L3 channel for this session (valid after <see cref="LinkUp"/>).</summary>
         public IPacketChannel PacketChannel => _packetChannel;
@@ -160,6 +171,15 @@ namespace TqkLibrary.VpnClient.Ppp
             _networkLayerStarted = true;
             _ipcp.Start();
             _ipv6cp?.Start();
+        }
+
+        // Raised on the negotiator's Restart-timer thread. Nothing is torn down here: saying the link
+        // will not come up is enough, and the caller decides what that means for the connection.
+        void OnNegotiationGaveUp(string reason)
+        {
+            if (IsLinkUp) return; // it opened after all; a late tick is not news
+            _logger.LogProtocolStep(Layer, $"negotiation failed — {reason}");
+            NegotiationFailed?.Invoke(reason);
         }
 
         void OnIpcpOpened()

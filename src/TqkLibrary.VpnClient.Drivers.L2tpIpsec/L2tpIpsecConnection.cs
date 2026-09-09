@@ -182,6 +182,7 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
             var linkUp = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             ppp.LinkUp += () => linkUp.TrySetResult(true);
             ppp.AuthFailed += () => linkUp.TrySetException(new VpnAuthenticationException("PPP MS-CHAPv2 authentication failed on the additional session."));
+            ppp.NegotiationFailed += reason => linkUp.TrySetException(new VpnNetworkTimeoutException(reason));
             session.Disconnected += reason => linkUp.TrySetException(new VpnServerRejectedException(reason));
             ppp.Start();
 
@@ -275,6 +276,15 @@ namespace TqkLibrary.VpnClient.Drivers.L2tpIpsec
             {
                 Logger.LogHandshakeFailed(DriverName, "PPP MS-CHAPv2 authentication failed");
                 linkUp.TrySetException(new VpnAuthenticationException("PPP MS-CHAPv2 authentication failed."));
+            };
+            // Without this the wait below has no bound of its own: LCP or IPCP running out of
+            // retransmits used to end in silence, so a dial that was already over went on being
+            // awaited until the caller's connect timeout — on this driver, a full further minute
+            // before a retry that then connected in seconds.
+            ppp.NegotiationFailed += reason =>
+            {
+                Logger.LogHandshakeFailed(DriverName, reason);
+                linkUp.TrySetException(new VpnNetworkTimeoutException(reason));
             };
             ppp.Start();
 

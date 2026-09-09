@@ -56,10 +56,58 @@ namespace TqkLibrary.VpnClient.Ppp.Tests
             Assert.Equal(countAtAck, finalCount); // no further Configure-Requests after the Ack
         }
 
+        /// <summary>
+        /// Running out of retransmits has to be said out loud. RFC 1661 asks only that the sender stop, and
+        /// stopping in silence left whoever was waiting for the link waiting on a negotiation that had
+        /// already given up — until their own connect timeout, a minute or more later.
+        /// </summary>
+        [Fact]
+        public async Task ExhaustedRestartCounter_SaysSoInsteadOfGoingQuiet()
+        {
+            var gate = new object();
+            var sent = new List<byte[]>();
+            var gaveUp = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var neg = new TestNegotiator(p => { lock (gate) sent.Add(p); }, TimeSpan.FromMilliseconds(20), maxRequests: 3);
+            neg.GaveUp += reason => gaveUp.TrySetResult(reason);
+
+            neg.Start();                       // nobody ever answers
+
+            string reason = await gaveUp.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.Contains("Configure-Request", reason);
+
+            int countAtGiveUp;
+            lock (gate) countAtGiveUp = sent.Count;
+            Assert.Equal(3, countAtGiveUp);    // the initial send plus its allowance of retransmits
+
+            await Task.Delay(200);             // and it really has stopped, rather than merely reported
+            int finalCount;
+            lock (gate) finalCount = sent.Count;
+            Assert.Equal(countAtGiveUp, finalCount);
+        }
+
+        [Fact]
+        public async Task AcknowledgedConfigureRequest_NeverSaysItGaveUp()
+        {
+            var gate = new object();
+            var sent = new List<byte[]>();
+            var gaveUp = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var neg = new TestNegotiator(p => { lock (gate) sent.Add(p); }, TimeSpan.FromMilliseconds(20), maxRequests: 3);
+            neg.GaveUp += reason => gaveUp.TrySetResult(reason);
+
+            neg.Start();
+            byte requestId;
+            lock (gate) requestId = PppControlCodec.Parse(sent[0]).Identifier;
+            neg.HandlePacket(PppControlCodec.BuildConfigure((byte)PppCode.ConfigureAck, requestId, System.Array.Empty<PppOption>()));
+
+            await Task.Delay(200);             // several times the whole retransmit budget
+            Assert.False(gaveUp.Task.IsCompleted);
+        }
+
         // A minimal concrete negotiator: requests one trivial option and acks whatever the peer requests.
         sealed class TestNegotiator : PppNegotiator
         {
-            public TestNegotiator(Action<byte[]> send, TimeSpan interval) : base(send, interval, maxRequests: 100) { }
+            public TestNegotiator(Action<byte[]> send, TimeSpan interval, int maxRequests = 100)
+                : base(send, interval, maxRequests) { }
 
             protected override IReadOnlyList<PppOption> BuildLocalOptions()
                 => new[] { new PppOption(1, new byte[] { 0x00 }) };
