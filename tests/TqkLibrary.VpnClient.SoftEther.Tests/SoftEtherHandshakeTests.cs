@@ -139,6 +139,40 @@ namespace TqkLibrary.VpnClient.SoftEther.Tests
             Assert.DoesNotContain("P@ssw0rd", AnsiOf(pack));
         }
 
+        // These three read as telemetry and are not: a login without them is accepted and answered with a full
+        // welcome, and the data session is then refused at the TLS layer on the first block — measured against
+        // every VPN Gate server tried (2026-09). So they are pinned here rather than left to look optional.
+        [Fact]
+        public void BuildLoginPack_AlwaysAnnouncesTheClientIdentity()
+        {
+            Pack pack = NewHandshake().BuildLoginPack(
+                new SoftEtherLoginRequest { HubName = "DEFAULT", UserName = "u", Password = "p" }, Challenge());
+
+            Assert.Equal(SoftEtherProtocol.DefaultClientStr, pack.GetStr("client_str"));
+            Assert.Equal(SoftEtherProtocol.DefaultClientVer, pack.GetInt("client_ver"));
+            Assert.Equal(SoftEtherProtocol.DefaultClientBuild, pack.GetInt("client_build"));
+        }
+
+        [Fact]
+        public void BuildLoginPack_ClientIdentityCanBeOverridden()
+        {
+            Pack pack = NewHandshake().BuildLoginPack(
+                new SoftEtherLoginRequest
+                {
+                    HubName = "DEFAULT",
+                    UserName = "u",
+                    Password = "p",
+                    ClientStr = "Contoso VPN",
+                    ClientVer = 1234,
+                    ClientBuild = 5678,
+                },
+                Challenge());
+
+            Assert.Equal("Contoso VPN", pack.GetStr("client_str"));
+            Assert.Equal(1234u, pack.GetInt("client_ver"));
+            Assert.Equal(5678u, pack.GetInt("client_build"));
+        }
+
         [Fact]
         public void BuildLoginPack_GeneratesUniqueIdWhenAbsent()
         {

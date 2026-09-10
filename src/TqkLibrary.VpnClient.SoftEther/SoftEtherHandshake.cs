@@ -63,7 +63,8 @@ namespace TqkLibrary.VpnClient.SoftEther
         /// Builds the client <c>login</c> PACK for <paramref name="request"/> against the server challenge
         /// <paramref name="serverRandom"/>: method/hubname/username/authtype, the credential (SHA-0
         /// <c>secure_password</c> for password auth, or <c>plain_password</c>), and the session params
-        /// (max_connection/use_encrypt/use_compress/half_connection/unique_id). Pure — no I/O.
+        /// (max_connection/use_encrypt/use_compress/half_connection/unique_id), and the client identity
+        /// (client_str/client_ver/client_build) the server needs before it will carry a data session. Pure — no I/O.
         /// </summary>
         public Pack BuildLoginPack(SoftEtherLoginRequest request, ReadOnlySpan<byte> serverRandom)
         {
@@ -99,6 +100,13 @@ namespace TqkLibrary.VpnClient.SoftEther
                 .SetBool(SoftEtherProtocol.UseCompressName, session.UseCompress)
                 .SetBool(SoftEtherProtocol.HalfConnectionName, session.HalfConnection)
                 .SetData(SoftEtherProtocol.UniqueIdName, uniqueId);
+
+            // Who the client says it is. This looks like telemetry and is load-bearing: without these three the
+            // server completes the login and hands back a full welcome, and then kills the data session at the TLS
+            // layer on the first block. See SoftEtherProtocol.ClientStrName.
+            pack.SetStr(SoftEtherProtocol.ClientStrName, request.ClientStr)
+                .SetInt(SoftEtherProtocol.ClientVerName, request.ClientVer)
+                .SetInt(SoftEtherProtocol.ClientBuildName, request.ClientBuild);
 
             return pack;
         }

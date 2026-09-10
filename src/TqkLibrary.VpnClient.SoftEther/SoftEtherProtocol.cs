@@ -75,14 +75,28 @@ namespace TqkLibrary.VpnClient.SoftEther
         /// <summary>DATA element carrying the per-client unique id.</summary>
         public const string UniqueIdName = "unique_id";
 
-        /// <summary>STR element naming the client product (informational).</summary>
+        /// <summary>
+        /// STR element naming the client product. Reads as informational and is not: a server that gets a login
+        /// without <c>client_str</c>/<c>client_ver</c>/<c>client_build</c> still allocates the session and returns a
+        /// complete welcome PACK, then refuses the data session with a TLS <c>protocol_version</c> alert on the first
+        /// block — a failure that says nothing about the missing fields.
+        /// </summary>
         public const string ClientStrName = "client_str";
 
-        /// <summary>INT element carrying the client product version (informational).</summary>
+        /// <summary>INT element carrying the client product version. See <see cref="ClientStrName"/>.</summary>
         public const string ClientVerName = "client_ver";
 
-        /// <summary>INT element carrying the client build number (informational).</summary>
+        /// <summary>INT element carrying the client build number. See <see cref="ClientStrName"/>.</summary>
         public const string ClientBuildName = "client_build";
+
+        /// <summary>The product name announced in <see cref="ClientStrName"/> when the caller names none.</summary>
+        public const string DefaultClientStr = "SoftEther VPN Client";
+
+        /// <summary>The version announced in <see cref="ClientVerName"/> when the caller names none.</summary>
+        public const uint DefaultClientVer = 4380;
+
+        /// <summary>The build announced in <see cref="ClientBuildName"/> when the caller names none.</summary>
+        public const uint DefaultClientBuild = 9760;
 
         // ---- Welcome / error (server → client) -------------------------------------------------------
 
