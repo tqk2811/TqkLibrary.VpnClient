@@ -21,6 +21,7 @@ namespace TqkLibrary.VpnClient.OpenVpn.Tests
 
             Assert.True(OpenVpnPushReply.TryParse(push, out OpenVpnPushReply reply));
             Assert.Equal(IPAddress.Parse("10.8.0.6"), reply.IfconfigLocal);
+            Assert.Equal(IPAddress.Parse("10.8.0.1"), reply.RouteGateway);
             Assert.Equal("subnet", reply.Topology);
             Assert.Equal(3u, reply.PeerId);
             Assert.Equal(10, reply.Ping);
@@ -32,6 +33,7 @@ namespace TqkLibrary.VpnClient.OpenVpn.Tests
             TunnelConfig config = reply.ToTunnelConfig();
             Assert.Equal(IPAddress.Parse("10.8.0.6"), config.AssignedAddress);
             Assert.Equal(24, config.PrefixLength); // from the 255.255.255.0 netmask
+            Assert.Equal(IPAddress.Parse("10.8.0.1"), config.Gateway);   // the next hop a tap bridge sends off-link packets to
             Assert.Equal(2, config.DnsServers.Count);
             Assert.Equal(new[] { "192.168.1.0/24" }, config.Routes);
         }

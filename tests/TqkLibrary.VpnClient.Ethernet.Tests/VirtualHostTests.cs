@@ -51,6 +51,43 @@ namespace TqkLibrary.VpnClient.Ethernet.Tests
         }
 
         [Fact]
+        public async Task Egress_OffLink_ResolvesTheGatewayNotTheDestination()
+        {
+            var port = new CaptureEthernetChannel();
+            var resolver = new MapNeighborResolver();
+            IPAddress gateway = IPAddress.Parse("10.245.254.254");
+            resolver.Add(gateway, MacB);                                        // only the router answers, as on a real segment
+            await using var host = new VirtualHost(MacA, port, resolver);
+            host.Routes.SetIpv4(IPAddress.Parse("10.245.96.168"), 16, gateway);
+
+            IPAddress far = IPAddress.Parse("23.15.142.182");
+            await host.WriteIpPacketAsync(Ipv4Packet(far, 7));
+
+            byte[] frame = Assert.Single(port.Written);
+            Assert.Equal(MacB, EthernetFrame.Destination(frame));               // framed to the router
+            Assert.Equal(far, new IPAddress(EthernetFrame.Payload(frame).Slice(16, 4).ToArray()));   // still addressed to the far host
+            Assert.DoesNotContain(far, resolver.Asked);                         // never wasted an ARP on the destination
+            Assert.Contains(gateway, resolver.Asked);
+        }
+
+        [Fact]
+        public async Task Egress_OnLink_StillResolvesTheDestination()
+        {
+            var port = new CaptureEthernetChannel();
+            var resolver = new MapNeighborResolver();
+            IPAddress neighbour = IPAddress.Parse("10.245.1.2");
+            resolver.Add(neighbour, MacB);
+            await using var host = new VirtualHost(MacA, port, resolver);
+            host.Routes.SetIpv4(IPAddress.Parse("10.245.96.168"), 16, IPAddress.Parse("10.245.254.254"));
+
+            await host.WriteIpPacketAsync(Ipv4Packet(neighbour, 7));
+
+            byte[] frame = Assert.Single(port.Written);
+            Assert.Equal(MacB, EthernetFrame.Destination(frame));
+            Assert.Contains(neighbour, resolver.Asked);
+        }
+
+        [Fact]
         public async Task Egress_Unresolved_DropsPacket()
         {
             var port = new CaptureEthernetChannel();
@@ -243,10 +280,14 @@ namespace TqkLibrary.VpnClient.Ethernet.Tests
         {
             readonly Dictionary<string, MacAddress> _map = new();
 
+            /// <summary>Every address a resolve was attempted for — so a test can assert which next hop was chosen.</summary>
+            public List<IPAddress> Asked { get; } = new();
+
             public void Add(IPAddress ip, MacAddress mac) => _map[ip.ToString()] = mac;
 
             public ValueTask<ReadOnlyMemory<byte>?> ResolveAsync(IPAddress nextHop, CancellationToken cancellationToken = default)
             {
+                Asked.Add(nextHop);
                 if (_map.TryGetValue(nextHop.ToString(), out MacAddress mac))
                 {
                     ReadOnlyMemory<byte> bytes = mac.ToArray();

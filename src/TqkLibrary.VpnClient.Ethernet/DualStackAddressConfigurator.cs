@@ -63,6 +63,8 @@ namespace TqkLibrary.VpnClient.Ethernet
                 PrefixLength = v4.PrefixLength,
                 AssignedAddressV6 = v6.AssignedAddressV6,
                 PrefixLengthV6 = v6.PrefixLengthV6,
+                Gateway = v4.Gateway,
+                GatewayV6 = v6.GatewayV6,
                 Mtu = Math.Min(v4.Mtu, v6.Mtu),
             };
             foreach (var dns in v4.DnsServers)

@@ -141,6 +141,7 @@ namespace TqkLibrary.VpnClient.Ethernet.Tests
             Assert.Equal(24, config.PrefixLength);                                  // 255.255.255.0 → /24
             Assert.Equal(new[] { Dns1, Dns2 }, config.DnsServers.ToArray());
             Assert.Equal($"0.0.0.0/0 {Router}", Assert.Single(config.Routes));
+            Assert.Equal(Router, config.Gateway);                                   // the typed next hop the L2 bridge routes by
             Assert.Equal(FastOptions.Mtu, config.Mtu);
         }
 
@@ -223,6 +224,7 @@ namespace TqkLibrary.VpnClient.Ethernet.Tests
             Assert.Equal(24, config.PrefixLength);
             Assert.Equal(new[] { Dns1, Dns2 }, config.DnsServers.ToArray());
             Assert.Equal($"0.0.0.0/0 {Router}", Assert.Single(config.Routes));
+            Assert.Equal(Router, config.Gateway);                                   // the typed next hop the L2 bridge routes by
         }
 
         // ---- Helpers ----

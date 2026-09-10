@@ -320,6 +320,9 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther
             }
 
             var virtualHost = new VirtualHost(_mac, channel, resolver);
+            // SecureNAT hands out a /16 and a router; anything outside that prefix has to be sent to the router, since
+            // no station on the segment answers ARP for a public address (the packet would be dropped in silence).
+            virtualHost.Routes.Apply(config);
             virtualHost.InboundNonIpFrame += arp.HandleInboundFrame;     // ARP replies/requests arrive on the non-IP seam
             virtualHost.InboundIpPacket += dhcp.HandleInboundFrame;      // a renewal DHCP reply rides ordinary IPv4
             if (ipSeam != null)

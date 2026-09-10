@@ -44,18 +44,28 @@ namespace TqkLibrary.VpnClient.Ethernet
             /// <summary>The neighbor resolver (ARP/NDISC) backing this host's egress.</summary>
             public INeighborResolver Resolver => _spec.Resolver;
 
+            /// <summary>
+            /// This host's link routing (on-link prefix + default gateway). Filled by <see cref="ConfigureAsync"/> from
+            /// the lease; exposed so a host built without a configurator can be told its routing by hand.
+            /// </summary>
+            public NextHopTable Routes => _host.Routes;
+
             /// <summary>The address configurator (DHCPv4 / SLAAC+DHCPv6), or <c>null</c> if the host has none.</summary>
             public IAddressConfigurator? Configurator => _spec.Configurator;
 
             /// <summary>
-            /// Runs this host's <see cref="IAddressConfigurator"/> (DHCP/SLAAC) to acquire its <see cref="TunnelConfig"/>.
+            /// Runs this host's <see cref="IAddressConfigurator"/> (DHCP/SLAAC) to acquire its <see cref="TunnelConfig"/>,
+            /// then teaches the host the routing that came with it (<see cref="VirtualHost.Routes"/>) — the lease is the
+            /// first moment the prefix and default gateway are known, and without them every off-link packet is dropped.
             /// </summary>
             /// <exception cref="InvalidOperationException">The host was created without a configurator.</exception>
-            public ValueTask<TunnelConfig> ConfigureAsync(CancellationToken cancellationToken = default)
+            public async ValueTask<TunnelConfig> ConfigureAsync(CancellationToken cancellationToken = default)
             {
                 if (_spec.Configurator is null)
                     throw new InvalidOperationException($"Host {_mac} has no IAddressConfigurator to run.");
-                return _spec.Configurator.ConfigureAsync(cancellationToken);
+                TunnelConfig config = await _spec.Configurator.ConfigureAsync(cancellationToken).ConfigureAwait(false);
+                _host.Routes.Apply(config);
+                return config;
             }
 
             /// <inheritdoc/>

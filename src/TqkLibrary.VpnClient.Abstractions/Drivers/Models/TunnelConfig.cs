@@ -20,6 +20,20 @@ namespace TqkLibrary.VpnClient.Abstractions.Drivers.Models
         /// <summary>Prefix length of the assigned IPv6 address (e.g. 64 for a link-local /64).</summary>
         public int PrefixLengthV6 { get; set; } = 64;
 
+        /// <summary>
+        /// The IPv4 default gateway (DHCP option 3 / an ifconfig push), or null when the session has none. On an L2
+        /// link this is the address a host must ARP for anything outside <see cref="PrefixLength"/> — ARPing the
+        /// destination itself goes unanswered, and the packet is dropped with nothing to show for it.
+        /// </summary>
+        /// <remarks>
+        /// The same gateway also appears in <see cref="Routes"/> as <c>"0.0.0.0/0 &lt;gateway&gt;"</c>; this is the typed
+        /// form, so a caller that only needs the next hop does not have to parse route text back apart.
+        /// </remarks>
+        public IPAddress? Gateway { get; set; }
+
+        /// <summary>The IPv6 default gateway (the advertising router of a Router Advertisement), or null if none.</summary>
+        public IPAddress? GatewayV6 { get; set; }
+
         /// <summary>DNS servers pushed by the server.</summary>
         public IList<IPAddress> DnsServers { get; } = new List<IPAddress>();
 

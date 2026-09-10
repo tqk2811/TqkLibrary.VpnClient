@@ -9,7 +9,8 @@ namespace TqkLibrary.VpnClient.Ethernet
     /// and exposes the <see cref="IPacketChannel"/> a userspace <c>TcpIpStack</c> binds to. This is the bridge that
     /// upholds the golden rule (design 00 §5): the IP stack only ever sees bare IP packets, never Ethernet.
     /// <para>
-    /// Egress (stack → wire): the next-hop MAC is resolved through <see cref="INeighborResolver"/> (ARP/NDISC) and the
+    /// Egress (stack → wire): <see cref="Routes"/> picks the next hop (the destination when it is on-link, the default
+    /// gateway when it is not), its MAC is resolved through <see cref="INeighborResolver"/> (ARP/NDISC) and the
     /// IP packet is wrapped in an Ethernet frame. Ingress (wire → stack): the 14-byte header is stripped and the payload
     /// surfaced on <see cref="IPacketChannel.InboundIpPacket"/>; non-IP frames (ARP) surface on <see cref="InboundNonIpFrame"/>
     /// for the neighbor layer (L2.3/L2.4) to handle.
@@ -44,6 +45,13 @@ namespace TqkLibrary.VpnClient.Ethernet
 
         /// <summary>This host's MAC address.</summary>
         public MacAddress Mac => _mac;
+
+        /// <summary>
+        /// This host's link: the prefix it is on and the router for everything else. Starts empty, which means every
+        /// destination is treated as on-link; a driver fills it from its lease (<see cref="NextHopTable.Apply"/>)
+        /// once one has arrived, which is after this host is built.
+        /// </summary>
+        public NextHopTable Routes { get; } = new NextHopTable();
 
         /// <inheritdoc/>
         public LinkMedium Medium => LinkMedium.Ip;
@@ -93,8 +101,10 @@ namespace TqkLibrary.VpnClient.Ethernet
                 return;   // not an IP packet — nothing to wrap
             }
 
-            // On-link assumption for L2.2: next hop = the packet's destination. Gateway/route selection is deferred.
-            ReadOnlyMemory<byte>? nextHopMac = await _resolver.ResolveAsync(destination, cancellationToken).ConfigureAwait(false);
+            // Off-link destinations go to the router, not to themselves: nothing on the segment answers ARP for a
+            // public address, so resolving the destination would time out and drop the packet without a word.
+            IPAddress nextHop = Routes.SelectNextHop(destination);
+            ReadOnlyMemory<byte>? nextHopMac = await _resolver.ResolveAsync(nextHop, cancellationToken).ConfigureAwait(false);
             if (nextHopMac is null || nextHopMac.Value.Length != MacAddress.Size)
                 return;   // unresolved → drop (a real ARP/NDISC resolver queues and retries)
 

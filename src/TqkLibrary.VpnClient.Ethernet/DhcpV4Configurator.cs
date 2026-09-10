@@ -211,7 +211,10 @@ namespace TqkLibrary.VpnClient.Ethernet
 
             IReadOnlyList<IPAddress> routers = DhcpV4Options.ReadAddresses(options, DhcpV4Options.CodeRouter);
             if (routers.Count > 0)
+            {
+                config.Gateway = routers[0];                    // the next hop for anything off this subnet
                 config.Routes.Add($"0.0.0.0/0 {routers[0]}");   // default route via the first advertised gateway
+            }
 
             foreach (IPAddress dns in DhcpV4Options.ReadAddresses(options, DhcpV4Options.CodeDnsServer))
                 config.DnsServers.Add(dns);

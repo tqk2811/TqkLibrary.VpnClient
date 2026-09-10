@@ -77,7 +77,10 @@ namespace TqkLibrary.VpnClient.Ethernet
 
             var config = new TunnelConfig { Mtu = _options.Mtu };
             if (ra.Router != null)
+            {
+                config.GatewayV6 = ra.Router;             // the next hop for anything off the advertised prefix
                 config.Routes.Add($"::/0 {ra.Router}");   // IPv6 default route via the advertising router
+            }
 
             // SLAAC: form a global address when the RA carries an autonomous /64 prefix (RFC 4862 §5.5.3).
             IPAddress? slaacAddress = TryFormSlaacAddress(ra);

@@ -153,6 +153,12 @@ namespace TqkLibrary.VpnClient.Ethernet.Tests
             Assert.Equal(StubDhcpServer.Offered, config.AssignedAddress);
             Assert.Equal(24, config.PrefixLength);
             Assert.Equal(StubDhcpServer.Dns, config.DnsServers.Single());
+
+            // The lease is also the moment the host learns how to route: off-link now goes to the advertised router
+            // rather than being ARPed for directly (which nothing would answer).
+            Assert.Equal(StubDhcpServer.Router, host.Routes.Gateway);
+            Assert.Equal(StubDhcpServer.Router, host.Routes.SelectNextHop(IPAddress.Parse("1.1.1.1")));
+            Assert.Equal(IPAddress.Parse("10.0.0.77"), host.Routes.SelectNextHop(IPAddress.Parse("10.0.0.77")));
         }
 
         [Fact]

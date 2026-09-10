@@ -450,6 +450,9 @@ namespace TqkLibrary.VpnClient.Drivers.OpenVpn
             }
 
             var host = new VirtualHost(_tapMac, tap, resolver);
+            // A bridged segment has a router: off-link packets go to it, because nothing on the segment answers ARP
+            // for an address beyond the bridge. With no pushed route-gateway the table stays empty (on-link only).
+            host.Routes.Apply(config);
             host.InboundNonIpFrame += arp.HandleInboundFrame;    // ARP replies/requests arrive on the non-IP seam
             if (_tapDhcp != null)
                 host.InboundIpPacket += _tapDhcp.HandleInboundFrame;   // a renewal DHCP reply rides ordinary IPv4

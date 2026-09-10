@@ -21,6 +21,12 @@ namespace TqkLibrary.VpnClient.OpenVpn.DataChannel
         /// <summary>The second <c>ifconfig</c> argument: the peer address (net30) or the netmask (subnet topology).</summary>
         public IPAddress? IfconfigRemoteOrMask { get; private set; }
 
+        /// <summary>
+        /// The default gateway from <c>route-gateway &lt;ip&gt;</c>. It matters in tap (bridged) mode, where the host is
+        /// on a real Ethernet segment and has to send off-link packets to this router rather than to the destination.
+        /// </summary>
+        public IPAddress? RouteGateway { get; private set; }
+
         /// <summary><c>topology</c> value (<c>subnet</c>/<c>net30</c>/<c>p2p</c>); null when unset (tun ⇒ net30).</summary>
         public string? Topology { get; private set; }
 
@@ -77,6 +83,9 @@ namespace TqkLibrary.VpnClient.OpenVpn.DataChannel
                         string? cidr = RouteToCidr(t);
                         if (cidr != null) reply.Routes.Add(cidr);
                         break;
+                    case "route-gateway":
+                        if (t.Length >= 2) reply.RouteGateway = ParseV4(t[1]);
+                        break;
                     case "dhcp-option":
                         if (t.Length >= 3 && string.Equals(t[1], "DNS", StringComparison.OrdinalIgnoreCase)
                             && ParseV4(t[2]) is IPAddress dns) reply.DnsServers.Add(dns);
@@ -114,6 +123,7 @@ namespace TqkLibrary.VpnClient.OpenVpn.DataChannel
                 config.PrefixLength = MaskToPrefix(IfconfigRemoteOrMask);
             else
                 config.PrefixLength = 30;
+            config.Gateway = RouteGateway;
             foreach (IPAddress dns in DnsServers) config.DnsServers.Add(dns);
             foreach (string route in Routes) config.Routes.Add(route);
             return config;
