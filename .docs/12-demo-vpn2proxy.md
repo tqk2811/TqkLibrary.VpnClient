@@ -7,7 +7,7 @@
 ## 1. Mục đích & vị trí
 
 Demo console chứng minh: kết nối VPN (qua một trong **17 giao thức** — xem §3) → biến tunnel thành `IProxySource` của
-**`TqkLibrary.Proxy` 1.0.35** → dựng HTTP/SOCKS proxy local định tuyến mọi kết nối **trong** tunnel, rồi **giữ proxy +
+**`TqkLibrary.Proxy` 1.0.60** → dựng HTTP/SOCKS proxy local định tuyến mọi kết nối **trong** tunnel, rồi **giữ proxy +
 tunnel sống tới khi nhấn Enter** (Ctrl+C cũng dừng) để test VPN duy trì kết nối (keepalive/auto-reconnect) trong lúc
 client trỏ traffic vào proxy.
 
@@ -18,7 +18,7 @@ client trỏ traffic vào proxy.
 `Drivers.IpEncap`, `Drivers.Nebula`, `Drivers.Tinc`, `Drivers.N2n`, `Drivers.ZeroTier`, `Drivers.Vtun`, `Drivers.Tailscale`, `Drivers.Ssh`)
 + `Sockets` (`VpnTcpClient`/`VpnUdpClient`/`TcpIpStack`) + `Transport.RawIp` (`RawIpTransportFactory` — ESP/GRE/IPIP/SIT proto raw socket cho
 L2TP `--native-esp`/PPTP/IP-encap). Các project parse config (`OpenVpn`, `WireGuard`, `Nebula`, `Tinc`, `ZeroTier`...) đến transitive qua driver tương ứng,
-dùng trực tiếp trong các hàm `VpnTunnel.Connect*Async`. NuGet `System.CommandLine` 2.0.7 + `TqkLibrary.Proxy` 1.0.35 +
+dùng trực tiếp trong các hàm `VpnTunnel.Connect*Async`. NuGet `System.CommandLine` 2.0.7 + `TqkLibrary.Proxy` 1.0.60 +
 `Microsoft.Extensions.Logging` 10.0.x / `.Console` 10.0.x (console log cho `ProxyServer` + `VpnProxySource` + logger driver).
 
 ## 2. Luồng
@@ -52,24 +52,24 @@ không bao giờ làm hỏng hành động chính. Các khả năng thư viện 
 Bốn subcommand riêng (`dns` / `proxy-server` / `http-request` / `http-post-upload`). Subcommand `dns` gọi [`ProbeUdpDnsAsync` @ :44](../demo/Vpn2ProxyDemo/CommandModules/ProbeUdpDnsCommandModule.cs#L44):
 gửi một truy vấn DNS (bản ghi A) qua **UDP xuyên tunnel** bằng [`UdpDnsProbe.ResolveAsync` @ :29](../demo/Vpn2ProxyDemo/UdpDnsProbe.cs#L29)
 (`VpnUdpClient` → `TcpIpStack.BindUdp`). Nhận được phản hồi ⇒ **VPN có định tuyến UDP**, đồng thời in IPv4 phân giải
-được. Đây là kênh data plane **độc lập** với proxy TCP (riêng với SOCKS5 UDP-ASSOCIATE — proxy đã `IsSupportUdp=true`).
+được. Đây là kênh data plane **độc lập** với proxy TCP (riêng với SOCKS5 UDP-ASSOCIATE — proxy khai `IUdpCapable`, `IsSupportUdp=true`).
 `http-request` kế thừa `proxy-server`: dựng cùng proxy rồi GET `--url` **qua proxy đó** (in body, thoát) thay vì giữ tới khi Enter.
 `http-post-upload` cũng kế thừa `proxy-server`: POST một payload `--size` byte tới `--url` **qua proxy đó** rồi in throughput + byte server xác nhận
 (re-validate Q.4 sender-SWS — upload lớn qua tunnel phải hoàn tất với segment đầy-MSS, không "1 byte/segment"; đường đi qua `VpnProxySource` → `TcpConnection`).
 
-Mỗi kết nối TCP qua proxy: `ProxyServer` gọi [`VpnProxySource.GetConnectSourceAsync` @ :44](../demo/Vpn2ProxyDemo/VpnProxySource.cs#L44)
+Mỗi kết nối TCP qua proxy: `ProxyServer` gọi [`VpnProxySource.GetConnectSourceAsync` @ :51](../demo/Vpn2ProxyDemo/VpnProxySource.cs#L51)
 → [`VpnConnectSource.ConnectAsync` @ :37](../demo/Vpn2ProxyDemo/VpnProxySource.VpnConnectSource.cs#L37) resolve host ([`ResolveAsync` @ :78](../demo/Vpn2ProxyDemo/VpnProxySource.VpnConnectSource.cs#L78): IPv4/IPv6 literal as-is, hoặc DNS ưu tiên A rồi fallback AAAA — dual-stack P1.1) rồi
 `VpnTcpClient.ConnectAsync` dial trong tunnel → [`GetStreamAsync` @ :68](../demo/Vpn2ProxyDemo/VpnProxySource.VpnConnectSource.cs#L68) trả
 stream duplex cho proxy bơm traffic. **SOCKS5 UDP-ASSOCIATE** dùng [`VpnUdpAssociateSource` @ :21](../demo/Vpn2ProxyDemo/VpnProxySource.VpnUdpAssociateSource.cs#L21)
-(egress UDP qua `UdpConnection`, đích IPv4 **và** IPv6 dual-stack — P1.1). **BIND** vẫn ném `NotSupportedException` — stack active-open-only + địa chỉ tunnel private
-không routable từ internet ([VpnProxySource.cs:48-50](../demo/Vpn2ProxyDemo/VpnProxySource.cs#L48-L50)). IPv6 chỉ bật khi tunnel cấp địa chỉ global (`IsSupportIpv6` theo cờ ctor `supportIpv6`).
+(egress UDP qua `UdpConnection`, đích IPv4 **và** IPv6 dual-stack — P1.1). **BIND** không có: source không khai `IBindCapable` nên server từ chối — stack active-open-only + địa chỉ tunnel private
+không routable từ internet ([VpnProxySource.cs:24](../demo/Vpn2ProxyDemo/VpnProxySource.cs#L24)). IPv6 chỉ bật khi tunnel cấp địa chỉ global (stack dual-stack; `IsSupportIpv6` theo cờ ctor `supportIpv6` chỉ để hiển thị — từ `TqkLibrary.Proxy` 1.0.60 thư viện không hỏi source cờ này).
 
 ## 3. Thành phần
 
 | File | Vai trò |
 |---|---|
 | [Program.cs:18](../demo/Vpn2ProxyDemo/Program.cs#L18) | `RootCommand { dns, proxy-server, http-request, http-post-upload }` → `Parse(args).InvokeAsync()` (System.CommandLine 2.0.7) |
-| [VpnProxySource.cs:18](../demo/Vpn2ProxyDemo/VpnProxySource.cs#L18) | `IProxySource` (partial) bọc `TcpIpStack`; `IsSupportUdp=true`, `IsSupportBind=false`, `IsSupportIpv6` theo cờ ctor `supportIpv6` (bật khi tunnel có IPv6 global — P1.1); ctor nhận **`ILoggerFactory?`** → sinh `ILogger` cho mỗi `IConnectSource`/`IUdpAssociateSource` |
+| [VpnProxySource.cs:24](../demo/Vpn2ProxyDemo/VpnProxySource.cs#L24) | `IProxySource` + `IUdpCapable` (partial) bọc `TcpIpStack`; `IsSupportUdp=true`, không khai `IBindCapable` (không BIND), `IsSupportIpv6` (chỉ để hiển thị) theo cờ ctor `supportIpv6` (bật khi tunnel có IPv6 global — P1.1); `DisposeAsync` rỗng (stack thuộc `VpnTunnel`); ctor nhận **`ILoggerFactory?`** → sinh `ILogger` cho mỗi `IConnectSource`/`IUdpAssociateSource` |
 | [VpnProxySource.VpnConnectSource.cs:19](../demo/Vpn2ProxyDemo/VpnProxySource.VpnConnectSource.cs#L19) | `IConnectSource` (nested): mở `VpnTcpClient` qua tunnel, trả `Stream`; [`ResolveAsync` @ :78](../demo/Vpn2ProxyDemo/VpnProxySource.VpnConnectSource.cs#L78) hỗ trợ IPv4/IPv6 literal + DNS A→AAAA fallback (dual-stack); **log** resolve/connect/lỗi/đóng qua `ILogger?` |
 | [VpnProxySource.VpnUdpAssociateSource.cs:21](../demo/Vpn2ProxyDemo/VpnProxySource.VpnUdpAssociateSource.cs#L21) | `IUdpAssociateSource` (nested): egress UDP qua `UdpConnection` (`SendTo`/`ReceiveAsync` đa đích, IPv4 **+** IPv6 dual-stack), `UnbindUdp` khi `Dispose`; **log** associate/send/receive/unbind qua `ILogger?` |
 | [UdpDnsProbe.cs:18](../demo/Vpn2ProxyDemo/UdpDnsProbe.cs#L18) | Build/parse gói DNS (RFC 1035) trên `VpnUdpClient` → gửi truy vấn A qua UDP xuyên tunnel (kiểm tra UDP + phân giải domain), retry + timeout |

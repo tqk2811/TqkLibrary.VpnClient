@@ -29,7 +29,7 @@ Luồng: **vpn → TcpIpStack → panel "VPN hỗ trợ gì" → (dns | proxy-se
 Vpn2ProxyDemo/
 ├── Program.cs                        RootCommand { dns, proxy-server, http-request, http-post-upload } -> Parse(args).InvokeAsync()
 ├── Properties/launchSettings.json    profile chạy nhanh từng case (proxy-server/http-request/dns × sstp/l2tp/openvpn/softether + help)
-├── VpnProxySource.cs                 IProxySource (partial) bọc TcpIpStack; IsSupportUdp=true, Bind=false; IsSupportIpv6 theo cờ ctor supportIpv6 (bật khi tunnel có v6 global — P1.1(4)); ctor nhận ILoggerFactory? -> sinh ILogger cho mỗi nested source
+├── VpnProxySource.cs                 IProxySource + IUdpCapable (partial) bọc TcpIpStack; IsSupportUdp=true, không IBindCapable (không BIND); IsSupportIpv6 theo cờ ctor supportIpv6 (bật khi tunnel có v6 global — P1.1(4)); ctor nhận ILoggerFactory? -> sinh ILogger cho mỗi nested source
 ├── VpnProxySource.VpnConnectSource.cs        IConnectSource (nested): mở VpnTcpClient qua tunnel, trả Stream cho ProxyServer; ResolveAsync hỗ trợ IPv4/IPv6 literal + DNS A→AAAA fallback (dual-stack); log resolve/connect/lỗi (ILogger?)
 ├── VpnProxySource.VpnUdpAssociateSource.cs   IUdpAssociateSource (nested): egress UDP đa đích qua UdpConnection (SOCKS5 UDP-ASSOCIATE); đích IPv4 + IPv6 dual-stack; log associate/send/receive/unbind (ILogger?)
 ├── UdpDnsProbe.cs                    build/parse gói DNS (RFC 1035) trên VpnUdpClient: probe UDP + phân giải domain qua tunnel
