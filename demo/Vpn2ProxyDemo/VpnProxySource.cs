@@ -10,12 +10,18 @@ namespace Vpn2ProxyDemo
     /// listening on localhost forwards its traffic out the VPN.
     /// <para>
     /// Supports SOCKS4/5 + HTTP/HTTPS CONNECT (TCP) and SOCKS5 UDP-ASSOCIATE (datagrams ride the stack's userspace
-    /// UDP socket). Dual-stack when the tunnel provided a global IPv6 address (the stack is built dual-stack and
-    /// <see cref="IsSupportIpv6"/> is set; otherwise IPv4-only). BIND is not offered: the stack is active-open only, and
-    /// the private tunnel address is not routable from the internet, so an external peer could never dial in.
+    /// UDP socket) — the latter through <see cref="IUdpCapable"/>, which is what the server asks since
+    /// TqkLibrary.Proxy 1.0.60. Dual-stack when the tunnel provided a global IPv6 address (the stack is built
+    /// dual-stack and <see cref="IsSupportIpv6"/> is set; otherwise IPv4-only). BIND is not offered — the source does
+    /// not implement <see cref="IBindCapable"/>, so the server refuses it: the stack is active-open only, and the
+    /// private tunnel address is not routable from the internet, so an external peer could never dial in.
+    /// </para>
+    /// <para>
+    /// Does not own the stack: the <c>VpnTunnel</c> that built it closes it, so <see cref="DisposeAsync"/> has
+    /// nothing to release.
     /// </para>
     /// </summary>
-    public sealed partial class VpnProxySource : IProxySource
+    public sealed partial class VpnProxySource : IProxySource, IUdpCapable
     {
         readonly TcpIpStack _stack;
         readonly ILoggerFactory? _loggerFactory;
@@ -31,26 +37,25 @@ namespace Vpn2ProxyDemo
             _supportIpv6 = supportIpv6;
         }
 
-        /// <inheritdoc/>
-        public bool IsSupportUdp => true;
-
-        /// <inheritdoc/>
+        /// <summary>
+        /// Whether the tunnel's stack is dual-stack (the tunnel handed out a global IPv6 address). Informational:
+        /// no part of TqkLibrary.Proxy asks a source this. Whether an IPv6 destination can be reached is decided by
+        /// the stack itself, which is why this source does not offer the <see cref="IAddressFamilyPolicy"/> switch.
+        /// </summary>
         public bool IsSupportIpv6 => _supportIpv6;
 
         /// <inheritdoc/>
-        public bool IsSupportBind => false;
+        public bool IsSupportUdp => true;
 
         /// <inheritdoc/>
         public Task<IConnectSource> GetConnectSourceAsync(Guid tunnelId, CancellationToken cancellationToken = default)
             => Task.FromResult<IConnectSource>(new VpnConnectSource(_stack, _loggerFactory?.CreateLogger<VpnConnectSource>()));
 
         /// <inheritdoc/>
-        public Task<IBindSource> GetBindSourceAsync(Guid tunnelId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException(
-                "BIND is not supported over the VPN userspace stack: active-open only, and the private tunnel address is not routable from the internet.");
-
-        /// <inheritdoc/>
         public Task<IUdpAssociateSource> GetUdpAssociateSourceAsync(Guid tunnelId, CancellationToken cancellationToken = default)
             => Task.FromResult<IUdpAssociateSource>(new VpnUdpAssociateSource(_stack, _loggerFactory?.CreateLogger<VpnUdpAssociateSource>()));
+
+        /// <summary>Nothing to release: the stack belongs to the tunnel that built it.</summary>
+        public ValueTask DisposeAsync() => default;
     }
 }
