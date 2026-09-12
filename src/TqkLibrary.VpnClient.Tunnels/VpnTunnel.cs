@@ -1,4 +1,5 @@
 using System.Net;
+using Microsoft.Extensions.Logging;
 using TqkLibrary.VpnClient.Drivers.Core;
 using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.IpStack;
@@ -17,11 +18,17 @@ namespace TqkLibrary.VpnClient.Tunnels
     /// re-establishes a dropped link by itself. A host holding the tunnel open should watch those
     /// rather than build its own health check: rebuilding the tunnel while the driver is already
     /// mending it only fights the driver.
+    ///
+    /// What the driver cannot see for itself is a session the server dropped without saying so —
+    /// see <see cref="TunnelHealthMonitor"/>, which this handle runs on the driver's behalf and
+    /// which reports through <see cref="ReconnectingVpnConnection.ReportLinkDead"/>, so the repair
+    /// is still the driver's and a host still has only the one thing to watch.
     /// </remarks>
     public sealed class VpnTunnel : IAsyncDisposable
     {
         readonly ReconnectingVpnConnection _connection;
         readonly Func<ValueTask> _disposeAsync;
+        readonly TunnelHealthMonitor? _health;
         int _disposed;
 
         internal VpnTunnel(
@@ -32,7 +39,9 @@ namespace TqkLibrary.VpnClient.Tunnels
             int mtu,
             string protocolName,
             IPAddress? assignedDns = null,
-            IPAddress? assignedAddressV6 = null)
+            IPAddress? assignedAddressV6 = null,
+            VpnHealthProbeOptions? healthProbe = null,
+            ILogger? logger = null)
         {
             _connection = connection ?? throw new ArgumentNullException(nameof(connection));
             Stack = stack ?? throw new ArgumentNullException(nameof(stack));
@@ -44,6 +53,16 @@ namespace TqkLibrary.VpnClient.Tunnels
             AssignedAddressV6 = assignedAddressV6;
 
             _connection.StateChanged += OnStateChanged;
+
+            if (healthProbe is { IsActive: true })
+            {
+                _health = new TunnelHealthMonitor(
+                    new IpStackTunnelProbe(stack, assignedDns, healthProbe.Timeout, logger),
+                    () => IsUp,
+                    reason => _connection.ReportLinkDead(reason),
+                    healthProbe, ProtocolName, logger);
+                _health.Start();
+            }
         }
 
         /// <summary>The userspace TCP/IP stack running inside the tunnel.</summary>
@@ -88,6 +107,9 @@ namespace TqkLibrary.VpnClient.Tunnels
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
             _connection.StateChanged -= OnStateChanged;
+            // Before the connection goes: a probe in flight against a torn-down stack would report
+            // silence, and the driver would start reconnecting something nobody wants any more.
+            if (_health is not null) await _health.DisposeAsync().ConfigureAwait(false);
             await _disposeAsync().ConfigureAwait(false);
         }
 

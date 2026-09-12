@@ -174,6 +174,22 @@ namespace TqkLibrary.VpnClient.Drivers.Core
             }
         }
 
+        /// <summary>
+        /// Declares the link dead from OUTSIDE the driver, for a tunnel whose transport still looks
+        /// healthy but is no longer carrying anything. Feeds straight into <see cref="OnLinkLost"/>,
+        /// so the reconnect supervisor treats it exactly like a drop the driver spotted itself.
+        /// A no-op unless the connection is currently running.
+        /// </summary>
+        /// <remarks>
+        /// Every detector a driver has measures its own TRANSPORT: a socket still open, control
+        /// messages still answered. A server that keeps answering those while quietly dropping the
+        /// session's data plane is invisible to all of them — and SSTP and SoftEther have no
+        /// link-loss message at all, so they report nothing and sit at Connected for good. Whoever
+        /// does see it — something sending real packets through the tunnel and getting silence
+        /// back — says so here.
+        /// </remarks>
+        public void ReportLinkDead(string reason) => OnLinkLost(reason);
+
         async Task ReconnectLoopAsync(CancellationToken cancellationToken)
         {
             TimeSpan delay = _options.InitialBackoff;

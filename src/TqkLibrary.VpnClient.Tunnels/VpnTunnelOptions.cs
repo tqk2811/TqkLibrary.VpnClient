@@ -47,6 +47,13 @@ namespace TqkLibrary.VpnClient.Tunnels
         /// </remarks>
         public int WireGuardKeepaliveSeconds { get; set; } = 25;
 
+        /// <summary>
+        /// How a tunnel that is up is checked for a session the server dropped in silence. On by
+        /// default; set <see cref="VpnHealthProbeOptions.Enabled"/> to false to leave a tunnel
+        /// entirely to its driver's own drop detection.
+        /// </summary>
+        public VpnHealthProbeOptions HealthProbe { get; set; } = new VpnHealthProbeOptions();
+
         /// <summary>Where the drivers' handshake/rekey/link-loss traces go. Null means no logging.</summary>
         public ILoggerFactory? LoggerFactory { get; set; }
 
