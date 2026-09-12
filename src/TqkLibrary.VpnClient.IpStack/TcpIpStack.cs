@@ -24,8 +24,11 @@ namespace TqkLibrary.VpnClient.IpStack
 
         readonly IPacketChannel _channel;
         readonly ILogger _logger;
-        readonly IPAddress? _localV4;
-        readonly IPAddress? _localV6;
+        // Not readonly: a driver that re-establishes its link may be handed a different address, and
+        // a stack still sourcing packets from the old one is a tunnel that looks up and carries
+        // nothing. See Rebind.
+        volatile IPAddress? _localV4;
+        volatile IPAddress? _localV6;
         readonly ConcurrentDictionary<ushort, TcpConnection> _connections = new();
         readonly ConcurrentDictionary<ushort, UdpConnection> _udpSockets = new();
         readonly ConcurrentDictionary<ushort, TaskCompletionSource<PingReply>> _pings = new();
@@ -154,6 +157,48 @@ namespace TqkLibrary.VpnClient.IpStack
         /// nobody reads. Unlike TCP (auto-removed on close), UDP sockets have no lifecycle, so callers unbind explicitly.
         /// </summary>
         public void UnbindUdp(ushort localPort) => _udpSockets.TryRemove(localPort, out _);
+
+        /// <summary>
+        /// Moves the stack onto the address(es) a re-established link was given, aborting everything that was
+        /// open on the old ones. Does nothing when the addressing is unchanged. At least one address is required,
+        /// as at construction.
+        /// </summary>
+        /// <remarks>
+        /// A driver that mends its own link keeps this stack and the channel behind it, but the far side may well
+        /// hand out a different address for the new session — public servers lease from a pool and rarely repeat.
+        /// Left alone the stack would keep sourcing packets from an address the server has never heard of: the
+        /// tunnel reads as up, every packet is dropped, and nothing anywhere reports a fault. That is the same
+        /// silent failure the health probe exists to catch, so a reconnect must not manufacture it.
+        ///
+        /// Open connections cannot survive the move. Their sequence state belongs to a session the server has
+        /// forgotten, and their local address no longer exists; they are reset here rather than left to time out,
+        /// so whoever is reading them fails at once instead of hanging.
+        /// </remarks>
+        public void Rebind(IPAddress? localV4, IPAddress? localV6)
+        {
+            if (localV4 is null && localV6 is null)
+                throw new ArgumentException("At least one local address (IPv4 or IPv6) is required.");
+            if (localV4 is not null && localV4.AddressFamily != AddressFamily.InterNetwork)
+                throw new ArgumentException("localV4 must be an IPv4 address.", nameof(localV4));
+            if (localV6 is not null && localV6.AddressFamily != AddressFamily.InterNetworkV6)
+                throw new ArgumentException("localV6 must be an IPv6 address.", nameof(localV6));
+
+            if (Equals(_localV4, localV4) && Equals(_localV6, localV6)) return;
+
+            _logger.LogDebug(
+                "[stack] rebinding from {OldV4}/{OldV6} to {NewV4}/{NewV6}; {Connections} connection(s) reset",
+                _localV4, _localV6, localV4, localV6, _connections.Count);
+
+            _localV4 = localV4;
+            _localV6 = localV6;
+
+            foreach (TcpConnection connection in _connections.Values)
+            {
+                try { connection.Abort(); } catch { /* already terminal */ }
+            }
+            _connections.Clear();
+            _udpSockets.Clear();
+        }
 
         /// <summary>
         /// Sends an ICMP Echo Request through the tunnel and awaits the matching Echo Reply. Throws

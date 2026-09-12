@@ -15,6 +15,7 @@ using TqkLibrary.VpnClient.Drivers.WireGuard.Transport;
 using TqkLibrary.VpnClient.IpStack;
 using TqkLibrary.VpnClient.OpenVpn.Config;
 using TqkLibrary.VpnClient.SoftEther;
+using TqkLibrary.VpnClient.Tunnels.Models;
 using TqkLibrary.VpnClient.WireGuard.Config;
 
 namespace TqkLibrary.VpnClient.Tunnels
@@ -51,7 +52,8 @@ namespace TqkLibrary.VpnClient.Tunnels
                 var stack = new TcpIpStack(vpn.PacketChannel, vpn.AssignedAddress, v6, StackLogger(o));
                 return new VpnTunnel(vpn, stack, () => { vpn.Dispose(); return default; },
                     vpn.AssignedAddress, vpn.PacketChannel.Mtu, new SstpDriver().Name, vpn.AssignedDns, v6,
-                    o.HealthProbe, StackLogger(o));
+                    o.HealthProbe, StackLogger(o),
+                    () => new TunnelAddressing(vpn.AssignedAddress, GlobalV6(vpn.AssignedAddressV6), vpn.AssignedDns));
             }
             catch
             {
@@ -79,7 +81,8 @@ namespace TqkLibrary.VpnClient.Tunnels
                 var stack = new TcpIpStack(vpn.PacketChannel, vpn.AssignedAddress, v6, StackLogger(o));
                 return new VpnTunnel(vpn, stack, async () => await vpn.DisposeAsync().ConfigureAwait(false),
                     vpn.AssignedAddress, vpn.PacketChannel.Mtu, new L2tpIpsecDriver().Name, vpn.AssignedDns, v6,
-                    o.HealthProbe, StackLogger(o));
+                    o.HealthProbe, StackLogger(o),
+                    () => new TunnelAddressing(vpn.AssignedAddress, GlobalV6(vpn.AssignedAddressV6), vpn.AssignedDns));
             }
             catch
             {
@@ -111,7 +114,8 @@ namespace TqkLibrary.VpnClient.Tunnels
                 var stack = new TcpIpStack(vpn.PacketChannel, vpn.AssignedAddress, null, StackLogger(o));
                 return new VpnTunnel(vpn, stack, async () => await vpn.DisposeAsync().ConfigureAwait(false),
                     vpn.AssignedAddress, vpn.PacketChannel.Mtu, new Ikev2Driver().Name, vpn.AssignedDns, null,
-                    o.HealthProbe, StackLogger(o));
+                    o.HealthProbe, StackLogger(o),
+                    () => new TunnelAddressing(vpn.AssignedAddress, null, vpn.AssignedDns));
             }
             catch
             {
@@ -199,7 +203,14 @@ namespace TqkLibrary.VpnClient.Tunnels
                 var stack = new TcpIpStack(vpn.PacketChannel, assigned, v6, StackLogger(o));
                 return new VpnTunnel(vpn, stack, async () => await vpn.DisposeAsync().ConfigureAwait(false),
                     assigned, vpn.PacketChannel.Mtu, new WireGuardDriver(config).Name, dns, v6,
-                    o.HealthProbe, StackLogger(o));
+                    o.HealthProbe, StackLogger(o),
+                    // WireGuard takes its address from the .conf rather than from the peer, so this
+                    // only ever confirms what it already had — passed for the same reason as the
+                    // rest: one tunnel that skips the check is the one that breaks quietly later.
+                    () => new TunnelAddressing(
+                        vpn.AssignedAddress ?? IPAddress.Any,
+                        GlobalV6(vpn.Config.AssignedAddressV6),
+                        vpn.Config.DnsServers.Count > 0 ? vpn.Config.DnsServers[0] : null));
             }
             catch
             {
@@ -228,7 +239,13 @@ namespace TqkLibrary.VpnClient.Tunnels
                 var stack = new TcpIpStack(session.PacketChannel, assigned, v6, logger);
                 return new VpnTunnel(inner, stack,
                     async () => await connection.DisposeAsync().ConfigureAwait(false),
-                    assigned, session.PacketChannel.Mtu, protocolName, dns, v6, healthProbe, logger);
+                    assigned, session.PacketChannel.Mtu, protocolName, dns, v6, healthProbe, logger,
+                    // Read off the session each time rather than captured: a driver that mends its
+                    // link writes the new lease back into this same config.
+                    () => new TunnelAddressing(
+                        session.Config.AssignedAddress ?? IPAddress.Any,
+                        GlobalV6(session.Config.AssignedAddressV6),
+                        session.Config.DnsServers.Count > 0 ? session.Config.DnsServers[0] : null));
             }
             catch
             {

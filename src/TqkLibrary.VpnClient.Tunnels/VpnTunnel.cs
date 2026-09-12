@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using TqkLibrary.VpnClient.Drivers.Core;
 using TqkLibrary.VpnClient.Drivers.Core.Enums;
 using TqkLibrary.VpnClient.IpStack;
+using TqkLibrary.VpnClient.Tunnels.Models;
 
 namespace TqkLibrary.VpnClient.Tunnels
 {
@@ -29,6 +30,8 @@ namespace TqkLibrary.VpnClient.Tunnels
         readonly ReconnectingVpnConnection _connection;
         readonly Func<ValueTask> _disposeAsync;
         readonly TunnelHealthMonitor? _health;
+        readonly Func<TunnelAddressing>? _currentAddressing;
+        readonly ILogger? _logger;
         int _disposed;
 
         internal VpnTunnel(
@@ -41,7 +44,8 @@ namespace TqkLibrary.VpnClient.Tunnels
             IPAddress? assignedDns = null,
             IPAddress? assignedAddressV6 = null,
             VpnHealthProbeOptions? healthProbe = null,
-            ILogger? logger = null)
+            ILogger? logger = null,
+            Func<TunnelAddressing>? currentAddressing = null)
         {
             _connection = connection ?? throw new ArgumentNullException(nameof(connection));
             Stack = stack ?? throw new ArgumentNullException(nameof(stack));
@@ -51,6 +55,8 @@ namespace TqkLibrary.VpnClient.Tunnels
             ProtocolName = protocolName ?? throw new ArgumentNullException(nameof(protocolName));
             AssignedDns = assignedDns;
             AssignedAddressV6 = assignedAddressV6;
+            _currentAddressing = currentAddressing;
+            _logger = logger;
 
             _connection.StateChanged += OnStateChanged;
 
@@ -68,20 +74,23 @@ namespace TqkLibrary.VpnClient.Tunnels
         /// <summary>The userspace TCP/IP stack running inside the tunnel.</summary>
         public TcpIpStack Stack { get; }
 
-        /// <summary>The IPv4 address the VPN assigned.</summary>
-        public IPAddress AssignedAddress { get; }
+        /// <summary>
+        /// The IPv4 address the VPN assigned. Re-read after the driver re-establishes its link: a
+        /// new session is often given a different address.
+        /// </summary>
+        public IPAddress AssignedAddress { get; private set; }
 
         /// <summary>
         /// The GLOBAL IPv6 the tunnel assigned, or null when the server offered none (or only a
         /// link-local one, which cannot reach the internet). Non-null means the stack is dual-stack.
         /// </summary>
-        public IPAddress? AssignedAddressV6 { get; }
+        public IPAddress? AssignedAddressV6 { get; private set; }
 
         /// <summary>
         /// The DNS server the VPN handed out, if any. Resolving through this — over the tunnel's own
         /// UDP socket — is what keeps name lookups from leaking to the machine's resolver.
         /// </summary>
-        public IPAddress? AssignedDns { get; }
+        public IPAddress? AssignedDns { get; private set; }
 
         /// <summary>The tunnel link's MTU.</summary>
         public int Mtu { get; }
@@ -115,8 +124,36 @@ namespace TqkLibrary.VpnClient.Tunnels
 
         void OnStateChanged(VpnConnectionState state)
         {
+            if (state == VpnConnectionState.Connected) AdoptCurrentAddressing();
+
             try { StateChanged?.Invoke(state); }
             catch { /* a broken subscriber must not take down the driver's supervisor */ }
+        }
+
+        // A reconnect keeps this object and the stack, but not necessarily the addressing: servers
+        // lease from a pool and rarely hand back the same address. A stack left on the old one is
+        // the exact failure the health probe hunts — up, and carrying nothing — so a mended link
+        // must move the stack with it. Before the state is published, so a subscriber that dials on
+        // Connected finds the stack already on the right address.
+        void AdoptCurrentAddressing()
+        {
+            if (_currentAddressing is null) return;
+
+            TunnelAddressing now;
+            try { now = _currentAddressing(); }
+            catch { return; }   // asked mid-handshake; the next transition asks again
+
+            if (now.Address is null) return;
+            if (now.Matches(new TunnelAddressing(AssignedAddress, AssignedAddressV6, AssignedDns))) return;
+
+            _logger?.LogInformation(
+                "[{Protocol}] the re-established tunnel came back as {Address} (was {Previous})",
+                ProtocolName, now.Address, AssignedAddress);
+
+            AssignedAddress = now.Address;
+            AssignedAddressV6 = now.AddressV6;
+            AssignedDns = now.Dns;
+            Stack.Rebind(now.Address, now.AddressV6);
         }
     }
 }
