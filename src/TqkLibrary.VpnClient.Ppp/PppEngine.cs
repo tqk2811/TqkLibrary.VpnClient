@@ -76,6 +76,7 @@ namespace TqkLibrary.VpnClient.Ppp
             _ipcp.Opened += OnIpcpOpened;
             // IPV6CP is deliberately NOT wired to this: IPv6 is best-effort here, and a server that
             // never opens it must not fail a link that carries IPv4 perfectly well.
+            _lcp.ProtocolRejected += OnProtocolRejected;
             _lcp.GaveUp += OnNegotiationGaveUp;
             _ipcp.GaveUp += OnNegotiationGaveUp;
             if (enableIpv6)
@@ -121,6 +122,27 @@ namespace TqkLibrary.VpnClient.Ppp
 
         /// <summary>True once IPV6CP has opened and a link-local IPv6 address is available.</summary>
         public bool IsIpv6Up { get; private set; }
+
+        /// <summary>True when the peer answered our IPV6CP with an LCP Protocol-Reject, i.e. the server does not run IPv6 at all.</summary>
+        public bool Ipv6RejectedByPeer { get; private set; }
+
+        /// <summary>
+        /// One line describing what the server gave this link: the IPCP address and DNS, and how IPV6CP ended —
+        /// opened (with the link-local), refused by the server, never answered, or not requested. Meant for a
+        /// diagnostic log once the link is up, so a reader can tell an IPv4-only server from one that offers IPv6.
+        /// </summary>
+        public string DescribeNetworkLayer()
+        {
+            string v4 = IsLinkUp
+                ? $"IPv4 {AssignedAddress}, DNS {AssignedDns?.ToString() ?? "none"}"
+                : "IPv4 not open";
+            string v6;
+            if (_ipv6cp is null) v6 = "IPv6 not requested";
+            else if (IsIpv6Up) v6 = $"IPv6 link-local {AssignedAddressV6}";
+            else if (Ipv6RejectedByPeer) v6 = "IPv6 refused by the server (Protocol-Reject of IPV6CP)";
+            else v6 = "IPv6 not offered (the server never opened IPV6CP)";
+            return $"{v4}; {v6}";
+        }
 
         /// <summary>True once authentication has succeeded (or none was required).</summary>
         public bool IsAuthenticated { get; private set; }
@@ -180,6 +202,12 @@ namespace TqkLibrary.VpnClient.Ppp
             if (IsLinkUp) return; // it opened after all; a late tick is not news
             _logger.LogProtocolStep(Layer, $"negotiation failed — {reason}");
             NegotiationFailed?.Invoke(reason);
+        }
+
+        // Raised under the engine lock (LCP packets are handled inside OnFrame's lock).
+        void OnProtocolRejected(ushort protocol)
+        {
+            if (protocol == (ushort)PppProtocol.Ipv6cp) Ipv6RejectedByPeer = true;
         }
 
         void OnIpcpOpened()

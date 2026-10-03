@@ -29,6 +29,13 @@ namespace TqkLibrary.VpnClient.Ppp
         /// <summary>True if the peer requires MS-CHAPv2 authentication.</summary>
         public bool RequiresMsChapV2 { get; private set; }
 
+        /// <summary>
+        /// Raised with the rejected PPP protocol number when the peer sends an LCP Protocol-Reject (RFC 1661 §5.7) —
+        /// how a server says it does not run a protocol at all, e.g. IPV6CP (0x8057) on an IPv4-only server.
+        /// Raised under the negotiator lock.
+        /// </summary>
+        public event Action<ushort>? ProtocolRejected;
+
         /// <inheritdoc/>
         protected override IReadOnlyList<PppOption> BuildLocalOptions()
         {
@@ -94,6 +101,16 @@ namespace TqkLibrary.VpnClient.Ppp
             // RFC 1661 §5.8: answer the peer's LCP Echo-Request (its link keepalive) with an Echo-Reply carrying our
             // Magic-Number. A server probing liveness (e.g. pppd lcp-echo-interval/lcp-echo-failure) otherwise sees no
             // reply and tears the link down after a couple of minutes — surfacing as the gateway dropping the session.
+            if (code == (byte)PppCode.ProtocolReject)
+            {
+                if (data.Length >= 2)
+                {
+                    ushort rejected = (ushort)((data[0] << 8) | data[1]);
+                    Logger.LogProtocolStep(Layer, $"Protocol-Reject received for protocol 0x{rejected:X4}");
+                    ProtocolRejected?.Invoke(rejected);
+                }
+                return null;
+            }
             if (code != (byte)PppCode.EchoRequest) return null;
             Logger.LogProtocolStep(Layer, "Echo-Request received → Echo-Reply (RFC 1661 §5.8)");
             byte[] magic = { (byte)(_magic >> 24), (byte)(_magic >> 16), (byte)(_magic >> 8), (byte)_magic };

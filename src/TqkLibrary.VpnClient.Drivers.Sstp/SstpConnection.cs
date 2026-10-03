@@ -248,6 +248,8 @@ namespace TqkLibrary.VpnClient.Drivers.Sstp
             await WaitForLinkUpAsync(linkUp.Task, loopTask, channel, cancellationToken).ConfigureAwait(false);
             await AwaitIpv6GraceAsync(engine, ipv6Up.Task, cancellationToken).ConfigureAwait(false);
             await TryConfigureGlobalIpv6Async(engine, cancellationToken).ConfigureAwait(false);
+            Logger.LogHandshake(DriverName, $"server assigned: {engine.DescribeNetworkLayer()}"
+                + (engine.IsIpv6Up && _ipv6Config?.AssignedAddressV6 is null ? " (no global IPv6 from RA/DHCPv6)" : string.Empty));
 
             Facade.SetInner(engine.PacketChannel);
             StartKeepalive();

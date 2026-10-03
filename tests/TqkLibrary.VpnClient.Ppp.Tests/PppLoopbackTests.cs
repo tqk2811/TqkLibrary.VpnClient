@@ -59,6 +59,82 @@ namespace TqkLibrary.VpnClient.Ppp.Tests
         }
 
         [Fact]
+        public void DescribeNetworkLayer_DualStack_ReportsAddressDnsAndLinkLocal()
+        {
+            var (ca, cb) = LoopbackPppChannel.CreatePair();
+            var client = new PppEngine(ca, 0x11111111, IPAddress.Any, enableIpv6: true);
+            var server = new PppEngine(cb, 0x22222222, ServerIp, ClientIp, Dns,
+                enableIpv6: true, assignPeerInterfaceId: new byte[] { 0x02, 0, 0, 0, 0, 0, 0, 0x42 });
+
+            client.Start();
+            server.Start();
+            LoopbackPppChannel.Pump(ca, cb);
+
+            Assert.Equal("IPv4 10.0.0.2, DNS 8.8.8.8; IPv6 link-local fe80::200:0:0:42", client.DescribeNetworkLayer());
+        }
+
+        [Fact]
+        public void DescribeNetworkLayer_ServerWithoutIpv6_SaysIpv6WasNotOffered()
+        {
+            var (ca, cb) = LoopbackPppChannel.CreatePair();
+            var client = new PppEngine(ca, 0x11111111, IPAddress.Any, enableIpv6: true);
+            var server = new PppEngine(cb, 0x22222222, ServerIp, ClientIp, Dns);   // ignores IPV6CP silently
+
+            client.Start();
+            server.Start();
+            LoopbackPppChannel.Pump(ca, cb);
+
+            Assert.False(client.Ipv6RejectedByPeer);
+            Assert.Equal("IPv4 10.0.0.2, DNS 8.8.8.8; IPv6 not offered (the server never opened IPV6CP)", client.DescribeNetworkLayer());
+        }
+
+        [Fact]
+        public void LcpProtocolRejectOfIpv6cp_IsRecordedAndDescribed()
+        {
+            var (ca, cb) = LoopbackPppChannel.CreatePair();
+            var client = new PppEngine(ca, 0x11111111, IPAddress.Any, enableIpv6: true);
+            var server = new PppEngine(cb, 0x22222222, ServerIp, ClientIp, Dns);
+
+            client.Start();
+            server.Start();
+            LoopbackPppChannel.Pump(ca, cb);
+
+            // What an IPv4-only server (e.g. RRAS) answers to IPV6CP: LCP (C021) Protocol-Reject (code 8) naming 0x8057.
+            cb.SendAsync(new byte[] { 0xFF, 0x03, 0xC0, 0x21, 0x08, 0x07, 0x00, 0x06, 0x80, 0x57 });
+            ca.Deliver();
+
+            Assert.True(client.Ipv6RejectedByPeer);
+            Assert.True(client.IsLinkUp);   // IPv4 unaffected
+            Assert.Equal("IPv4 10.0.0.2, DNS 8.8.8.8; IPv6 refused by the server (Protocol-Reject of IPV6CP)", client.DescribeNetworkLayer());
+        }
+
+        [Fact]
+        public void LcpProtocolRejectOfAnotherProtocol_DoesNotMarkIpv6Refused()
+        {
+            var (ca, cb) = LoopbackPppChannel.CreatePair();
+            var client = new PppEngine(ca, 0x11111111, IPAddress.Any, enableIpv6: true);
+
+            cb.SendAsync(new byte[] { 0xFF, 0x03, 0xC0, 0x21, 0x08, 0x07, 0x00, 0x06, 0x80, 0xFD });   // CCP
+            ca.Deliver();
+
+            Assert.False(client.Ipv6RejectedByPeer);
+        }
+
+        [Fact]
+        public void DescribeNetworkLayer_Ipv6Disabled_SaysNotRequested()
+        {
+            var (ca, cb) = LoopbackPppChannel.CreatePair();
+            var client = new PppEngine(ca, 0x11111111, IPAddress.Any);
+            var server = new PppEngine(cb, 0x22222222, ServerIp, ClientIp, Dns);
+
+            client.Start();
+            server.Start();
+            LoopbackPppChannel.Pump(ca, cb);
+
+            Assert.Equal("IPv4 10.0.0.2, DNS 8.8.8.8; IPv6 not requested", client.DescribeNetworkLayer());
+        }
+
+        [Fact]
         public void AfterLinkUp_IpPacketIsRelayed()
         {
             var (ca, cb) = LoopbackPppChannel.CreatePair();
