@@ -82,6 +82,24 @@ namespace TqkLibrary.VpnClient.OpenVpn.Tests
             server.Dispose();
         }
 
+        [Fact]
+        public async Task SendTls_BlocksOnFullWindowOnCallingThread_AndDisposeReleasesIt()
+        {
+            // No responder ⇒ nothing is ever acked: with a 1-slot window the 2nd fragment must block (sync backpressure).
+            var link = new LoopbackLink();
+            var client = new OpenVpnControlChannel(link.Client,
+                options: new OpenVpnReliabilityOptions { Interval = TimeSpan.FromSeconds(30), WindowSize = 1 });
+
+            Task send = Task.Run(() => client.SendTls(new byte[1500])); // 1200 + 300 ⇒ two fragments
+            await Task.Delay(200);
+            Assert.False(send.IsCompleted);
+
+            client.Dispose();
+            Assert.Same(send, await Task.WhenAny(send, Task.Delay(TimeSpan.FromSeconds(5))));
+            await Assert.ThrowsAsync<ObjectDisposedException>(() => send);
+            Assert.Throws<ObjectDisposedException>(() => client.SendTls(new byte[1]));
+        }
+
         static X509Certificate2 CreateSelfSignedServerCert()
         {
             using var rsa = RSA.Create(2048);

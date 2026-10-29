@@ -92,7 +92,18 @@ namespace TqkLibrary.VpnClient.Tailscale.Control.Noise
 
         /// <inheritdoc/>
         public override int Read(byte[] buffer, int offset, int count)
-            => ReadAsync(buffer, offset, count, CancellationToken.None).GetAwaiter().GetResult();
+        {
+            // Real synchronous twin of ReadAsync: blocks on the inner stream's own sync Read (no async-over-sync).
+            if (count == 0) return 0;
+            if (_readOffset >= _readBuffer.Length)
+            {
+                byte[]? plaintext = ReadNextRecord();
+                if (plaintext is null) return 0; // EOF
+                _readBuffer = plaintext;
+                _readOffset = 0;
+            }
+            return CopyFromReadBuffer(buffer, offset, count);
+        }
 
         /// <inheritdoc/>
         public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
@@ -105,6 +116,12 @@ namespace TqkLibrary.VpnClient.Tailscale.Control.Noise
                 _readBuffer = plaintext;
                 _readOffset = 0;
             }
+            return CopyFromReadBuffer(buffer, offset, count);
+        }
+
+        // Hand out up to count bytes of the buffered decrypted plaintext (shared by the sync and async read paths).
+        int CopyFromReadBuffer(byte[] buffer, int offset, int count)
+        {
             int available = _readBuffer.Length - _readOffset;
             int n = Math.Min(available, count);
             Buffer.BlockCopy(_readBuffer, _readOffset, buffer, offset, n);
@@ -114,7 +131,18 @@ namespace TqkLibrary.VpnClient.Tailscale.Control.Noise
 
         /// <inheritdoc/>
         public override void Write(byte[] buffer, int offset, int count)
-            => WriteAsync(buffer, offset, count, CancellationToken.None).GetAwaiter().GetResult();
+        {
+            // Real synchronous twin of WriteAsync: seals each record and writes/flushes it with the inner stream's sync API.
+            int sent = 0;
+            while (sent < count)
+            {
+                int chunk = Math.Min(Ts2021Transport.MaxPlaintextSize, count - sent);
+                byte[] frame = SealRecordFrame(buffer.AsSpan(offset + sent, chunk));
+                _inner.Write(frame, 0, frame.Length);
+                sent += chunk;
+            }
+            _inner.Flush();
+        }
 
         /// <inheritdoc/>
         public override async Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
@@ -123,13 +151,16 @@ namespace TqkLibrary.VpnClient.Tailscale.Control.Noise
             while (sent < count)
             {
                 int chunk = Math.Min(Ts2021Transport.MaxPlaintextSize, count - sent);
-                byte[] sealedRecord = _send.Seal(buffer.AsSpan(offset + sent, chunk));
-                byte[] frame = Ts2021FrameCodec.EncodeFrame(Ts2021FrameType.Record, sealedRecord);
+                byte[] frame = SealRecordFrame(buffer.AsSpan(offset + sent, chunk));
                 await _inner.WriteAsync(frame, 0, frame.Length, cancellationToken).ConfigureAwait(false);
                 sent += chunk;
             }
             await _inner.FlushAsync(cancellationToken).ConfigureAwait(false);
         }
+
+        // Seal one ≤ MaxPlaintextSize chunk and frame it as [type=4][len:u16][ciphertext+tag].
+        byte[] SealRecordFrame(ReadOnlySpan<byte> plaintext)
+            => Ts2021FrameCodec.EncodeFrame(Ts2021FrameType.Record, _send.Seal(plaintext));
 
         // ---- record reassembly ----
 
@@ -137,21 +168,37 @@ namespace TqkLibrary.VpnClient.Tailscale.Control.Noise
         async Task<byte[]?> ReadNextRecordAsync(CancellationToken cancellationToken)
         {
             if (!await ReadInnerExactAsync(_readHeader, cancellationToken).ConfigureAwait(false)) return null;
-            if (!Ts2021FrameCodec.TryDecodeHeader(_readHeader, out Ts2021FrameType type, out int payloadLength))
-                throw new IOException("Malformed ts2021 frame header.");
-            if (type == Ts2021FrameType.Error)
-            {
-                byte[] err = new byte[payloadLength];
-                await ReadInnerExactAsync(err, cancellationToken).ConfigureAwait(false);
-                throw new IOException("ts2021 control error: " + System.Text.Encoding.ASCII.GetString(err));
-            }
-            if (type != Ts2021FrameType.Record)
-                throw new IOException($"Unexpected ts2021 frame type {(byte)type} on the transport channel.");
+            byte[] payload = new byte[DecodeRecordHeader(out Ts2021FrameType type)];
+            bool complete = await ReadInnerExactAsync(payload, cancellationToken).ConfigureAwait(false);
+            return OpenRecordPayload(type, payload, complete);
+        }
 
-            byte[] ciphertext = new byte[payloadLength];
-            if (!await ReadInnerExactAsync(ciphertext, cancellationToken).ConfigureAwait(false))
-                throw new EndOfStreamException("Truncated ts2021 record body.");
-            byte[]? plaintext = _receive.Open(ciphertext);
+        // Synchronous twin of ReadNextRecordAsync (same validation, sync inner reads).
+        byte[]? ReadNextRecord()
+        {
+            if (!ReadInnerExact(_readHeader)) return null;
+            byte[] payload = new byte[DecodeRecordHeader(out Ts2021FrameType type)];
+            bool complete = ReadInnerExact(payload);
+            return OpenRecordPayload(type, payload, complete);
+        }
+
+        // Validate the frame header just read into _readHeader; returns the payload length to read next.
+        int DecodeRecordHeader(out Ts2021FrameType type)
+        {
+            if (!Ts2021FrameCodec.TryDecodeHeader(_readHeader, out type, out int payloadLength))
+                throw new IOException("Malformed ts2021 frame header.");
+            if (type != Ts2021FrameType.Error && type != Ts2021FrameType.Record)
+                throw new IOException($"Unexpected ts2021 frame type {(byte)type} on the transport channel.");
+            return payloadLength;
+        }
+
+        // Turn a fully-read frame payload into plaintext: an Error frame throws its message, a Record is opened.
+        byte[] OpenRecordPayload(Ts2021FrameType type, byte[] payload, bool complete)
+        {
+            if (type == Ts2021FrameType.Error)
+                throw new IOException("ts2021 control error: " + System.Text.Encoding.ASCII.GetString(payload));
+            if (!complete) throw new EndOfStreamException("Truncated ts2021 record body.");
+            byte[]? plaintext = _receive.Open(payload);
             if (plaintext is null) throw new IOException("ts2021 record failed to authenticate.");
             return plaintext;
         }
@@ -193,6 +240,18 @@ namespace TqkLibrary.VpnClient.Tailscale.Control.Noise
             while (read < destination.Length)
             {
                 int n = await _inner.ReadAsync(destination, read, destination.Length - read, cancellationToken).ConfigureAwait(false);
+                if (n == 0) return read != 0 ? throw new EndOfStreamException("Truncated ts2021 frame.") : false;
+                read += n;
+            }
+            return true;
+        }
+
+        bool ReadInnerExact(byte[] destination)
+        {
+            int read = 0;
+            while (read < destination.Length)
+            {
+                int n = _inner.Read(destination, read, destination.Length - read);
                 if (n == 0) return read != 0 ? throw new EndOfStreamException("Truncated ts2021 frame.") : false;
                 read += n;
             }

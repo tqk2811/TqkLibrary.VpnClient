@@ -38,6 +38,9 @@ namespace TqkLibrary.VpnClient.OpenVpn
         readonly OpenVpnReliableReceiveWindow _recvWindow;
         readonly OpenVpnTlsBridgeStream _bridge;
         readonly SemaphoreSlim _windowSlots;
+        // Cancelled first thing in Dispose: wakes senders blocked on _windowSlots (sync Wait or WaitAsync), which a
+        // SemaphoreSlim.Dispose alone would leave hanging. Not disposed: a sender racing Dispose may still read its token.
+        readonly CancellationTokenSource _lifetime = new();
         readonly object _sync = new();
         readonly TaskCompletionSource<bool> _resetReceived = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -69,7 +72,7 @@ namespace TqkLibrary.VpnClient.OpenVpn
             _sendWindow = new OpenVpnReliableSendWindow(_options);
             _recvWindow = new OpenVpnReliableReceiveWindow(_options);
             _windowSlots = new SemaphoreSlim(_options.WindowSize, _options.WindowSize);
-            _bridge = new OpenVpnTlsBridgeStream(SendTlsAsync);
+            _bridge = new OpenVpnTlsBridgeStream(SendTls, SendTlsAsync);
             _localSessionId = GenerateSessionId();
             _transport.DatagramReceived += OnDatagram;
         }
@@ -251,19 +254,52 @@ namespace TqkLibrary.VpnClient.OpenVpn
             catch { /* best-effort: the link may already be gone — teardown proceeds regardless */ }
         }
 
-        // Bridge write callback: fragment the TLS bytes, queue each fragment reliably (blocking on window space), pump.
+        // Bridge write callbacks: fragment the TLS bytes, queue each fragment reliably (waiting for window space =
+        // backpressure), pump. The sync twin (BouncyCastle tls-ekm) really blocks on the semaphore; the async one awaits it.
+        // Both wake with ObjectDisposedException when the channel is disposed mid-wait.
+        internal void SendTls(ReadOnlySpan<byte> buffer)
+        {
+            int offset = 0;
+            while (offset < buffer.Length)
+            {
+                // A free slot is taken even after disposal began, so the best-effort close_notify still goes out;
+                // only a wait on a full window is cut short.
+                try { if (!_windowSlots.Wait(0)) _windowSlots.Wait(_lifetime.Token); }
+                catch (Exception ex) when (ex is OperationCanceledException || ex is ObjectDisposedException)
+                {
+                    throw new ObjectDisposedException(nameof(OpenVpnControlChannel));
+                }
+                offset += QueueFragment(buffer.Slice(offset));
+            }
+        }
+
         async Task SendTlsAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken)
         {
             int offset = 0;
             while (offset < buffer.Length)
             {
-                await _windowSlots.WaitAsync(cancellationToken).ConfigureAwait(false);
-                int len = Math.Min(TlsFragmentSize, buffer.Length - offset);
-                byte[] chunk = buffer.Slice(offset, len).ToArray();
-                lock (_sync) _sendWindow.Queue(chunk);
-                offset += len;
-                Pump();
+                using (var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token))
+                {
+                    try { if (!_windowSlots.Wait(0)) await _windowSlots.WaitAsync(linked.Token).ConfigureAwait(false); }
+                    catch (Exception ex) when ((ex is OperationCanceledException || ex is ObjectDisposedException)
+                                               && !cancellationToken.IsCancellationRequested)
+                    {
+                        throw new ObjectDisposedException(nameof(OpenVpnControlChannel));
+                    }
+                }
+                offset += QueueFragment(buffer.Span.Slice(offset));
             }
+        }
+
+        // Queues one fragment (≤ TlsFragmentSize) of `rest` into the send window — the caller already holds a window
+        // slot — then pumps. Returns the number of bytes consumed.
+        int QueueFragment(ReadOnlySpan<byte> rest)
+        {
+            int len = Math.Min(TlsFragmentSize, rest.Length);
+            byte[] chunk = rest.Slice(0, len).ToArray();
+            lock (_sync) _sendWindow.Queue(chunk);
+            Pump();
+            return len;
         }
 
         void OnDatagram(ReadOnlyMemory<byte> datagram)
@@ -363,11 +399,12 @@ namespace TqkLibrary.VpnClient.OpenVpn
         public void Dispose()
         {
             lock (_sync) { if (_disposed) return; _disposed = true; }
+            try { _lifetime.Cancel(); } catch { } // before TLS teardown: a close_notify write must not block on a full window
             _transport.DatagramReceived -= OnDatagram;
             _timer?.Dispose();
             _ssl?.Dispose();
             _bcTls?.Dispose();
-            _bridge.CompleteInbound();
+            _bridge.Dispose(); // ends inbound (blocked reads return 0) and fails writers queued on its write gate
             RemoteCertificate?.Dispose();
             _windowSlots.Dispose();
             _resetReceived.TrySetCanceled();

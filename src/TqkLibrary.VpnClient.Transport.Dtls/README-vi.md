@@ -41,7 +41,7 @@ TqkLibrary.VpnClient.Transport.Dtls/
 | `DefaultDtlsClient` | (internal) `DefaultTlsClient`: **full handshake** ⇒ `GetSupportedVersions`=DTLS 1.2, AEAD suites (ECDHE/DHE-RSA + ECDSA + RSA key-transport, AES-GCM); **resume legacy** (`DtlsResumptionParameters≠null`) ⇒ dựng `TlsSession` qua `TlsUtilities.ImportSession` (session id + master secret + cipher CBC), `GetSessionToResume` trả session đó, `GetSupportedVersions`=DTLS 1.2→1.0, chào đúng cipher resume, **`AllowLegacyResumption`=true** (session không EMS); `GetAuthentication` bắc cert-callback (null⇒accept all; reject⇒`TlsFatalAlert`); client **không** cert (anonymous) | [DefaultDtlsClient.cs:26](DefaultDtlsClient.cs#L26) |
 | `DtlsResumptionParameters` | POCO tham số resumption legacy AnyConnect: `MasterSecret` (48B client sinh + gửi `X-DTLS-Master-Secret`), `SessionId` (ocserv `X-DTLS-Session-ID` decode hex = ClientHello session_id), `CipherSuite` (id BouncyCastle từ `X-DTLS-CipherSuite`). null ⇒ full handshake | [DtlsResumptionParameters.cs:11](DtlsResumptionParameters.cs#L11) |
 | `DtlsCipherSuiteMap` | `TryResolve(name, out id)`: map tên cipher OpenSSL legacy (`AES256-SHA`/`AES128-SHA`/`*-SHA256`) → id BouncyCastle (RSA-CBC). Tên CBC resolve được = **tín hiệu** gateway muốn resume legacy; tên AEAD/GCM hay rỗng ⇒ false ⇒ full handshake | [DtlsCipherSuiteMap.cs:15](DtlsCipherSuiteMap.cs#L15) |
-| `BouncyCastleDatagramBridge` | (internal) cầu sync↔async: vòng nền pull datagram từ `IDatagramTransport.ReceiveAsync` vào hàng đợi mà `Receive(buf,off,len,waitMillis)` blocking rút (timeout⇒`-1` cho retransmit timer của DTLS chạy); `Send` chạy `SendAsync` đồng bộ | [BouncyCastleDatagramBridge.cs:19](BouncyCastleDatagramBridge.cs#L19) |
+| `BouncyCastleDatagramBridge` | (internal) cầu sync↔async: vòng nền pull datagram từ `IDatagramTransport.ReceiveAsync` vào hàng đợi mà `Receive(buf,off,len,waitMillis)` blocking rút (timeout⇒`-1` cho retransmit timer của DTLS chạy); `Send` không chặn: copy vào `Channel` bounded, vòng nền gửi qua `SendAsync` theo thứ tự | [BouncyCastleDatagramBridge.cs:22](BouncyCastleDatagramBridge.cs#L22) |
 | `DtlsServerCertificateValidationCallback` | delegate `(TlsServerCertificate) → bool` xác thực/pin cert server lúc handshake (analogue của `RemoteCertificateValidationCallback` nhưng nhận cert BouncyCastle) | [DtlsServerCertificateValidationCallback.cs:15](DtlsServerCertificateValidationCallback.cs#L15) |
 
 ## Chuẩn / RFC tuân thủ
@@ -73,7 +73,7 @@ await dtls.DisposeAsync();                          // gửi close_notify + đó
 
 ### Handshake (`ConnectAsync` — [DtlsDatagramTransport.cs:73](DtlsDatagramTransport.cs#L73))
 
-1. `inner.ConnectAsync` (bind/resolve UDP) → dựng [`BouncyCastleDatagramBridge`](BouncyCastleDatagramBridge.cs#L19) (khởi động vòng nền pull inbound).
+1. `inner.ConnectAsync` (bind/resolve UDP) → dựng [`BouncyCastleDatagramBridge`](BouncyCastleDatagramBridge.cs#L22) (khởi động vòng nền pull inbound).
 2. Dựng `BcTlsCrypto` + [`DefaultDtlsClient`](DefaultDtlsClient.cs#L26) (kèm `DtlsResumptionParameters` nếu resume legacy) + `DtlsClientProtocol`.
 3. Chạy `protocol.Connect(client, bridge)` **trên thread-pool** (`Task.Run`) — blocking, retransmit timer của DTLS chạy qua `waitMillis` của bridge. Cancel của caller → đăng ký `Close()` bridge để `Receive` blocking trả về → handshake hủy.
 4. Cert server: BouncyCastle gọi `NotifyServerCertificate` → cert-callback (null⇒accept; false⇒`TlsFatalAlert(bad_certificate)` hủy handshake).
@@ -83,11 +83,11 @@ await dtls.DisposeAsync();                          // gửi close_notify + đó
 - `SendAsync`: copy `ReadOnlyMemory` ra `byte[]` → `DtlsTransport.Send` (blocking, offload `Task.Run`) = 1 record mã hóa. **Lưu ý:** DTLS application_data record mang ≥1 byte — BouncyCastle **từ chối** gửi datagram rỗng.
 - `ReceiveAsync`: `DtlsTransport.Receive(...,200ms)` trong vòng lặp (offload `Task.Run`); `-1` = timeout (chưa có record) → lặp tiếp để honor cancel mà không busy-spin; có record → copy ra buffer.
 
-### Cầu sync↔async ([BouncyCastleDatagramBridge.cs:19](BouncyCastleDatagramBridge.cs#L19))
+### Cầu sync↔async ([BouncyCastleDatagramBridge.cs:22](BouncyCastleDatagramBridge.cs#L22))
 
 - Vòng nền `PumpInboundAsync`: `inner.ReceiveAsync` → `BlockingCollection` (`ConcurrentQueue`). 0-byte không phải EOF (UDP) → bỏ qua, nghe tiếp.
 - `Receive(buf,off,len,waitMillis)`: `TryTake(waitMillis)`; rỗng → `-1` (để retransmit timer DTLS chạy).
-- `Send`: `inner.SendAsync(...).GetAwaiter().GetResult()` (đồng bộ; chỉ chạy trên thread IO của handshake/loop, không trên đường async công khai).
+- `Send`: không chặn — copy datagram rồi `TryWrite` vào `Channel<byte[]>` bounded 256 (`DropOldest`: đầy = mất gói UDP, DTLS tự retransmit); vòng nền `PumpOutboundAsync` rút theo thứ tự, gọi `inner.SendAsync`. Lỗi `inner.SendAsync` đầu tiên được lưu và `Send` kế tiếp ném `IOException` (inner = lỗi đó) để DTLS fail nhanh. `Close()` (idempotent) complete channel, chờ xả tối đa 1s rồi cancel cả hai vòng; `Send` sau `Close` ném `ObjectDisposedException`.
 
 ## Trạng thái & ghi chú
 

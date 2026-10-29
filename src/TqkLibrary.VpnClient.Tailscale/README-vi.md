@@ -67,7 +67,7 @@ TqkLibrary.VpnClient.Tailscale/
 | [`TailscaleKey`](Keys/TailscaleKey.cs#L18) | codec text key: `<prefix>` + lowercase hex 32B; `nodekey:` = WG pubkey nguyên |
 | [`Ts2021NoiseHandshake`](Control/Noise/Ts2021NoiseHandshake.cs#L31) | Noise IK initiator: pre-message `<- s`, msg1 `e,es,s,ss`, msg2 `e,ee,se`, prologue `Tailscale Control Protocol v<N>` |
 | [`Ts2021Transport`](Control/Noise/Ts2021Transport.cs#L17) | record cipher 1 chiều: ChaCha20-Poly1305, nonce `0^4‖counter(BE)` từ 0, AAD rỗng, max plaintext 4077B |
-| [`Ts2021NoiseStream`](Control/Noise/Ts2021NoiseStream.cs#L19) | `Stream` duplex: write chia record ≤4077B, read ghép record; `SkipEarlyNoiseAsync` nuốt header 9B `\xff\xff\xffTS` |
+| [`Ts2021NoiseStream`](Control/Noise/Ts2021NoiseStream.cs#L19) | `Stream` duplex: write chia record ≤4077B, read ghép record; `Read`/`Write` đồng bộ là bản sync thật (dùng `Read`/`Write`/`Flush` sync của stream trong, chung phần giải/kiểm frame với đường async); `SkipEarlyNoiseAsync` nuốt header 9B `\xff\xff\xffTS` |
 | [`Ts2021FrameCodec`](Control/Noise/Ts2021FrameCodec.cs#L15) | khung big-endian: initiation `[ver u16][type=1][len u16]`, khác `[type][len u16]` |
 | [`Ts2021Connector`](Control/Ts2021Connector.cs#L19) | `POST /ts2021` (Upgrade + `X-Tailscale-Handshake` base64 init) → 101 → Noise IK → `Ts2021NoiseStream` |
 | [`TailscaleControlClient`](Control/TailscaleControlClient.cs) | (net5+) `/key` → noise → `/machine/register` (preauth) → `/machine/map` long-poll, đọc khung `[len LE u32][JSON]` |
