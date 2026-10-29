@@ -8,4 +8,8 @@
     <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="TqkLibrary.VpnClient.IpStack.Tests" />
+  </ItemGroup>
+
 </Project>

@@ -119,6 +119,10 @@ namespace TqkLibrary.VpnClient.Tunnels
             // Before the connection goes: a probe in flight against a torn-down stack would report
             // silence, and the driver would start reconnecting something nobody wants any more.
             if (_health is not null) await _health.DisposeAsync().ConfigureAwait(false);
+            // The tunnel owns the stack (every dial path hands it in). Stop its egress before the connection
+            // goes, so a write in flight is cancelled and queued packets are discarded instead of faulting
+            // against a channel that is being torn down.
+            Stack.Dispose();
             await _disposeAsync().ConfigureAwait(false);
         }
 

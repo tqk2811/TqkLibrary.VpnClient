@@ -80,8 +80,8 @@ await dtls.DisposeAsync();                          // gửi close_notify + đó
 
 ### Send / Receive (sau handshake)
 
-- `SendAsync`: copy `ReadOnlyMemory` ra `byte[]` → `DtlsTransport.Send` (blocking, offload `Task.Run`) = 1 record mã hóa. **Lưu ý:** DTLS application_data record mang ≥1 byte — BouncyCastle **từ chối** gửi datagram rỗng.
-- `ReceiveAsync`: `DtlsTransport.Receive(...,200ms)` trong vòng lặp (offload `Task.Run`); `-1` = timeout (chưa có record) → lặp tiếp để honor cancel mà không busy-spin; có record → copy ra buffer.
+- `SendAsync` ([DtlsDatagramTransport.cs:206](DtlsDatagramTransport.cs#L206)): `DtlsTransport.Send` **inline** dưới lock (bridge `Send` chỉ xếp hàng cho send pump nên không chặn, không cần pool) = 1 record mã hóa; lỗi trả qua task. **Lưu ý:** DTLS application_data record mang ≥1 byte — BouncyCastle **từ chối** gửi datagram rỗng.
+- `ReceiveAsync` ([DtlsDatagramTransport.cs:138](DtlsDatagramTransport.cs#L138)): await một `Channel<byte[]>` bounded 256 (**DropOldest** như ring NIC, đếm `ReceiveDropped`) do **một thread nền riêng** ([`ReceiveLoop`](DtlsDatagramTransport.cs#L179), khởi động lười ở lần receive đầu) đổ vào bằng `DtlsTransport.Receive(...,250ms)` (`-1` = chưa có record; 250 ms chỉ để thấy dispose). Không còn giữ thread pool khi link rảnh; cancel không mất datagram; lỗi DTLS → ném lại đúng exception; sau dispose → `ObjectDisposedException`. `DisposeAsync` đóng bridge rồi `Join` thread tối đa 2 s.
 
 ### Cầu sync↔async ([BouncyCastleDatagramBridge.cs:22](BouncyCastleDatagramBridge.cs#L22))
 

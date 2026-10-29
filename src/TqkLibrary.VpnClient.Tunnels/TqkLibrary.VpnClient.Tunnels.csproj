@@ -21,4 +21,8 @@
     <ProjectReference Include="..\TqkLibrary.VpnClient.IpStack\TqkLibrary.VpnClient.IpStack.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="TqkLibrary.VpnClient.Tunnels.Tests" />
+  </ItemGroup>
+
 </Project>

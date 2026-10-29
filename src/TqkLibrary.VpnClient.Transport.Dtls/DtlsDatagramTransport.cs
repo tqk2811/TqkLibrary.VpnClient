@@ -1,3 +1,6 @@
+using System.Runtime.ExceptionServices;
+using System.Runtime.InteropServices;
+using System.Threading.Channels;
 using Org.BouncyCastle.Security;
 using Org.BouncyCastle.Tls;
 using Org.BouncyCastle.Tls.Crypto.Impl.BC;
@@ -19,10 +22,11 @@ namespace TqkLibrary.VpnClient.Transport.Dtls
     /// </para>
     /// <para>
     /// <b>Threading:</b> BouncyCastle's <see cref="DtlsTransport"/> is synchronous. The blocking handshake runs once on a
-    /// thread-pool thread inside <see cref="ConnectAsync"/>; afterwards each send/receive offloads its single blocking
-    /// call. BouncyCastle's record layer tolerates one concurrent sender and one concurrent receiver, matching the usual
-    /// "one write loop + one read loop" driver model; it is not safe to call <see cref="SendAsync"/> (or
-    /// <see cref="ReceiveAsync"/>) from two threads at once, exactly like a raw socket.
+    /// thread-pool thread inside <see cref="ConnectAsync"/>. Afterwards no pool thread is parked: one dedicated
+    /// background thread blocks in <c>Receive</c> and queues decrypted datagrams for <see cref="ReceiveAsync"/>, and
+    /// <see cref="SendAsync"/> encrypts inline under a lock (the bridge's <c>Send</c> only queues). BouncyCastle's record
+    /// layer tolerates one concurrent sender and one concurrent receiver; <see cref="ReceiveAsync"/> is single-consumer,
+    /// exactly like a raw socket.
     /// </para>
     /// </summary>
     public sealed class DtlsDatagramTransport : IDatagramTransport
@@ -36,6 +40,19 @@ namespace TqkLibrary.VpnClient.Transport.Dtls
         BouncyCastleDatagramBridge? _bridge;
         DtlsTransport? _dtls;
         int _disposed;
+
+        internal const int ReceiveQueueCapacity = 256;
+        const int ReceivePollMillis = 250;
+        static readonly TimeSpan ReceiverStopTimeout = TimeSpan.FromSeconds(2);
+
+        // Receive side: one dedicated thread (started on the first ReceiveAsync) owns the blocking BC Receive and queues
+        // decrypted datagrams here. When the consumer falls behind the oldest datagram is dropped, like a NIC ring —
+        // stale tunnel packets are worth less than fresh ones, and the receive thread must keep draining the bridge.
+        readonly Channel<byte[]> _inbound;
+        readonly object _sendLock = new();
+        Thread? _receiverThread;
+        int _receiverStarted;
+        long _receiveDropped;
 
         /// <summary>
         /// Wraps <paramref name="inner"/> (the plaintext UDP pipe) in DTLS. <paramref name="certificateValidationCallback"/>
@@ -61,6 +78,12 @@ namespace TqkLibrary.VpnClient.Transport.Dtls
             _resumption = resumption;
             _psk = psk;
             _ownsInner = ownsInner;
+            _inbound = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(ReceiveQueueCapacity)
+            {
+                SingleReader = true,
+                SingleWriter = true,
+                FullMode = BoundedChannelFullMode.DropOldest,
+            }, _ => Interlocked.Increment(ref _receiveDropped));
         }
 
         /// <summary>The negotiated DTLS receive limit (max plaintext bytes per <see cref="ReceiveAsync"/>); 0 until connected.</summary>
@@ -103,43 +126,120 @@ namespace TqkLibrary.VpnClient.Transport.Dtls
             }
         }
 
-        /// <inheritdoc/>
+        /// <summary>Decrypted datagrams discarded because the receive queue was full (the oldest goes first, like a NIC ring).</summary>
+        public long ReceiveDropped => Interlocked.Read(ref _receiveDropped);
+
+        /// <summary>
+        /// The next decrypted datagram, truncated to <paramref name="buffer"/> as before. Waits on the queue the dedicated
+        /// receive thread fills, so no pool thread is parked while the link is idle; cancelling loses no datagram. A DTLS
+        /// or transport error rethrows what the blocking receive threw; after dispose it throws
+        /// <see cref="ObjectDisposedException"/>.
+        /// </summary>
         public async ValueTask<int> ReceiveAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
-            DtlsTransport dtls = _dtls ?? throw new InvalidOperationException("The DTLS transport is not connected.");
+            ThrowIfDisposed();
+            if (_dtls is null) throw new InvalidOperationException("The DTLS transport is not connected.");
             cancellationToken.ThrowIfCancellationRequested();
-            // Receive blocks up to waitMillis then returns -1 (timeout). Loop with a short wait so cancellation is honoured
-            // promptly without busy-spinning; -1 simply means "no record yet".
-            return await Task.Run(() =>
+            EnsureReceiverStarted();
+
+            byte[] datagram;
+            try
             {
-                byte[] temp = new byte[Math.Max(buffer.Length, dtls.GetReceiveLimit())];
-                while (true)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    int read = dtls.Receive(temp, 0, temp.Length, 200);
-                    if (read < 0) continue; // timeout — keep waiting (UDP/DTLS has no read deadline of its own)
-                    int n = Math.Min(read, buffer.Length);
-                    temp.AsSpan(0, n).CopyTo(buffer.Span);
-                    return n;
-                }
-            }, cancellationToken).ConfigureAwait(false);
+                datagram = await _inbound.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (ChannelClosedException ex)
+            {
+                if (ex.InnerException is not null) ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
+                throw new ObjectDisposedException(nameof(DtlsDatagramTransport));
+            }
+            int n = Math.Min(datagram.Length, buffer.Length);
+            datagram.AsSpan(0, n).CopyTo(buffer.Span);
+            return n;
         }
 
-        /// <inheritdoc/>
-        public async ValueTask SendAsync(ReadOnlyMemory<byte> datagram, CancellationToken cancellationToken = default)
+        /// <summary>The dedicated receive thread, once the first receive started it (tests check it exits on dispose).</summary>
+        internal Thread? ReceiverThread => _receiverThread;
+
+        void EnsureReceiverStarted()
+        {
+            if (Interlocked.CompareExchange(ref _receiverStarted, 1, 0) != 0) return;
+            var thread = new Thread(ReceiveLoop)
+            {
+                IsBackground = true,
+                Name = "DtlsDatagramTransport receiver",
+            };
+            _receiverThread = thread;
+            thread.Start();
+        }
+
+        /// <summary>
+        /// Owns BouncyCastle's blocking <c>Receive</c> for the transport's life. The wait is bounded only so a dispose is
+        /// noticed (the bridge's queue cannot be woken early); -1 just means "no record yet".
+        /// </summary>
+        void ReceiveLoop()
+        {
+            DtlsTransport dtls = _dtls!;
+            ChannelWriter<byte[]> writer = _inbound.Writer;
+            byte[] buffer = new byte[Math.Max(dtls.GetReceiveLimit(), 1)];
+            try
+            {
+                while (Volatile.Read(ref _disposed) == 0)
+                {
+                    int read = dtls.Receive(buffer, 0, buffer.Length, ReceivePollMillis);
+                    if (read < 0) continue;
+                    writer.TryWrite(buffer.AsSpan(0, read).ToArray());   // DropOldest: never blocks this thread
+                }
+                writer.TryComplete();
+            }
+            catch (Exception ex)
+            {
+                // Disposing closes the bridge under the blocked Receive: that ends the loop, it is not a fault.
+                writer.TryComplete(Volatile.Read(ref _disposed) != 0 ? null : ex);
+            }
+        }
+
+        /// <summary>
+        /// Encrypts and hands the record to the bridge inline: the bridge only queues it for its async send pump, so this
+        /// never blocks on the network and needs no pool thread. Serialized by a lock (BouncyCastle's record layer is not
+        /// safe for concurrent senders). Errors surface through the returned task, as before.
+        /// </summary>
+        public ValueTask SendAsync(ReadOnlyMemory<byte> datagram, CancellationToken cancellationToken = default)
         {
             DtlsTransport dtls = _dtls ?? throw new InvalidOperationException("The DTLS transport is not connected.");
-            cancellationToken.ThrowIfCancellationRequested();
-            byte[] copy = datagram.ToArray(); // BouncyCastle Send takes a byte[]+offset+len; copy out of the Memory
-            await Task.Run(() => dtls.Send(copy, 0, copy.Length), cancellationToken).ConfigureAwait(false);
+            if (cancellationToken.IsCancellationRequested) return new ValueTask(Task.FromCanceled(cancellationToken));
+            try
+            {
+                lock (_sendLock)
+                {
+                    if (MemoryMarshal.TryGetArray(datagram, out ArraySegment<byte> segment))
+                        dtls.Send(segment.Array!, segment.Offset, segment.Count);
+                    else
+                    {
+                        byte[] copy = datagram.ToArray(); // BouncyCastle Send takes a byte[]+offset+len; copy out of the Memory
+                        dtls.Send(copy, 0, copy.Length);
+                    }
+                }
+                return default;
+            }
+            catch (Exception ex)
+            {
+                return new ValueTask(Task.FromException(ex));
+            }
         }
 
         /// <inheritdoc/>
         public async ValueTask DisposeAsync()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-            try { _dtls?.Close(); } catch { } // sends a close_notify alert (best-effort)
+            lock (_sendLock)
+            {
+                try { _dtls?.Close(); } catch { } // sends a close_notify alert (best-effort)
+            }
             _bridge?.Close();
+            // The receiver notices within one poll; bounded so a wedged Receive cannot hang the caller.
+            Thread? receiver = _receiverThread;
+            if (receiver is not null && receiver != Thread.CurrentThread) receiver.Join(ReceiverStopTimeout);
+            _inbound.Writer.TryComplete();
             if (_ownsInner)
                 await _inner.DisposeAsync().ConfigureAwait(false);
         }

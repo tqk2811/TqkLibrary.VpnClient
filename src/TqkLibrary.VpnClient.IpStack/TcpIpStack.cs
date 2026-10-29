@@ -18,12 +18,54 @@ namespace TqkLibrary.VpnClient.IpStack
     /// connections. Dual-stack: the inbound version nibble selects the IPv4 or IPv6 path, and client-initiated flows
     /// pick their source address from the remote's address family. ICMP is handled per family (ICMPv4 / ICMPv6).
     /// </summary>
-    public sealed class TcpIpStack
+    public sealed class TcpIpStack : IDisposable
     {
         static readonly byte[] DefaultPingData = System.Text.Encoding.ASCII.GetBytes("abcdefghijklmnopqrstuvwabcdefghi");
 
+        /// <summary>How many outbound IP packets may wait for the channel before <see cref="SendIp"/> starts dropping.</summary>
+        public const int EgressCapacity = 1024;
+        /// <summary>Upper bound <see cref="Dispose"/> waits for an asynchronous egress drain to finish.</summary>
+        static readonly TimeSpan EgressStopTimeout = TimeSpan.FromSeconds(2);
+        /// <summary>Minimum gap between two "egress dropped" / "egress fault" log lines, so a stuck channel does not flood the log.</summary>
+        static readonly long EgressLogInterval = Stopwatch.Frequency;
+        /// <summary>
+        /// How many packets one <see cref="SendIp"/> caller writes inline (its own plus what queued meanwhile) before it
+        /// hands the rest to an asynchronous drain, so a busy stack cannot pin a single caller's thread.
+        /// </summary>
+        const int InlineWriteBudget = 64;
+
         readonly IPacketChannel _channel;
         readonly ILogger _logger;
+        // Ordered egress, single writer. The old fire-and-forget write let a channel that throws
+        // synchronously unwind into the TCP code that called SendIp, left asynchronous faults
+        // unobserved, and let channels that do not serialize concurrent writes (GRE, raw IP) reorder
+        // packets. Now at most one writer runs at a time (_writing, under _egressLock):
+        //  - fast path: nobody is writing → the SendIp caller claims the writer role and calls the
+        //    channel inline. A write that completes synchronously never touches the thread pool, so a
+        //    starved pool cannot stall bare ACKs; the caller then drains what queued meanwhile
+        //    (bounded by InlineWriteBudget) and releases the role.
+        //  - a write that returns an incomplete ValueTask hands the role to an async drain that
+        //    continues from that write's completion.
+        //  - while a writer is active (including SendIp re-entered from inside WriteIpPacketAsync or
+        //    from the inbound handler on the writing thread) packets are queued, never written
+        //    recursively, so FIFO holds.
+        // When the queue is full the newest packet is dropped (like a NIC queue; TCP retransmits) —
+        // SendIp is called from timers and the inbound path, so it must never block.
+        readonly object _egressLock = new();
+        readonly Queue<byte[]> _egressQueue = new();
+        bool _writing;
+        Task _egressDrain = Task.CompletedTask;
+        // Flush barrier: packets accepted for egress vs. packets whose write has finished (any outcome).
+        long _egressAccepted;
+        long _egressFinished;
+        readonly List<(long Target, TaskCompletionSource<bool> Waiter)> _flushWaiters = new();
+        readonly CancellationTokenSource _egressCts = new();
+        long _egressDropped;
+        long _egressFaults;
+        long _lastDropLogTicks;
+        long _lastFaultLogTicks;
+        long _faultsAtLastLog;
+        int _disposed;
         // Not readonly: a driver that re-establishes its link may be handed a different address, and
         // a stack still sourcing packets from the old one is a tunnel that looks up and carries
         // nothing. See Rebind.
@@ -78,6 +120,180 @@ namespace TqkLibrary.VpnClient.IpStack
             using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(id);
             _pingIdentifier = (ushort)((id[0] << 8) | id[1]);
             _channel.InboundIpPacket += OnInbound;
+        }
+
+        /// <summary>Outbound IP packets lost because the egress queue (<see cref="EgressCapacity"/>) was full.</summary>
+        public long EgressDropped => Interlocked.Read(ref _egressDropped);
+
+        /// <summary>Outbound IP packets whose <see cref="IPacketChannel.WriteIpPacketAsync"/> threw or faulted.</summary>
+        public long EgressFaults => Interlocked.Read(ref _egressFaults);
+
+        /// <summary>
+        /// Detaches from the channel and stops egress: packets still queued are discarded and a write in flight is
+        /// cancelled. Waits at most <see cref="EgressStopTimeout"/> for an asynchronous drain, so a channel that ignores
+        /// cancellation cannot hang the caller. Connections already open are not closed.
+        /// </summary>
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            _channel.InboundIpPacket -= OnInbound;
+            Task drain;
+            lock (_egressLock)
+            {
+                _egressQueue.Clear();
+                drain = _egressDrain;
+                foreach (var (_, waiter) in _flushWaiters) waiter.TrySetResult(false);
+                _flushWaiters.Clear();
+            }
+            _egressCts.Cancel();
+            try { drain.Wait(EgressStopTimeout); }
+            catch (AggregateException) { }   // the drain swallows its own faults; nothing useful to rethrow
+            // Not disposed: a drain that outlived the timeout may still read the token.
+        }
+
+        /// <summary>
+        /// Completes once every packet accepted for egress before the call has been handed to the channel and its
+        /// write has finished (successfully or not). Test barrier: replaces waiting for a quiet period.
+        /// </summary>
+        internal Task FlushEgressAsync()
+        {
+            lock (_egressLock)
+            {
+                if (_egressFinished >= _egressAccepted || Volatile.Read(ref _disposed) != 0) return Task.CompletedTask;
+                var waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _flushWaiters.Add((_egressAccepted, waiter));
+                return waiter.Task;
+            }
+        }
+
+        /// <summary>
+        /// Called by the writer after each packet's write has finished: counts it, wakes flush waiters, and returns the
+        /// next queued packet — or releases the writer role (null) when the queue is empty or the stack is disposed.
+        /// </summary>
+        byte[]? FinishAndTakeNext()
+        {
+            lock (_egressLock)
+            {
+                _egressFinished++;
+                for (int i = _flushWaiters.Count - 1; i >= 0; i--)
+                {
+                    if (_flushWaiters[i].Target > _egressFinished) continue;
+                    _flushWaiters[i].Waiter.TrySetResult(true);
+                    _flushWaiters.RemoveAt(i);
+                }
+                if (Volatile.Read(ref _disposed) != 0 || _egressQueue.Count == 0)
+                {
+                    _writing = false;
+                    return null;
+                }
+                return _egressQueue.Dequeue();
+            }
+        }
+
+        /// <summary>
+        /// The fast path, run on the <see cref="SendIp"/> caller's thread after it claimed the writer role. Writes
+        /// inline while the channel completes synchronously; on the first incomplete write (or once the inline budget is
+        /// spent) the role passes to <see cref="DrainEgressAsync"/>. Never throws into the caller.
+        /// </summary>
+        void WriteInline(byte[] packet)
+        {
+            CancellationToken token = _egressCts.Token;
+            for (int budget = InlineWriteBudget; ; budget--)
+            {
+                ValueTask pending;
+                try
+                {
+                    pending = _channel.WriteIpPacketAsync(packet, token);
+                }
+                catch (Exception ex)
+                {
+                    OnWriteFault(ex, packet, token);
+                    pending = default;
+                }
+
+                if (!pending.IsCompleted)
+                {
+                    StartDrain(pending, packet);
+                    return;
+                }
+                try { pending.GetAwaiter().GetResult(); }
+                catch (Exception ex) { OnWriteFault(ex, packet, token); }
+
+                byte[]? next = FinishAndTakeNext();
+                if (next is null) return;
+                if (budget <= 1)
+                {
+                    // Still writing (the role is held): continue off this thread with the next packet.
+                    StartDrain(default, next, writeFirst: true);
+                    return;
+                }
+                packet = next;
+            }
+        }
+
+        void StartDrain(ValueTask pending, byte[] packet, bool writeFirst = false)
+        {
+            Task drain = writeFirst
+                ? Task.Run(() => DrainEgressAsync(default, packet, writeFirst: true))
+                : DrainEgressAsync(pending, packet, writeFirst: false);
+            // Only a drain still running matters to Dispose; one that already released the role must not overwrite a
+            // newer drain started by the next writer.
+            // Re-checked under the lock: the drain may finish and a newer writer publish its own in between.
+            if (!drain.IsCompleted)
+                lock (_egressLock) { if (!drain.IsCompleted) _egressDrain = drain; }
+        }
+
+        /// <summary>
+        /// The slow path: holds the writer role across asynchronous writes. Starts by awaiting <paramref name="pending"/>
+        /// (the write of <paramref name="packet"/> already in flight), or by writing <paramref name="packet"/> when
+        /// <paramref name="writeFirst"/>; then drains the queue one packet at a time until it is empty.
+        /// </summary>
+        /// <remarks>
+        /// Head-of-line: an Ethernet VirtualHost awaits ARP inside WriteIpPacketAsync, so a packet to a not-yet-resolved
+        /// next hop holds the queue for that resolution. The stack has a single next hop
+        /// (the gateway), and later packets would wait on the same entry anyway. The resolver's default timeout
+        /// (ArpResolverOptions: RequestTimeout 1 s × MaxAttempts 3 ≈ 3 s, failures not cached) means a dead gateway makes
+        /// EACH packet wait about that long: the queue fills, and the overflow is dropped, counted in
+        /// <see cref="EgressDropped"/> and logged (rate-limited).
+        /// </remarks>
+        async Task DrainEgressAsync(ValueTask pending, byte[] packet, bool writeFirst)
+        {
+            CancellationToken token = _egressCts.Token;
+            byte[]? current = packet;
+            bool first = true;
+            while (current is not null)
+            {
+                try
+                {
+                    if (first && !writeFirst) await pending.ConfigureAwait(false);
+                    else await _channel.WriteIpPacketAsync(current, token).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    OnWriteFault(ex, current, token);
+                }
+                first = false;
+                current = FinishAndTakeNext();
+            }
+        }
+
+        /// <summary>Counts and (rate-limited) logs a failed write. A cancellation caused by Dispose is not a fault.</summary>
+        void OnWriteFault(Exception ex, byte[] packet, CancellationToken token)
+        {
+            if (ex is OperationCanceledException && token.IsCancellationRequested) return;
+            // One failing packet must never stop egress for every connection.
+            long faults = Interlocked.Increment(ref _egressFaults);
+            long now = Stopwatch.GetTimestamp();
+            long last = Interlocked.Read(ref _lastFaultLogTicks);
+            if (now - last < EgressLogInterval || Interlocked.CompareExchange(ref _lastFaultLogTicks, now, last) != last) return;
+            long sinceLast = faults - Interlocked.Exchange(ref _faultsAtLastLog, faults);
+            // A throwing logger must not escape: the caller still holds the writer role and would never release it.
+            try
+            {
+                _logger.LogWarning(ex, "Egress: channel write of a {Length}-byte IP packet failed ({Since} failure(s) since the last report, {Total} in total)",
+                    packet.Length, sinceLast, faults);
+            }
+            catch { }
         }
 
         /// <summary>Opens a TCP connection to <paramref name="remoteAddress"/>:<paramref name="remotePort"/> through the tunnel.</summary>
@@ -262,11 +478,52 @@ namespace TqkLibrary.VpnClient.IpStack
             int mtu = _channel.Mtu;
             if (ipPacket.Length <= mtu)
             {
-                _ = _channel.WriteIpPacketAsync(ipPacket);
+                Enqueue(ipPacket);
                 return;
             }
             foreach (byte[] fragment in IpLayer.Fragment(ipPacket, mtu, (uint)Interlocked.Increment(ref _fragId)))
-                _ = _channel.WriteIpPacketAsync(fragment);
+                Enqueue(fragment);
+        }
+
+        /// <summary>
+        /// Hands one packet to egress without blocking: written inline when no write is in flight (fast path), queued
+        /// behind the active writer otherwise; a full queue drops it, a disposed stack discards it.
+        /// </summary>
+        void Enqueue(byte[] ipPacket)
+        {
+            bool claimed = false;
+            lock (_egressLock)
+            {
+                if (Volatile.Read(ref _disposed) != 0) return;   // after Dispose the stack sends nothing; not a drop
+                if (_writing)
+                {
+                    // Someone (possibly this very thread, re-entered from inside the channel write) holds the writer
+                    // role: queue behind it rather than writing recursively, so FIFO holds.
+                    if (_egressQueue.Count < EgressCapacity)
+                    {
+                        _egressQueue.Enqueue(ipPacket);
+                        _egressAccepted++;
+                        return;
+                    }
+                }
+                else
+                {
+                    _writing = true;
+                    _egressAccepted++;
+                    claimed = true;
+                }
+            }
+            if (claimed)
+            {
+                WriteInline(ipPacket);
+                return;
+            }
+
+            long dropped = Interlocked.Increment(ref _egressDropped);
+            long now = Stopwatch.GetTimestamp();
+            long last = Interlocked.Read(ref _lastDropLogTicks);
+            if (now - last >= EgressLogInterval && Interlocked.CompareExchange(ref _lastDropLogTicks, now, last) == last)
+                _logger.LogWarning("Egress queue full ({Capacity}): dropped {Dropped} outbound IP packet(s) so far", EgressCapacity, dropped);
         }
 
         void OnInbound(ReadOnlyMemory<byte> ipPacket)

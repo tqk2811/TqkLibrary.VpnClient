@@ -11,6 +11,10 @@ namespace TqkLibrary.VpnClient.Sockets.Extensions
         /// session also negotiated an IPv6 address (<see cref="TunnelConfig.AssignedAddressV6"/>) the stack is built
         /// dual-stack, so both families flow through the one channel.
         /// </summary>
+        /// <remarks>
+        /// The caller owns the returned stack and must <see cref="TcpIpStack.Dispose"/> it — before disposing the
+        /// session — so its egress stops (a write in flight is cancelled) and it detaches from the packet channel.
+        /// </remarks>
         public static TcpIpStack CreateTcpStack(this IVpnSession session)
         {
             if (session.Config.AssignedAddress == null && session.Config.AssignedAddressV6 == null)

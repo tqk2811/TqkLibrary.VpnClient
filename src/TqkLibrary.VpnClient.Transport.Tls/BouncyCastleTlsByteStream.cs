@@ -1,7 +1,9 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Security;
-using System.Runtime.InteropServices;
+using System.Runtime.ExceptionServices;
 using System.Security.Cryptography.X509Certificates;
+using System.Threading.Channels;
 using Org.BouncyCastle.Security;
 using Org.BouncyCastle.Tls;
 using Org.BouncyCastle.Tls.Crypto;
@@ -28,9 +30,11 @@ namespace TqkLibrary.VpnClient.Transport.Tls
     /// <para>
     /// <b>Threading:</b> BouncyCastle's <see cref="TlsClientProtocol"/> drives a synchronous record layer over the inner
     /// <see cref="NetworkStream"/>. The blocking handshake runs once on a thread-pool thread inside
-    /// <see cref="ConnectAsync"/>; afterwards each read/write offloads its single blocking call through the protocol's
-    /// application-data <see cref="System.IO.Stream"/> (its record layer tolerates one concurrent reader and one
-    /// concurrent writer — the usual read-loop + write-loop driver model).
+    /// <see cref="ConnectAsync"/>. Afterwards no pool thread is parked: one dedicated background thread blocks in the
+    /// application-data <see cref="System.IO.Stream"/>'s <c>Read</c> and queues decrypted chunks for
+    /// <see cref="ReadAsync"/>; a second dedicated thread drains a bounded queue that <see cref="WriteAsync"/> fills, so
+    /// no caller ever blocks on a full send buffer (its record layer tolerates one concurrent reader and one concurrent
+    /// writer — exactly these two threads).
     /// </para>
     /// </summary>
     public sealed class BouncyCastleTlsByteStream : ITlsByteStream, ITlsKeyingMaterialExporter, IDisposable
@@ -43,6 +47,40 @@ namespace TqkLibrary.VpnClient.Transport.Tls
         TlsClientProtocol? _protocol;
         Stream? _appData; // protocol.Stream — the decrypted application-data pipe
         ExporterTlsClient? _client;
+
+        const int ReadChunkSize = 16 * 1024;     // one TLS record's worth of plaintext
+        const int MaxQueuedChunks = 64;
+        static readonly TimeSpan ReaderStopTimeout = TimeSpan.FromSeconds(2);
+
+        // Read side: one dedicated thread (started on the first ReadAsync) owns the blocking BC Read and hands chunks
+        // over this queue; _freeChunks bounds it. _leftover is the part of the last chunk the caller has not read yet.
+        readonly Channel<byte[]> _inbound = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = true,
+        });
+        readonly SemaphoreSlim _freeChunks = new(MaxQueuedChunks, MaxQueuedChunks);
+        readonly CancellationTokenSource _disposeCts = new();
+        readonly object _writeLock = new();
+
+        // Write side: WriteAsync copies the caller's bytes into this queue and returns; one dedicated thread (started on
+        // the first write) encrypts and sends them in order. _freeWriteSlots bounds the queue (no max count, so a write
+        // fault can wake every waiter); _queuedWrites counts what the writer may take and is waited on synchronously.
+        const int MaxQueuedWrites = 64;
+        readonly ConcurrentQueue<byte[]> _outbound = new();
+        readonly SemaphoreSlim _freeWriteSlots = new(MaxQueuedWrites);
+        readonly SemaphoreSlim _queuedWrites = new(0);
+        volatile Exception? _writeFault;
+        volatile bool _writerCompleting;
+
+        // Both threads are created and published under this lock, and Dispose reads them under it after setting
+        // _disposed, so a thread is either joined by Dispose or never started.
+        readonly object _threadLock = new();
+        Thread? _readerThread;
+        Thread? _writerThread;
+        int _disposed;
+        byte[]? _leftover;
+        int _leftoverOffset;
 
         /// <summary>
         /// Creates a BouncyCastle TLS byte stream to <paramref name="host"/>:<paramref name="port"/> (not yet connected).
@@ -119,31 +157,207 @@ namespace TqkLibrary.VpnClient.Transport.Tls
             _appData = protocol.Stream;
         }
 
-        /// <inheritdoc/>
+        /// <summary>
+        /// Reads decrypted application data. Served from the chunk the reader thread delivered last before waiting for
+        /// the next one, so a byte-at-a-time caller (the OpenConnect header parser) never over-reads into the next CSTP
+        /// frame. Cancelling a pending read loses no bytes: the chunk stays queued for the next call. End of stream from
+        /// the peer (close_notify / FIN) returns 0; a TLS or socket error rethrows what the blocking read threw. Once this
+        /// stream is disposed — including a read pending at that moment, after any data already queued — it throws
+        /// <see cref="ObjectDisposedException"/> rather than returning 0, so a driver's read loop does not mistake its own
+        /// teardown for the peer closing the session (OpenConnect's CSTP loop treats 0 as "gateway closed" and
+        /// reconnects; a fault just ends the loop). Not safe for concurrent readers (one read loop per stream).
+        /// </summary>
         public async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
-            Stream appData = _appData ?? throw new InvalidOperationException("The TLS stream is not connected.");
+            if (_appData is null) throw new InvalidOperationException("The TLS stream is not connected.");
+            if (Volatile.Read(ref _disposed) != 0) throw new ObjectDisposedException(nameof(BouncyCastleTlsByteStream));
             cancellationToken.ThrowIfCancellationRequested();
-            // protocol.Stream.Read returns the decrypted bytes already buffered (down to 1), so small reads — like the
-            // OpenConnect header parser's byte-at-a-time reads — are served without over-reading the next CSTP frame.
-            return await Task.Run(() =>
+            if (buffer.Length == 0) return 0;
+            if (_leftover is not null) return TakeLeftover(buffer.Span);
+
+            EnsureReaderStarted();
+            byte[] chunk;
+            try
             {
-                if (MemoryMarshal.TryGetArray<byte>(buffer, out ArraySegment<byte> segment))
-                    return appData.Read(segment.Array!, segment.Offset, segment.Count);
-                byte[] temp = new byte[buffer.Length];
-                int read = appData.Read(temp, 0, temp.Length);
-                if (read > 0) temp.AsMemory(0, read).CopyTo(buffer);
-                return read;
-            }, cancellationToken).ConfigureAwait(false);
+                chunk = await _inbound.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (ChannelClosedException ex)
+            {
+                if (ex.InnerException is null) return 0;   // clean end of stream
+                ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
+                throw;   // unreachable
+            }
+            _freeChunks.Release();   // the reader thread may queue another chunk
+
+            _leftover = chunk;
+            _leftoverOffset = 0;
+            return TakeLeftover(buffer.Span);
         }
 
-        /// <inheritdoc/>
-        public async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        int TakeLeftover(Span<byte> destination)
         {
-            Stream appData = _appData ?? throw new InvalidOperationException("The TLS stream is not connected.");
-            cancellationToken.ThrowIfCancellationRequested();
-            byte[] copy = buffer.ToArray(); // BC's stream writes a byte[]+offset+len; copy out of the Memory
-            await Task.Run(() => appData.Write(copy, 0, copy.Length), cancellationToken).ConfigureAwait(false);
+            byte[] chunk = _leftover!;
+            int n = Math.Min(destination.Length, chunk.Length - _leftoverOffset);
+            chunk.AsSpan(_leftoverOffset, n).CopyTo(destination);
+            _leftoverOffset += n;
+            if (_leftoverOffset == chunk.Length) _leftover = null;
+            return n;
+        }
+
+        /// <summary>The dedicated reader thread, once the first read started it (tests check it exits on dispose).</summary>
+        internal Thread? ReaderThread => _readerThread;
+
+        /// <summary>The dedicated writer thread, once the first write started it (tests check it exits on dispose).</summary>
+        internal Thread? WriterThread => _writerThread;
+
+        void EnsureReaderStarted()
+        {
+            if (Volatile.Read(ref _readerThread) is not null) return;
+            lock (_threadLock)
+            {
+                if (Volatile.Read(ref _disposed) != 0) throw new ObjectDisposedException(nameof(BouncyCastleTlsByteStream));
+                if (_readerThread is not null) return;
+                var thread = new Thread(ReadLoop) { IsBackground = true, Name = "BouncyCastleTlsByteStream reader" };
+                thread.Start();
+                Volatile.Write(ref _readerThread, thread);
+            }
+        }
+
+        void EnsureWriterStarted()
+        {
+            if (Volatile.Read(ref _writerThread) is not null) return;
+            lock (_threadLock)
+            {
+                if (Volatile.Read(ref _disposed) != 0) throw new ObjectDisposedException(nameof(BouncyCastleTlsByteStream));
+                if (_writerThread is not null) return;
+                var thread = new Thread(WriteLoop) { IsBackground = true, Name = "BouncyCastleTlsByteStream writer" };
+                thread.Start();
+                Volatile.Write(ref _writerThread, thread);
+            }
+        }
+
+        /// <summary>
+        /// The dedicated reader: blocks in BouncyCastle's synchronous <c>Read</c> (which is where a pool thread used to
+        /// be parked for the tunnel's whole life) and queues a copy of every decrypted chunk. Backpressure without the
+        /// pool: a <see cref="SemaphoreSlim"/> counts free queue slots and this thread blocks synchronously on it
+        /// (Monitor-based, woken inline by the consumer's <c>Release</c>) — awaiting a bounded channel's
+        /// <c>WaitToWriteAsync</c> here would instead need a pool thread to run the wake-up continuation. While the
+        /// queue is full this thread stops reading, the TCP receive window closes, and the server slows down.
+        /// </summary>
+        void ReadLoop()
+        {
+            Stream appData = _appData!;
+            ChannelWriter<byte[]> writer = _inbound.Writer;
+            byte[] buffer = new byte[ReadChunkSize];
+            try
+            {
+                while (true)
+                {
+                    int read = appData.Read(buffer, 0, buffer.Length);
+                    if (read <= 0) break;
+                    _freeChunks.Wait(_disposeCts.Token);
+                    writer.TryWrite(buffer.AsSpan(0, read).ToArray());   // unbounded underneath: the semaphore bounds it
+                }
+                writer.TryComplete(DisposedOrNull());
+            }
+            catch (Exception ex)
+            {
+                // Disposing closes the socket under the blocked Read: that is this stream's teardown, not a TLS fault.
+                writer.TryComplete(DisposedOrNull() ?? ex);
+            }
+        }
+
+        Exception? DisposedOrNull()
+            => Volatile.Read(ref _disposed) != 0 ? new ObjectDisposedException(nameof(BouncyCastleTlsByteStream)) : null;
+
+        /// <summary>
+        /// Queues a copy of <paramref name="buffer"/> for the dedicated writer thread and returns; the writer encrypts
+        /// and sends chunks in call order under <c>_writeLock</c> (BouncyCastle's record layer is not safe for concurrent
+        /// writers). The caller therefore never blocks on a full kernel send buffer — the caller can be the IP stack's
+        /// egress path on a pool thread. Backpressure: at most <see cref="MaxQueuedWrites"/> chunks wait; beyond that the
+        /// call awaits a free slot asynchronously. A send failure is stored; the next call throws
+        /// <see cref="IOException"/> wrapping it (the bytes of a failed or still-queued write are lost, as on a dead link).
+        /// </summary>
+        public ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (_appData is null) throw new InvalidOperationException("The TLS stream is not connected.");
+            if (cancellationToken.IsCancellationRequested) return new ValueTask(Task.FromCanceled(cancellationToken));
+            try
+            {
+                ThrowIfWriteUnavailable();
+                EnsureWriterStarted();
+                byte[] copy = buffer.ToArray();   // the caller may reuse its buffer as soon as this returns
+                if (_freeWriteSlots.Wait(0))
+                {
+                    EnqueueWrite(copy);
+                    return default;
+                }
+                return WriteSlowAsync(copy, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                return new ValueTask(Task.FromException(ex));
+            }
+        }
+
+        async ValueTask WriteSlowAsync(byte[] copy, CancellationToken cancellationToken)
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _disposeCts.Token);
+            try
+            {
+                await _freeWriteSlots.WaitAsync(linked.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new ObjectDisposedException(nameof(BouncyCastleTlsByteStream));
+            }
+            ThrowIfWriteUnavailable();   // a fault releases every waiter so it can surface here
+            EnqueueWrite(copy);
+        }
+
+        void EnqueueWrite(byte[] copy)
+        {
+            _outbound.Enqueue(copy);
+            _queuedWrites.Release();
+        }
+
+        void ThrowIfWriteUnavailable()
+        {
+            if (Volatile.Read(ref _disposed) != 0) throw new ObjectDisposedException(nameof(BouncyCastleTlsByteStream));
+            Exception? fault = _writeFault;
+            if (fault is not null) throw new IOException("A previous TLS write failed; the stream can no longer send.", fault);
+        }
+
+        /// <summary>
+        /// The dedicated writer: takes queued chunks in order and writes them through BouncyCastle's blocking record
+        /// layer. It is the only thread that blocks on a full kernel send buffer. On Dispose it first drains what is
+        /// already queued (bounded by Dispose's join), so a final control frame (e.g. CSTP DISCONNECT) still goes out.
+        /// </summary>
+        void WriteLoop()
+        {
+            Stream appData = _appData!;
+            try
+            {
+                while (true)
+                {
+                    _queuedWrites.Wait(_disposeCts.Token);
+                    if (!_outbound.TryDequeue(out byte[]? chunk))
+                    {
+                        if (_writerCompleting) return;   // the wake-up Dispose posted after the last chunk
+                        continue;
+                    }
+                    lock (_writeLock) appData.Write(chunk, 0, chunk.Length);
+                    _freeWriteSlots.Release();
+                }
+            }
+            catch (OperationCanceledException) when (_disposeCts.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex)
+            {
+                if (Volatile.Read(ref _disposed) == 0) _writeFault = ex;
+                _freeWriteSlots.Release(MaxQueuedWrites);   // wake writers waiting for a slot: they see the fault
+            }
         }
 
         /// <inheritdoc/>
@@ -186,8 +400,29 @@ namespace TqkLibrary.VpnClient.Transport.Tls
         /// <inheritdoc/>
         public void Dispose()
         {
-            try { _protocol?.Close(); } catch { } // sends close_notify (best-effort)
-            _tcp.Dispose();
+            Thread? reader, writer;
+            lock (_threadLock)
+            {
+                if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+                reader = _readerThread;   // no thread can be started after this point
+                writer = _writerThread;
+            }
+            // Let the writer flush what is already queued (a final control frame), bounded: it may be stuck on a full
+            // send buffer, in which case the socket close below unblocks it.
+            _writerCompleting = true;
+            _queuedWrites.Release();
+            if (writer is not null && writer != Thread.CurrentThread) writer.Join(ReaderStopTimeout);
+            _disposeCts.Cancel();   // a reader parked on a full queue, a writer still waiting, WriteAsync callers waiting for a slot
+            // close_notify (best-effort), but never behind a write stuck on a full send buffer.
+            if (Monitor.TryEnter(_writeLock, writer is { IsAlive: true } ? TimeSpan.Zero : ReaderStopTimeout))
+            {
+                try { _protocol?.Close(); } catch { }
+                finally { Monitor.Exit(_writeLock); }
+            }
+            _tcp.Dispose();         // a reader blocked in Read (or a writer in Write) returns (throws) and ends its loop
+            if (reader is not null && reader != Thread.CurrentThread) reader.Join(ReaderStopTimeout);
+            if (writer is not null && writer != Thread.CurrentThread) writer.Join(ReaderStopTimeout);
+            _inbound.Writer.TryComplete(new ObjectDisposedException(nameof(BouncyCastleTlsByteStream)));
             RemoteCertificate?.Dispose();
         }
 

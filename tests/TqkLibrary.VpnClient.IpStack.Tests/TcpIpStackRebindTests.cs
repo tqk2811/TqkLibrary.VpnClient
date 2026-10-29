@@ -110,9 +110,14 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
 
             public int Count => _written.Count;
 
+            /// <summary>The oldest packet not yet taken; waits (bounded) because the stack's egress loop writes it, not the sender.</summary>
             public byte[] Take()
             {
-                Assert.True(_written.TryDequeue(out byte[]? packet), "the stack sent nothing");
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                byte[]? packet;
+                while (!_written.TryDequeue(out packet) && sw.ElapsedMilliseconds < 5000)
+                    Thread.Sleep(5);
+                Assert.True(packet is not null, "the stack sent nothing");
                 return packet!;
             }
 

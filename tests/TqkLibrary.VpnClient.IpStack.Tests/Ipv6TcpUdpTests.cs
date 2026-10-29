@@ -166,17 +166,24 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             public int Mtu => 1400;
             public int MaxHeaderLength => 0;
             public bool RequiresLinkAddressResolution => false;
-            public event Action<ReadOnlyMemory<byte>>? InboundIpPacket;
+            Action<ReadOnlyMemory<byte>>? _inbound;
+            public event Action<ReadOnlyMemory<byte>>? InboundIpPacket
+            {
+                add { _inbound += value; _captured.Observe(value); }
+                remove { _inbound -= value; }
+            }
 
-            public readonly List<byte[]> Written = new();
+            readonly CapturedEgress _captured = new();
+            /// <summary>What the stack sent, once its egress has flushed.</summary>
+            public List<byte[]> Written => _captured.Settle();
 
             public ValueTask WriteIpPacketAsync(ReadOnlyMemory<byte> ipPacket, CancellationToken cancellationToken = default)
             {
-                Written.Add(ipPacket.ToArray());
+                _captured.Add(ipPacket);
                 return default;
             }
 
-            public void Inject(byte[] ipPacket) => InboundIpPacket?.Invoke(ipPacket);
+            public void Inject(byte[] ipPacket) => _inbound?.Invoke(ipPacket);
             public ValueTask DisposeAsync() => default;
         }
 

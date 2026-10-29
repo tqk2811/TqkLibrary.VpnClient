@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using TqkLibrary.VpnClient.Abstractions.Transport.Interfaces;
 using TqkLibrary.VpnClient.Transport.RawIp.Helpers;
@@ -13,15 +14,15 @@ namespace TqkLibrary.VpnClient.Transport.RawIp
     /// <b>Receive</b> on an IPv4 raw socket gets the whole IP datagram including its header, so the header is stripped
     /// (<see cref="RawIpv4"/>); datagrams from another source are skipped and IP fragments are dropped (a raw socket may
     /// surface them un-reassembled, so the payload is incomplete). IPv6 raw delivers no header — not supported here yet.</para>
-    /// <para><b>Threading:</b> the blocking socket calls run on the thread pool and poll with a short receive timeout so
-    /// cancellation/teardown is honoured promptly; disposing closes the socket, which unblocks a pending receive
-    /// (netstandard2.0 has no cancellable <c>ReceiveFrom</c>). One sender + one receiver at a time, like a raw socket.</para>
+    /// <para><b>Threading:</b> send and receive are overlapped socket operations (<c>SendToAsync</c> /
+    /// <c>ReceiveFromAsync</c>), so no thread is parked while the link is idle. On net6+ they take the cancellation token
+    /// directly; on netstandard2.0 cancelling a receive closes the socket. Disposing closes the socket, which ends a
+    /// pending receive. One sender + one receiver at a time, like a raw socket.</para>
     /// </summary>
     public sealed class RawIpDatagramTransport : IDatagramTransport
     {
         // A full IPv4 datagram (max header 60 + payload) always fits this scratch; the receive loop owns it (single reader).
         const int ReceiveBufferSize = 65535;
-        const int ReceivePollMilliseconds = 250;
 
         readonly Socket _socket;
         readonly IPAddress _remoteAddress;
@@ -37,7 +38,6 @@ namespace TqkLibrary.VpnClient.Transport.RawIp
             _remoteAddress = remoteAddress ?? throw new ArgumentNullException(nameof(remoteAddress));
             _remoteEndPoint = new IPEndPoint(remoteAddress, 0);
             _logger = logger;
-            try { _socket.ReceiveTimeout = ReceivePollMilliseconds; } catch { }
         }
 
         /// <inheritdoc/>
@@ -53,39 +53,68 @@ namespace TqkLibrary.VpnClient.Transport.RawIp
         {
             ThrowIfDisposed();
             cancellationToken.ThrowIfCancellationRequested();
-            byte[] copy = datagram.ToArray();
             // Send the payload only: the OS adds the IP header (protocol = the socket's protocol number).
-            await Task.Run(() => _socket.SendTo(copy, 0, copy.Length, SocketFlags.None, _remoteEndPoint), cancellationToken)
-                .ConfigureAwait(false);
+#if NET6_0_OR_GREATER
+            await _socket.SendToAsync(datagram, SocketFlags.None, _remoteEndPoint, cancellationToken).ConfigureAwait(false);
+#else
+            // A datagram send completes as soon as the OS takes it; there is nothing to cancel mid-way.
+            ArraySegment<byte> segment = MemoryMarshal.TryGetArray(datagram, out ArraySegment<byte> array)
+                ? array
+                : new ArraySegment<byte>(datagram.ToArray());
+            await _socket.SendToAsync(segment, SocketFlags.None, _remoteEndPoint).ConfigureAwait(false);
+#endif
         }
 
-        /// <inheritdoc/>
+        /// <summary>
+        /// The next protocol payload from the remote: an overlapped receive (no thread is parked while the link is idle),
+        /// skipping datagrams from other sources and IP fragments, with the IPv4 header stripped. On net6+ cancelling
+        /// cancels just this receive. On netstandard2.0 (no cancellable <c>ReceiveFromAsync</c>) cancelling closes the
+        /// socket — the only way to abort the pending receive — so the transport is unusable afterwards; drivers cancel
+        /// only on teardown. Either way the caller sees <see cref="OperationCanceledException"/>.
+        /// </summary>
         public async ValueTask<int> ReceiveAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
-            return await Task.Run(() =>
+            cancellationToken.ThrowIfCancellationRequested();
+#if !NET6_0_OR_GREATER
+            using CancellationTokenRegistration abort = cancellationToken.Register(static s => ((RawIpDatagramTransport)s!).AbortForCancel(), this);
+#endif
+            while (true)
             {
-                while (true)
+                int received;
+                EndPoint from;
+                try
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    EndPoint from = AnyEndPoint();
-                    int received;
-                    try
-                    {
-                        received = _socket.ReceiveFrom(_receiveScratch, 0, _receiveScratch.Length, SocketFlags.None, ref from);
-                    }
-                    catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
-                    {
-                        continue; // poll timeout — re-check cancellation, keep waiting (a raw socket has no read deadline)
-                    }
-                    if (!IsFromRemote(from)) continue;           // a raw socket sees every proto packet to this host — keep the gateway's only
-                    if (!TryExtractPayload(_receiveScratch.AsSpan(0, received), out ReadOnlySpan<byte> payload)) continue;
-                    int n = Math.Min(payload.Length, buffer.Length);
-                    payload.Slice(0, n).CopyTo(buffer.Span);
-                    return n;
+#if NET6_0_OR_GREATER
+                    SocketReceiveFromResult result = await _socket.ReceiveFromAsync(
+                        _receiveScratch.AsMemory(), SocketFlags.None, AnyEndPoint(), cancellationToken).ConfigureAwait(false);
+#else
+                    SocketReceiveFromResult result = await _socket.ReceiveFromAsync(
+                        new ArraySegment<byte>(_receiveScratch), SocketFlags.None, AnyEndPoint()).ConfigureAwait(false);
+#endif
+                    received = result.ReceivedBytes;
+                    from = result.RemoteEndPoint;
                 }
-            }, cancellationToken).ConfigureAwait(false);
+                catch (Exception ex) when (cancellationToken.IsCancellationRequested && ex is not OperationCanceledException
+                                           && (ex is ObjectDisposedException || ex is SocketException))
+                {
+                    throw new OperationCanceledException("The raw-IP receive was cancelled.", ex, cancellationToken);
+                }
+                if (!IsFromRemote(from)) continue;           // a raw socket sees every proto packet to this host — keep the gateway's only
+                if (!TryExtractPayload(_receiveScratch.AsSpan(0, received), out ReadOnlySpan<byte> payload)) continue;
+                int n = Math.Min(payload.Length, buffer.Length);
+                payload.Slice(0, n).CopyTo(buffer.Span);
+                return n;
+            }
         }
+
+#if !NET6_0_OR_GREATER
+        void AbortForCancel()
+        {
+            Interlocked.Exchange(ref _disposed, 1);
+            try { _socket.Dispose(); } catch { }
+        }
+#endif
 
         EndPoint AnyEndPoint() => new IPEndPoint(
             _remoteAddress.AddressFamily == AddressFamily.InterNetworkV6 ? IPAddress.IPv6Any : IPAddress.Any, 0);

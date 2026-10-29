@@ -6,6 +6,11 @@ namespace TqkLibrary.VpnClient.Abstractions.Channels.Interfaces
     public interface IPacketChannel : ILinkChannel
     {
         /// <summary>Sends one complete IP packet toward the tunnel peer.</summary>
+        /// <remarks>
+        /// The stack may call this inline while holding a TCP connection's lock. An implementation must therefore not
+        /// raise <see cref="InboundIpPacket"/> synchronously from inside this call (deliver it from its own receive
+        /// loop or a queue instead), or the reply re-enters the stack mid-update or deadlocks two connections.
+        /// </remarks>
         ValueTask WriteIpPacketAsync(ReadOnlyMemory<byte> ipPacket, CancellationToken cancellationToken = default);
 
         /// <summary>

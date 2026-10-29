@@ -12,6 +12,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="TqkLibrary.VpnClient.Transport.Tls.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\TqkLibrary.VpnClient.Abstractions\TqkLibrary.VpnClient.Abstractions.csproj" />
     <ProjectReference Include="..\TqkLibrary.VpnClient.Transport.Tcp\TqkLibrary.VpnClient.Transport.Tcp.csproj" />
   </ItemGroup>

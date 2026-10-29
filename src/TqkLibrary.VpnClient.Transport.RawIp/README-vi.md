@@ -40,7 +40,7 @@ TqkLibrary.VpnClient.Transport.RawIp/
 | `IRawIpTransportFactory` | (Abstractions) seam tạo transport: `IsAvailable` (probe quyền thật) + `Create(remote, ipProtocol, localBind?)` | [IRawIpTransportFactory.cs:12](../TqkLibrary.VpnClient.Abstractions/Transport/Interfaces/IRawIpTransportFactory.cs#L12) |
 | `RawIpTransportFactory` | Production: `IsAvailable` mở+đóng thử raw socket (mở được = đủ quyền thực tế, **không** đoán từ uid); `Create` mở socket qua `NativeRawSocket.Create(family, ipProtocol)` + `Bind(localBind)` (đồng bộ source với IKE), thất bại ⇒ `RawIpNotPermittedException` (message dùng `IPrivilegeChecker`) | [RawIpTransportFactory.cs:18](RawIpTransportFactory.cs#L18) |
 | `NativeRawSocket` | Mở `Socket` cho IP protocol tùy ý. **Trên Unix**: `new Socket(InterNetwork, Raw, (ProtocolType)50)` của .NET ném `SocketError.ProtocolNotSupported` (errno EPROTONOSUPPORT 93) **kể cả khi root** — tầng chuyển-đổi-protocol của .NET từ chối protocol number lạ, DÙ kernel hỗ trợ (libc `socket(AF_INET,SOCK_RAW,50)` chạy OK) → mở fd qua libc `socket()` ([DllImport]) rồi bọc `new Socket(SafeSocketHandle)`. **Windows + netstandard2.0**: fallback managed ctor (ns2.0 không có public `SafeSocketHandle(IntPtr,bool)` ctor → guard `#if NETSTANDARD2_0`; runtime ship native-ESP là net8.0). Phát hiện + sửa qua **validate live P0.8c** — TRƯỚC fix native-ESP/GRE 100% hỏng trên Linux | [NativeRawSocket.cs:15](NativeRawSocket.cs#L15) |
-| `RawIpDatagramTransport` | `IDatagramTransport`: ctor nhận `Socket` + `remoteAddress` + `ILogger? logger` (optional); `SendAsync` → `SendTo` (OS gắn IP header, không HDRINCL); `ReceiveAsync` → poll `ReceiveFrom` (timeout 250ms để honor cancel), **lọc source==gateway**, **strip IPv4 header** (`RawIpv4`), **drop fragment** (log `LogDebug`); `DisposeAsync` đóng socket (unblock blocking-receive trên ns2.0) | [RawIpDatagramTransport.cs:20](RawIpDatagramTransport.cs#L20) |
+| `RawIpDatagramTransport` | `IDatagramTransport`: ctor nhận `Socket` + `remoteAddress` + `ILogger? logger` (optional); `SendAsync` → `SendToAsync` (OS gắn IP header, không HDRINCL); `ReceiveAsync` → `ReceiveFromAsync` overlapped (net6+: overload Memory+CT; ns2.0: cancel = đóng socket), **lọc source==gateway**, **strip IPv4 header** (`RawIpv4`), **drop fragment** (log `LogDebug`); `DisposeAsync` đóng socket (kết thúc receive đang chờ) | [RawIpDatagramTransport.cs:20](RawIpDatagramTransport.cs#L20) |
 | `RawIpv4` | codec thuần (pure): `PayloadOffset` (IHL×4, validate `ihl≥20` & `len≥ihl`), `IsFragment` (MF flag/offset≠0), `Protocol` (byte 9), `SourceAddress` (byte 12-15) | [Helpers/RawIpv4.cs:11](Helpers/RawIpv4.cs#L11) |
 | `RawIpPrivilegeChecker` | `IPrivilegeChecker` mặc định: Windows `WindowsPrincipal.IsInRole(Administrator)` (net5+), Linux/macOS `geteuid()==0` qua một P/Invoke libc (không Mono.Posix) — **chỉ best-effort cho message**, không phải cổng quyết định | [RawIpPrivilegeChecker.cs:14](RawIpPrivilegeChecker.cs#L14) |
 | `RawIpNotPermittedException` | ném khi raw socket không mở được; message nêu cần elevate + cảnh báo Windows có thể nuốt proto-50 | [Exceptions/RawIpNotPermittedException.cs:9](Exceptions/RawIpNotPermittedException.cs#L9) |
@@ -77,11 +77,11 @@ if (rawIp.IsAvailable)
 
 ## Luồng nội bộ
 
-### Gửi (`SendAsync` — [RawIpDatagramTransport.cs:20](RawIpDatagramTransport.cs#L20))
-- Copy payload ra `byte[]` → `Socket.SendTo(payload, gatewayEndPoint)` (offload `Task.Run`). **Không** set `IP_HDRINCL` ⇒ OS tự dựng IP header với protocol = protocol của socket. Payload là gói ESP thô (bắt đầu bằng SPI).
+### Gửi (`SendAsync` — [RawIpDatagramTransport.cs:52](RawIpDatagramTransport.cs#L52))
+- `Socket.SendToAsync(payload, gatewayEndPoint)` (net6+: `ReadOnlyMemory` + CT; ns2.0: `ArraySegment`, không copy khi Memory bọc mảng). **Không** set `IP_HDRINCL` ⇒ OS tự dựng IP header với protocol = protocol của socket. Payload là gói ESP thô (bắt đầu bằng SPI).
 
-### Nhận (`ReceiveAsync` — [RawIpDatagramTransport.cs:20](RawIpDatagramTransport.cs#L20))
-1. `ReceiveFrom` poll với `ReceiveTimeout=250ms` (timeout ⇒ lặp lại để honor cancel, không busy-spin; ns2.0 không có overload nhận `CancellationToken`).
+### Nhận (`ReceiveAsync` — [RawIpDatagramTransport.cs:75](RawIpDatagramTransport.cs#L75))
+1. `ReceiveFromAsync` overlapped — không thread nào bị giữ khi link rảnh, không còn vòng poll 250 ms. net6+: truyền CT, cancel chỉ huỷ lần nhận đó. ns2.0 (không có overload CT): cancel ⇒ đóng socket (transport hết dùng được; driver chỉ cancel khi teardown). Cả hai trả `OperationCanceledException`.
 2. **Lọc source**: bỏ qua mọi gói không phải từ gateway (raw socket thấy MỌI gói proto-50 tới host).
 3. **Strip header (chỉ IPv4)**: raw IPv4 socket trả **kèm IPv4 header** (cả Windows lẫn Linux) → `RawIpv4.PayloadOffset` (validate IHL) cắt ra gói ESP thô. **Drop fragment** (`RawIpv4.IsFragment`) — raw socket không đảm bảo reassembly. IPv6 raw **không** kèm header → chưa hỗ trợ (chỉ v4).
 

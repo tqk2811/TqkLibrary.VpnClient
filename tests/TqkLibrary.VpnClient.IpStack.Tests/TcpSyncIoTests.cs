@@ -267,7 +267,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
 
         // Queues far more blocking work items than the pool has threads, so any work item queued after them (such as an
         // async continuation) waits for the pool's slow thread injection. Disposing releases them.
-        static IDisposable Starve()
+        internal static IDisposable Starve()
         {
             var gate = new ManualResetEventSlim(false);
             ThreadPool.GetMinThreads(out int workers, out _);
