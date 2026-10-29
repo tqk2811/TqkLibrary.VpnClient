@@ -68,7 +68,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             using var conn = new TcpConnection(ClientIp, ClientPort, ServerIp, ServerPort, sent.Add, linkMtu: 1400);
             uint iss = Handshake(conn, sent, window: 65535, sack: true);
 
-            conn.Send(new byte[400000]);
+            conn.Enqueue(new byte[400000]);
             List<byte[]> burst = Drain(sent);
             Assert.True(burst.Count >= 4);
             uint hole = Seq(burst[0]);                                   // first segment lost; everything after it arrives
@@ -89,7 +89,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             using var conn = new TcpConnection(ClientIp, ClientPort, ServerIp, ServerPort, sent.Add, linkMtu: 1400);
             uint iss = Handshake(conn, sent, window: 65535, sack: true);
 
-            conn.Send(new byte[400000]);
+            conn.Enqueue(new byte[400000]);
             List<byte[]> burst = Drain(sent);
             Assert.True(burst.Count >= 5);
             uint hole0 = Seq(burst[0]);                                  // two holes: burst[0] and burst[2]

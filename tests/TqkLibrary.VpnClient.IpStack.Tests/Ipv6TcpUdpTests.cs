@@ -28,7 +28,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             TcpConnection connection = await stack.ConnectAsync(ServerIp, 80, cts.Token);
 
-            connection.Send(Encoding.ASCII.GetBytes("ping6"));
+            connection.Enqueue(Encoding.ASCII.GetBytes("ping6"));
             byte[] buffer = new byte[5];
             int offset = 0;
             while (offset < buffer.Length)

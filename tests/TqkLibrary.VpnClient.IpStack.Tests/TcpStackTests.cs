@@ -34,7 +34,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             TcpConnection connection = await stack.ConnectAsync(ServerIp, 80, cts.Token);
 
-            connection.Send(Encoding.ASCII.GetBytes("ping"));
+            connection.Enqueue(Encoding.ASCII.GetBytes("ping"));
             string echoed = await ReadStringAsync(connection, 4, cts.Token);
             Assert.Equal("ping", echoed);
             Assert.Equal(1, server.AcceptedConnections);
@@ -98,6 +98,61 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
                 offset += read;
             }
             Assert.Equal("hello-tunnel", Encoding.ASCII.GetString(buffer));
+        }
+
+        [Fact]
+        public async Task VpnTcpClient_Stream_SyncReadWrite_RoundTripsThroughTunnel()
+        {
+            var link = new LoopbackPair();
+            var stack = new TcpIpStack(link.A, ClientIp);
+            _ = new PassiveTcpServer(link.B, ServerIp);
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            VpnTcpClient client = await VpnTcpClient.ConnectAsync(stack, ServerIp, 443, cts.Token);
+            System.IO.Stream stream = client.GetStream();
+            stream.ReadTimeout = 5000;      // guard: a broken wake-up fails the test instead of hanging it
+            stream.WriteTimeout = 5000;
+
+            byte[] message = Encoding.ASCII.GetBytes("hello-sync");
+            stream.Write(message, 0, message.Length);
+            stream.Flush();
+
+            byte[] buffer = new byte[message.Length];
+            int offset = 0;
+            while (offset < buffer.Length)
+            {
+                int read = stream.Read(buffer, offset, buffer.Length - offset);
+                Assert.True(read > 0, "stream closed before the echo arrived");
+                offset += read;
+            }
+            Assert.Equal("hello-sync", Encoding.ASCII.GetString(buffer));
+
+            // Nothing more is coming: the sync read honours ReadTimeout.
+            stream.ReadTimeout = 100;
+            Assert.Throws<System.IO.IOException>(() => stream.Read(buffer, 0, buffer.Length));
+        }
+
+        [Fact]
+        public async Task VpnTcpClient_Stream_Timeouts_ValidateLikeNetworkStream()
+        {
+            var link = new LoopbackPair();
+            var stack = new TcpIpStack(link.A, ClientIp);
+            _ = new PassiveTcpServer(link.B, ServerIp);
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            VpnTcpClient client = await VpnTcpClient.ConnectAsync(stack, ServerIp, 443, cts.Token);
+            System.IO.Stream stream = client.GetStream();
+
+            Assert.True(stream.CanTimeout);
+            Assert.Equal(Timeout.Infinite, stream.ReadTimeout);
+            Assert.Equal(Timeout.Infinite, stream.WriteTimeout);
+            Assert.Throws<ArgumentOutOfRangeException>(() => stream.ReadTimeout = 0);
+            Assert.Throws<ArgumentOutOfRangeException>(() => stream.ReadTimeout = -2);
+            Assert.Throws<ArgumentOutOfRangeException>(() => stream.WriteTimeout = 0);
+            stream.ReadTimeout = 250;
+            stream.WriteTimeout = Timeout.Infinite;
+            Assert.Equal(250, stream.ReadTimeout);
+            Assert.Equal(Timeout.Infinite, stream.WriteTimeout);
         }
 
         [Fact]

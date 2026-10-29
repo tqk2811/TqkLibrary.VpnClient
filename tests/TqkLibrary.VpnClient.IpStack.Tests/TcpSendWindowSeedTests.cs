@@ -35,7 +35,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             using var conn = new TcpConnection(ClientIp, ClientPort, ServerIp, ServerPort, sent.Add, linkMtu: 1400);
             Handshake(conn, sent, peerIss, window: 64240);
 
-            conn.Send(new byte[1930]);   // a browser's TLS ClientHello: two segments at this MSS, not one
+            conn.Enqueue(new byte[1930]);   // a browser's TLS ClientHello: two segments at this MSS, not one
 
             int delivered = Drain(sent).Sum(PayloadLength);
             Assert.Equal(1930, delivered);
@@ -48,7 +48,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             using var conn = new TcpConnection(ClientIp, ClientPort, ServerIp, ServerPort, sent.Add, linkMtu: 1400);
             Handshake(conn, sent, peerIss: 0xC0000000u, window: 64240);
 
-            conn.Send(new byte[100]);
+            conn.Enqueue(new byte[100]);
 
             // One segment carrying the whole write. A zero send window would have produced a single one-byte probe
             // instead — the shape the tunnel was actually sending before the window was seeded.
@@ -63,7 +63,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             using var conn = new TcpConnection(ClientIp, ClientPort, ServerIp, ServerPort, sent.Add, linkMtu: 1400);
             Handshake(conn, sent, peerIss: 0xC0000000u, window: 0);
 
-            conn.Send(new byte[100]);
+            conn.Enqueue(new byte[100]);
 
             // Seeding the window must not mean ignoring it: a peer that really has no room gets nothing until it
             // reopens (the persist timer, not this path, sends the probe).

@@ -20,7 +20,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
     /// in a retransmission queue, retransmits on an RFC 6298 RTO (RTT-estimated, exponentially backed-off, with a
     /// give-up cap), honours the peer's window (flow control + zero-window persist), and runs NewReno congestion
     /// control (RFC 5681/6582) with window scaling (RFC 7323); the receive path reassembles out-of-order segments
-    /// before delivering in order via <see cref="ReadAsync"/>, and the close path runs the full half-close FSM
+    /// before delivering in order via <see cref="ReadAsync(Memory{byte}, CancellationToken)"/>, and the close path runs the full half-close FSM
     /// (FINWAIT1/2, CLOSING, TIMEWAIT, CLOSEWAIT, LASTACK) with a TIME-WAIT linger.
     /// </summary>
     /// <remarks>
@@ -239,9 +239,10 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
             }
         }
 
-        /// <summary>Queues application data to send (flushed within the peer's advertised window).</summary>
-        /// <remarks>Fire-and-forget, no backpressure: callers that must respect the peer window and observe faults use <see cref="SendAsync"/>.</remarks>
-        public void Send(ReadOnlySpan<byte> data)
+        /// <summary>Queues application data to send (flushed within the peer's advertised window) without waiting.</summary>
+        /// <remarks>Fire-and-forget, no backpressure and silently dropped once the connection has terminated: callers that
+        /// must respect the peer window and observe faults use <see cref="Send(ReadOnlySpan{byte}, int)"/> or <see cref="SendAsync"/>.</remarks>
+        public void Enqueue(ReadOnlySpan<byte> data)
         {
             lock (_sync)
             {
@@ -269,25 +270,69 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
                 Task waiter;
                 lock (_sync)
                 {
-                    ThrowIfFaulted();
-                    if (offset >= data.Length)
+                    if (EnqueueBelowMarkLocked(data.Span, ref offset))
                         return;
-                    int room = _opts.SendBufferHighWaterMark - _sndBufferedBytes;
-                    if (room > 0)
-                    {
-                        int n = Math.Min(room, data.Length - offset);
-                        _sndChunks.Enqueue(data.Slice(offset, n).ToArray());
-                        _sndBufferedBytes += n;
-                        offset += n;
-                        TrySendData();
-                        continue;                 // re-check fault / room / completion under the lock
-                    }
                     // Buffer full: park until the window drains it below the mark (SignalSendable) or we terminate.
                     _sendWaiter ??= new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
                     waiter = _sendWaiter.Task;
                 }
                 await Task.WhenAny(waiter, Task.Delay(Timeout.Infinite, cancellationToken)).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
+            }
+        }
+
+        /// <summary>
+        /// Synchronous counterpart of <see cref="SendAsync"/> with the same backpressure and fault semantics: blocks the
+        /// calling thread (no thread-pool hop) while the send buffer sits at its high-water mark, and throws
+        /// <see cref="IOException"/> if the connection faults or closes. <paramref name="timeoutMilliseconds"/> bounds the
+        /// total wait (<see cref="Timeout.Infinite"/> = no bound); on expiry it throws <see cref="IOException"/> — the
+        /// bytes already enqueued by then stay queued (as with a timed-out <c>Socket.Send</c>, the stream position is
+        /// then undefined).
+        /// </summary>
+        public void Send(ReadOnlySpan<byte> data, int timeoutMilliseconds = Timeout.Infinite)
+        {
+            ValidateTimeout(timeoutMilliseconds, nameof(timeoutMilliseconds));
+            long start = Stopwatch.GetTimestamp();
+            int offset = 0;
+            lock (_sync)
+            {
+                // Woken by SignalSendable's PulseAll (buffer below the mark, or terminal); the loop re-checks either way.
+                while (!EnqueueBelowMarkLocked(data, ref offset))
+                {
+                    int remaining = RemainingMilliseconds(start, timeoutMilliseconds);
+                    if (remaining == 0) throw new IOException("The send timed out waiting for the peer's window.");
+                    Monitor.Wait(_sync, remaining);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Throws <see cref="IOException"/> if the connection has faulted (RST / give-up) or closed; never blocks. The
+        /// synchronous equivalent of <c>SendAsync(ReadOnlyMemory&lt;byte&gt;.Empty)</c>, used for <c>Stream.Flush</c>.
+        /// </summary>
+        public void ThrowIfNotWritable()
+        {
+            lock (_sync) ThrowIfFaulted();
+        }
+
+        // The one enqueue step shared by Send and SendAsync. Enqueues data[offset..] up to the high-water mark, flushing
+        // within the window after each chunk; returns true once everything is enqueued, false when the buffer is full.
+        // Throws via ThrowIfFaulted (re-checked after every chunk). Must be called under _sync.
+        bool EnqueueBelowMarkLocked(ReadOnlySpan<byte> data, ref int offset)
+        {
+            while (true)
+            {
+                ThrowIfFaulted();
+                if (offset >= data.Length)
+                    return true;
+                int room = _opts.SendBufferHighWaterMark - _sndBufferedBytes;
+                if (room <= 0)
+                    return false;
+                int n = Math.Min(room, data.Length - offset);
+                _sndChunks.Enqueue(data.Slice(offset, n).ToArray());
+                _sndBufferedBytes += n;
+                offset += n;
+                TrySendData();                    // then re-check fault / room / completion
             }
         }
 
@@ -299,39 +344,32 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
             throw new IOException("The connection has been closed.");
         }
 
-        // Wakes a writer parked in SendAsync once the buffer has drained below the high-water mark (or we terminated, so it
-        // can throw). Must be called under _sync. RunContinuationsAsynchronously keeps the woken continuation off this lock.
+        // Wakes writers parked in Send / SendAsync once the buffer has drained below the high-water mark (or we terminated,
+        // so they can throw). Must be called under _sync. Sync writers are Monitor.Wait-ing on _sync (PulseAll); the async
+        // writer's TCS uses RunContinuationsAsynchronously, which keeps the woken continuation off this lock.
         void SignalSendable()
         {
-            if (_sendWaiter == null) return;
-            if (_terminal || _sndBufferedBytes < _opts.SendBufferHighWaterMark)
-            {
-                TaskCompletionSource<bool> waiter = _sendWaiter;
-                _sendWaiter = null;
-                waiter.TrySetResult(true);
-            }
+            if (!_terminal && _sndBufferedBytes >= _opts.SendBufferHighWaterMark) return;
+            Monitor.PulseAll(_sync);
+            TaskCompletionSource<bool>? waiter = _sendWaiter;
+            _sendWaiter = null;
+            waiter?.TrySetResult(true);
         }
 
         /// <summary>Reads received bytes into <paramref name="buffer"/>; returns 0 at end of stream.</summary>
-        public async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        public Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => ReadAsync(buffer.AsMemory(offset, count), cancellationToken);
+
+        /// <summary>Reads received bytes into <paramref name="buffer"/>; returns 0 at end of stream.</summary>
+        public async Task<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
             while (true)
             {
                 Task waiter;
                 lock (_recvLock)
                 {
-                    if (_head == null && _recvQueue.Count > 0) { _head = _recvQueue.Dequeue(); _headPos = 0; }
-                    if (_head != null)
-                    {
-                        int available = _head.Length - _headPos;
-                        int n = Math.Min(available, count);
-                        Buffer.BlockCopy(_head, _headPos, buffer, offset, n);
-                        _headPos += n;
-                        if (_headPos >= _head.Length) _head = null;
-                        return n;
-                    }
-                    if (_recvError != null) throw _recvError;
-                    if (_recvCompleted) return 0;
+                    int read = TryReadLocked(buffer.Span);
+                    if (read >= 0) return read;
                     _recvWaiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
                     waiter = _recvWaiter.Task;
                 }
@@ -339,6 +377,61 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
                 await Task.WhenAny(waiter, Task.Delay(Timeout.Infinite, cancellationToken)).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
             }
+        }
+
+        /// <summary>
+        /// Synchronous counterpart of <see cref="ReadAsync(Memory{byte}, CancellationToken)"/>: blocks the calling thread
+        /// (no thread-pool hop) until data, end of stream (returns 0) or a fault (throws). <paramref name="timeoutMilliseconds"/>
+        /// bounds the wait (<see cref="Timeout.Infinite"/> = no bound); on expiry it throws <see cref="IOException"/>.
+        /// </summary>
+        public int Read(Span<byte> buffer, int timeoutMilliseconds = Timeout.Infinite)
+        {
+            ValidateTimeout(timeoutMilliseconds, nameof(timeoutMilliseconds));
+            if (buffer.IsEmpty) return 0;   // as NetworkStream: a zero-length read never blocks
+            long start = Stopwatch.GetTimestamp();
+            lock (_recvLock)
+            {
+                while (true)
+                {
+                    int read = TryReadLocked(buffer);
+                    if (read >= 0) return read;
+                    int remaining = RemainingMilliseconds(start, timeoutMilliseconds);
+                    if (remaining == 0) throw new IOException("The read timed out waiting for data.");
+                    Monitor.Wait(_recvLock, remaining);   // woken by Signal's PulseAll; the loop re-checks
+                }
+            }
+        }
+
+        // The one dequeue step shared by Read and ReadAsync: copies from the head chunk and returns the count, returns 0 at
+        // end of stream, throws the receive fault, or returns -1 when nothing is available yet. Must be called under _recvLock.
+        int TryReadLocked(Span<byte> buffer)
+        {
+            if (_head == null && _recvQueue.Count > 0) { _head = _recvQueue.Dequeue(); _headPos = 0; }
+            if (_head != null)
+            {
+                int n = Math.Min(_head.Length - _headPos, buffer.Length);
+                _head.AsSpan(_headPos, n).CopyTo(buffer);
+                _headPos += n;
+                if (_headPos >= _head.Length) _head = null;
+                return n;
+            }
+            if (_recvError != null) throw _recvError;
+            if (_recvCompleted) return 0;
+            return -1;
+        }
+
+        static void ValidateTimeout(int timeoutMilliseconds, string paramName)
+        {
+            if (timeoutMilliseconds < Timeout.Infinite)
+                throw new ArgumentOutOfRangeException(paramName, "Must be non-negative or Timeout.Infinite.");
+        }
+
+        // Milliseconds left of a timeout started at `start` (Stopwatch ticks): Infinite stays Infinite, otherwise clamps at 0.
+        static int RemainingMilliseconds(long start, int timeoutMilliseconds)
+        {
+            if (timeoutMilliseconds == Timeout.Infinite) return Timeout.Infinite;
+            double elapsed = (Stopwatch.GetTimestamp() - start) * MsPerTick;
+            return (int)Math.Max(0, timeoutMilliseconds - elapsed);
         }
 
         /// <summary>Requests a FIN to close our send side; the FIN is emitted once any buffered data has drained.</summary>
@@ -1138,8 +1231,12 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
             }
         }
 
+        // Wakes readers: sync ones Monitor.Wait-ing on _recvLock, and the async one's TCS. Always called under _recvLock
+        // (from DeliverReceived / CompleteReceive) — PulseAll requires owning it.
         void Signal()
         {
+            Debug.Assert(Monitor.IsEntered(_recvLock));
+            Monitor.PulseAll(_recvLock);
             TaskCompletionSource<bool>? waiter = _recvWaiter;
             _recvWaiter = null;
             waiter?.TrySetResult(true);
@@ -1169,7 +1266,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tcp
         }
 
         /// <summary>
-        /// Aborts the connection if it is still alive — a pending <see cref="ReadAsync"/> completes with end-of-stream
+        /// Aborts the connection if it is still alive — a pending <see cref="ReadAsync(Memory{byte}, CancellationToken)"/> / <see cref="Read"/> completes with end-of-stream
         /// and a pending connect faults — then releases the timers. Idempotent; also invoked when the connection terminates.
         /// </summary>
         public void Dispose()

@@ -52,7 +52,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             conn.OnSegment(BuildSegment(serverSeq: 9000, ack: clientIss + 1, TcpFlags.Syn | TcpFlags.Ack, window: 65535, mss: 500));
             sent.Clear(); // drop the client's handshake ACK
 
-            conn.Send(new byte[2000]);
+            conn.Enqueue(new byte[2000]);
 
             // Every data segment must fit the negotiated MSS (min(1360, 500) = 500); at least one rides right at it.
             Assert.NotEmpty(sent);
@@ -74,7 +74,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             conn.OnSegment(BuildSegment(serverSeq: 9000, ack: clientIss + 1, TcpFlags.Syn | TcpFlags.Ack, window: 65535));
             sent.Clear();
 
-            conn.Send(new byte[2000]);
+            conn.Enqueue(new byte[2000]);
 
             Assert.NotEmpty(sent);
             foreach (byte[] ip in sent)

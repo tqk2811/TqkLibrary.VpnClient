@@ -31,7 +31,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             uint iss = Handshake(conn, sent, ClientIp, ServerIp, window: 65535, peerMss: 1360);
             Assert.Equal(1360, conn.SendMss);                              // link-MTU MSS (1400 − 40) before PMTUD
 
-            conn.Send(new byte[400000]);
+            conn.Enqueue(new byte[400000]);
             List<byte[]> burst = Drain(sent);
             uint firstSeq = Seq(burst[0]);
             Assert.Contains(burst, ip => PayloadLength(ip) > 560);         // the first burst went out at the full MSS
@@ -53,7 +53,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             uint iss = Handshake(conn, sent, ClientIpV6, ServerIpV6, window: 65535, peerMss: 1340);
             Assert.Equal(1340, conn.SendMss);                              // v6 link-MTU MSS (1400 − 60) before PMTUD
 
-            conn.Send(new byte[400000]);
+            conn.Enqueue(new byte[400000]);
             List<byte[]> burst = Drain(sent);
             uint firstSeq = Seq(burst[0]);
 
@@ -73,7 +73,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             using var conn = new TcpConnection(ClientIp, ClientPort, ServerIp, ServerPort, sent.Add, linkMtu: 1400);
             uint iss = Handshake(conn, sent, ClientIp, ServerIp, window: 65535, peerMss: 1360);
 
-            conn.Send(new byte[400000]);
+            conn.Enqueue(new byte[400000]);
             List<byte[]> burst = Drain(sent);
             uint firstSeq = Seq(burst[0]);
             int outstanding = burst.Sum(PayloadLength);                    // bytes in flight at the old MSS
@@ -104,7 +104,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             using var conn = new TcpConnection(ClientIp, ClientPort, ServerIp, ServerPort, sent.Add, linkMtu: 1400);
             uint iss = Handshake(conn, sent, ClientIp, ServerIp, window: 65535, peerMss: 1360);
 
-            conn.Send(new byte[400000]);
+            conn.Enqueue(new byte[400000]);
             List<byte[]> burst = Drain(sent);
             uint firstSeq = Seq(burst[0]);
 
@@ -134,7 +134,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             TcpConnection conn = connecting.GetAwaiter().GetResult();
             Assert.Equal(1360, conn.SendMss);
 
-            conn.Send(new byte[40000]);
+            conn.Enqueue(new byte[40000]);
             byte[] dataPacket = TakeData(channel);                        // a captured data segment to quote in the ICMP error
 
             // A router on the path answers ICMP Fragmentation-Needed (600-byte next hop) quoting that segment.

@@ -39,7 +39,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             // Congestion control caps the first burst at the initial cwnd (≪ 64 KB). Drive send/ACK rounds — ACKing
             // each segment so slow start opens cwnd — until a burst plateaus at the peer's (scaled) window. That a burst
             // exceeds the 65535 unscaled ceiling proves the negotiated send window is the scaled 80000 (5000 ≪ 4).
-            conn.Send(new byte[400000]);
+            conn.Enqueue(new byte[400000]);
             uint ackNo = clientIss + 1;
             int maxBurst = 0;
             for (int round = 0; round < 12; round++)
@@ -74,7 +74,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             conn.OnSegment(Peer(seq: 9001, ack: clientIss + 1, TcpFlags.Ack, window: 5000));
             sent.Clear();
 
-            conn.Send(new byte[100000]);
+            conn.Enqueue(new byte[100000]);
             // Window field used as-is, no shift. Sender SWS avoidance holds back the sub-MSS runt at the top of the
             // 5000-byte window, so the in-flight bytes plateau at the largest whole-MSS multiple ≤ 5000 = 3 × 1360 = 4080
             // (the trailing 920 bytes wait for the window to free a full segment) — never above the unscaled 5000.

@@ -26,7 +26,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             using var conn = new TcpConnection(ClientIp, ClientPort, ServerIp, ServerPort, sent.Add, linkMtu: 1400);
             uint iss = Handshake(conn, sent, window: 65535); // ample flow-control window so cwnd is the binding limit
 
-            conn.Send(new byte[400000]);
+            conn.Enqueue(new byte[400000]);
             List<byte[]> burst1 = Drain(sent);
             Assert.Equal(InitialWindow, burst1.Sum(PayloadLength)); // congestion window, not the 65535 flow window, caps it
 
@@ -42,7 +42,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             using var conn = new TcpConnection(ClientIp, ClientPort, ServerIp, ServerPort, sent.Add, linkMtu: 1400);
             uint iss = Handshake(conn, sent, window: 65535);
 
-            conn.Send(new byte[400000]);
+            conn.Enqueue(new byte[400000]);
             List<byte[]> burst = Drain(sent);
             uint lostSeq = Seq(burst[0]);          // the oldest unacked segment (== _sndUna)
             Assert.True(burst.Count >= 3);
@@ -60,7 +60,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             using var conn = new TcpConnection(ClientIp, ClientPort, ServerIp, ServerPort, sent.Add, linkMtu: 1400);
             uint iss = Handshake(conn, sent, window: 65535);
 
-            conn.Send(new byte[400000]);
+            conn.Enqueue(new byte[400000]);
             uint una = Seq(Drain(sent)[0]);        // _sndUna; InitialWindow bytes now in flight
             uint nextNew = una + InitialWindow;    // first byte not yet sent (_sndNxt)
 

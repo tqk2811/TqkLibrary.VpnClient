@@ -28,7 +28,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             await h.HandshakeAsync(window: 65535, cts.Token);
 
             byte[] data = Encoding.ASCII.GetBytes("DATA");
-            h.Conn.Send(data);
+            h.Conn.Enqueue(data);
 
             // The same data segment must be retransmitted (same SEQ + payload) because no ACK arrived.
             uint dataSeq = (await h.WaitForAsync(s => s.HasData, cts.Token)).Seq;
@@ -56,7 +56,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             bool closed = false;
             h.Conn.Closed += () => closed = true;
 
-            h.Conn.Send(Encoding.ASCII.GetBytes("X")); // never acknowledged
+            h.Conn.Enqueue(Encoding.ASCII.GetBytes("X")); // never acknowledged
 
             byte[] buffer = new byte[8];
             await Assert.ThrowsAsync<IOException>(() => h.Conn.ReadAsync(buffer, 0, buffer.Length, cts.Token));
@@ -73,7 +73,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             await h.HandshakeAsync(window: 4, cts.Token);
 
             byte[] message = Encoding.ASCII.GetBytes("0123456789"); // 10 bytes; window only admits 4
-            h.Conn.Send(message);
+            h.Conn.Enqueue(message);
 
             await h.WaitUntilAsync(() => h.DataBytesSent() == 4, cts.Token);
             Assert.Equal(4, h.DataBytesSent()); // capped at the advertised window
@@ -96,7 +96,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
             await h.HandshakeAsync(window: 0, cts.Token);
 
             byte[] message = Encoding.ASCII.GetBytes("abc");
-            h.Conn.Send(message);
+            h.Conn.Enqueue(message);
             Assert.Equal(0, h.DataBytesSent()); // zero window blocks the initial send
 
             // The persist timer must probe with a single byte even though the window stayed shut.
@@ -129,7 +129,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
 
             byte[] message = new byte[8000];
             for (int i = 0; i < message.Length; i++) message[i] = (byte)i;
-            h.Conn.Send(message);
+            h.Conn.Enqueue(message);
             Assert.Equal(0, h.DataBytesSent()); // zero window blocks the initial send
 
             // Persist probes with a single byte; ACK that probe but keep the window shut (peer still full).
@@ -172,7 +172,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
 
             byte[] message = new byte[8000];
             for (int i = 0; i < message.Length; i++) message[i] = (byte)i;
-            h.Conn.Send(message);
+            h.Conn.Enqueue(message);
 
             await h.WaitUntilAsync(() => h.DataBytesSent() >= 1, cts.Token);
             uint probeSeq = h.FirstDataSeq();
@@ -218,7 +218,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
 
             byte[] message = new byte[40000]; // larger than the initial cwnd (~13.6 KB) so a tail remains after the first burst
             for (int i = 0; i < message.Length; i++) message[i] = (byte)i;
-            h.Conn.Send(message);
+            h.Conn.Enqueue(message);
             await h.WaitUntilAsync(() => h.DataBytesSent() > 0, cts.Token);
             int afterFirstBurst = h.SegmentCount(); // the (legitimate) full-size segments sent while the window was large
 

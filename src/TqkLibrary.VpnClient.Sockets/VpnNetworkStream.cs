@@ -4,9 +4,17 @@ using TqkLibrary.VpnClient.IpStack.Tcp;
 namespace TqkLibrary.VpnClient.Sockets
 {
     /// <summary>A <see cref="Stream"/> over a userspace <see cref="TcpConnection"/>, suitable for HttpClient.</summary>
+    /// <remarks>
+    /// The synchronous <c>Read</c>/<c>Write</c>/<c>Flush</c> block the calling thread inside <see cref="TcpConnection"/>
+    /// (no async-over-sync, no thread-pool hop) and honour <see cref="ReadTimeout"/>/<see cref="WriteTimeout"/>; the async
+    /// members ignore those and use their <see cref="CancellationToken"/> instead. One writer at a time (and one reader):
+    /// concurrent writers may interleave bytes — the caller serialises, as with <c>NetworkStream</c>.
+    /// </remarks>
     public sealed class VpnNetworkStream : Stream
     {
         readonly TcpConnection _connection;
+        int _readTimeout = Timeout.Infinite;
+        int _writeTimeout = Timeout.Infinite;
 
         internal VpnNetworkStream(TcpConnection connection) => _connection = connection;
 
@@ -18,6 +26,25 @@ namespace TqkLibrary.VpnClient.Sockets
 
         /// <inheritdoc/>
         public override bool CanSeek => false;
+
+        /// <inheritdoc/>
+        public override bool CanTimeout => true;
+
+        /// <inheritdoc/>
+        /// <remarks>Milliseconds, or <see cref="Timeout.Infinite"/> (default). Applies to the synchronous <c>Read</c> only; on expiry it throws <see cref="IOException"/>.</remarks>
+        public override int ReadTimeout
+        {
+            get => _readTimeout;
+            set => _readTimeout = ValidateTimeout(value);
+        }
+
+        /// <inheritdoc/>
+        /// <remarks>Milliseconds, or <see cref="Timeout.Infinite"/> (default). Applies to the synchronous <c>Write</c> only; on expiry it throws <see cref="IOException"/>.</remarks>
+        public override int WriteTimeout
+        {
+            get => _writeTimeout;
+            set => _writeTimeout = ValidateTimeout(value);
+        }
 
         /// <inheritdoc/>
         public override long Length => throw new NotSupportedException();
@@ -36,15 +63,32 @@ namespace TqkLibrary.VpnClient.Sockets
 
         /// <inheritdoc/>
         public override int Read(byte[] buffer, int offset, int count)
-            => ReadAsync(buffer, offset, count, default).GetAwaiter().GetResult();
+            => _connection.Read(buffer.AsSpan(offset, count), _readTimeout);
 
         /// <inheritdoc/>
+        /// <remarks>Same backpressure and fault semantics as <see cref="WriteAsync(byte[], int, int, CancellationToken)"/>, blocking the calling thread.</remarks>
         public override void Write(byte[] buffer, int offset, int count)
-            => _connection.SendAsync(buffer.AsMemory(offset, count)).GetAwaiter().GetResult();
+            => _connection.Send(buffer.AsSpan(offset, count), _writeTimeout);
+
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP2_1_OR_GREATER
+        /// <inheritdoc/>
+        public override int Read(Span<byte> buffer) => _connection.Read(buffer, _readTimeout);
 
         /// <inheritdoc/>
-        public override void Flush()
-            => _connection.SendAsync(ReadOnlyMemory<byte>.Empty).GetAwaiter().GetResult();
+        public override void Write(ReadOnlySpan<byte> buffer) => _connection.Send(buffer, _writeTimeout);
+
+        /// <inheritdoc/>
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            => new ValueTask<int>(_connection.ReadAsync(buffer, cancellationToken));
+
+        /// <inheritdoc/>
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+            => new ValueTask(_connection.SendAsync(buffer, cancellationToken));
+#endif
+
+        /// <inheritdoc/>
+        /// <remarks>Surfaces a pending fault (RST / give-up) to the caller without blocking; the data is already in the TCP send buffer.</remarks>
+        public override void Flush() => _connection.ThrowIfNotWritable();
 
         /// <inheritdoc/>
         /// <remarks>Surfaces a pending fault (RST / give-up) to the caller; the data is already in the TCP send buffer, so it does not block on ACKs.</remarks>
@@ -75,6 +119,14 @@ namespace TqkLibrary.VpnClient.Sockets
         {
             if (disposing) _connection.CloseSend();
             base.Dispose(disposing);
+        }
+
+        // Same rule as NetworkStream: a positive number of milliseconds, or Timeout.Infinite.
+        static int ValidateTimeout(int value)
+        {
+            if (value <= 0 && value != Timeout.Infinite)
+                throw new ArgumentOutOfRangeException(nameof(value), "Timeout must be positive or Timeout.Infinite.");
+            return value;
         }
     }
 }
