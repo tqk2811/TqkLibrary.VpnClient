@@ -211,7 +211,8 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
                 initialRto: TimeSpan.FromSeconds(30), minRto: TimeSpan.FromSeconds(30),   // no RTO interference
                 persistMin: TimeSpan.FromSeconds(30));                                    // no persist (window never zero)
             using var h = new ClientHarness(opts);
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            // Only a hang guard: the 200 rounds below sleep 5 ms each nominally, but a loaded CI runner stretches that past 5 s.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             // Peer negotiates window scaling and first advertises a large window (as a real server does), then shrinks it
             // to a trickle — exactly the live shape (server seen at win 502 wscale 7, opening only crumbs as its app reads).
             await h.HandshakeAsync(window: 502, windowScale: 7, cts.Token); // 502 << 7 ≈ 64 KB max window ever seen
