@@ -18,9 +18,9 @@ namespace TqkLibrary.VpnClient.Transport.Dtls.Tests
 
         static byte[] Bytes(string s) => Encoding.UTF8.GetBytes(s);
 
-        static async Task<(SimulatedDtlsServer Server, DtlsDatagramTransport Client)> ConnectAsync()
+        static async Task<(SimulatedDtlsServer Server, DtlsDatagramTransport Client)> ConnectAsync(LoopbackDatagramLink? existingLink = null)
         {
-            var link = new LoopbackDatagramLink();
+            LoopbackDatagramLink link = existingLink ?? new LoopbackDatagramLink();
             var server = new SimulatedDtlsServer(link.Server);
             server.Start();
             var client = new DtlsDatagramTransport(link.Client);
@@ -71,7 +71,15 @@ namespace TqkLibrary.VpnClient.Transport.Dtls.Tests
         [Fact]
         public async Task SlowConsumer_DropsTheOldestDatagrams_AndKeepsTheNewest()
         {
-            var (server, client) = await ConnectAsync();
+            var link = new LoopbackDatagramLink();
+            int leftClient = 0;
+            link.Client.NetworkConditions = datagram =>
+            {
+                Interlocked.Increment(ref leftClient);
+                return new[] { datagram };
+            };
+
+            var (server, client) = await ConnectAsync(link);
             using (server)
             {
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -80,8 +88,16 @@ namespace TqkLibrary.VpnClient.Transport.Dtls.Tests
                 Assert.Equal("warm-up", Encoding.UTF8.GetString(rx, 0, await client.ReceiveAsync(rx, cts.Token)));
 
                 int total = DtlsDatagramTransport.ReceiveQueueCapacity + 40;
+                int leftBefore = Volatile.Read(ref leftClient);
                 for (int i = 0; i < total; i++)
+                {
                     await client.SendAsync(Bytes($"d{i}"), cts.Token);   // echoed back while nobody reads
+
+                    // The bridge's outbound queue also drops its oldest when full, so an unpaced burst could lose datagrams
+                    // before the server ever echoes them. Keep the backlog well below that capacity.
+                    while (i + 1 - (Volatile.Read(ref leftClient) - leftBefore) >= 128)
+                        await Task.Delay(1, cts.Token);
+                }
 
                 var sw = Stopwatch.StartNew();
                 while (client.ReceiveDropped < total - DtlsDatagramTransport.ReceiveQueueCapacity && sw.ElapsedMilliseconds < 10000)
