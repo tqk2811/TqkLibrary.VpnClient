@@ -4,6 +4,13 @@ Việc còn treo và việc nên làm của thư viện. Xử lý xong mục nà
 
 Phần lớn mục chuyển từ backlog của app ProxyDivert ngày 2026-11-08. Mục mang mã C đến từ đợt rà soát ngày 2026-09-08 (C = lỗi VpnClient phát hiện qua cách app dùng thư viện). Mức `Cao`/`Vừa`/`Thấp` theo nhãn trong tiêu đề. Đường dẫn `src/ProxyDivert.*` là của repo app ProxyDivert (repo cha, nhúng thư viện này làm submodule); đường dẫn khác tính từ gốc repo này.
 
+### [Thấp] VpnClient: Nebula bỏ gói dùng khoá cũ ngay lúc đổi session
+
+- **Vấn đề:** sau khi rekey đổi `_active` sang session mới, `OnMessage` chỉ thử session active và pending, nên gói server đã seal bằng khoá cũ mà tới sau lúc đổi bị bỏ. Dù đã "make-before-break", vẫn có thể mất vài gói ở mỗi lần rekey. Test `Rehandshake_SwapsSession_TunnelKeepsCarryingData` từng đỏ một lần trên CI (run 34676546100), giờ test gửi lại cho đến khi có echo. Nguyên nhân này suy từ đọc code, chưa tái hiện được.
+- **Vị trí:** `src/TqkLibrary.VpnClient.Drivers.Nebula/NebulaConnection.cs` (`OnMessage`, đoạn swap trong xử lý handshake stage-2).
+- **Vì sao:** giữ session cũ thêm một khoảng ngắn để nhận nốt gói đang bay, tránh rớt gói định kỳ theo chu kỳ rekey.
+- **Ngày ghi:** 2026-11-09.
+
 ### [Thấp] VpnClient: TcpConnection gọi SendIp khi đang giữ `_sync`
 
 - **Vấn đề:** `EmitSegment` gọi `_sendIp` trong các khối `lock (_sync)`, và egress của `TcpIpStack` giờ ghi channel ngay trên thread đó khi rảnh. Channel nào raise `InboundIpPacket` đồng bộ bên trong `WriteIpPacketAsync` (vd một switch nội bộ nối hai `VirtualHost`) sẽ làm gói trả lời vào lại connection giữa lúc đang cập nhật, hoặc deadlock hai connection. Hiện chưa channel nào trong repo làm vậy; hợp đồng đã ghi ở doc `IPacketChannel.WriteIpPacketAsync`.

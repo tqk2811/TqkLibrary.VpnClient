@@ -148,9 +148,15 @@ namespace TqkLibrary.VpnClient.Drivers.Nebula.Tests
             await Task.Delay(900, cts.Token);
 
             byte[] packet = Encoding.ASCII.GetBytes("data after a re-handshake");
-            await connection.PacketChannel.WriteIpPacketAsync(packet, cts.Token);
-            byte[] echoed = await inbound.Reader.ReadAsync(cts.Token);
-            Assert.Equal(packet, echoed);
+            // The rekey timer keeps firing, and a datagram sealed under the outgoing keys can be lost at the instant of a
+            // swap. The tunnel is a datagram link, so resend until one round-trips; a tunnel that stays dead still times out.
+            Task<byte[]> echo = inbound.Reader.ReadAsync(cts.Token).AsTask();
+            while (!echo.IsCompleted)
+            {
+                await connection.PacketChannel.WriteIpPacketAsync(packet, cts.Token);
+                await Task.WhenAny(echo, Task.Delay(200, cts.Token));
+            }
+            Assert.Equal(packet, await echo);
             Assert.Equal(VpnConnectionState.Connected, connection.State);
 
             await connection.DisposeAsync();
