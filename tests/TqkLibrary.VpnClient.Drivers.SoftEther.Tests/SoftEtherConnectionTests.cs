@@ -54,6 +54,10 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther.Tests
             return packet;
         }
 
+        // IPv4 (no options) + UDP to the DHCP client port.
+        static bool IsDhcpClientPacket(byte[] packet) =>
+            packet.Length >= 28 && packet[9] == 17 && packet[22] == 0 && packet[23] == 68;
+
         [Fact]
         public async Task Connect_RunsHandshake_LeasesDhcpAddress_AndRoundTripsIp()
         {
@@ -290,7 +294,11 @@ namespace TqkLibrary.VpnClient.Drivers.SoftEther.Tests
             connection.PacketChannel.InboundIpPacket += m => inbound.Writer.TryWrite(m.ToArray());
             byte[] packet = BuildIpv4(IPAddress.Parse("8.8.4.4"), System.Text.Encoding.ASCII.GetBytes("multi-host station 1"));
             await connection.PacketChannel.WriteIpPacketAsync(packet, cts.Token);
-            Assert.Equal(packet, await inbound.Reader.ReadAsync(cts.Token));
+            // A DHCP reply still in flight from the lease can reach the facade first; it is not the echo being tested.
+            byte[] echoed;
+            do { echoed = await inbound.Reader.ReadAsync(cts.Token); }
+            while (IsDhcpClientPacket(echoed));
+            Assert.Equal(packet, echoed);
 
             // A second station leases its own IP over the shared switch (the uplink bridges its DHCP to the server).
             var vpnConnection = new SoftEtherVpnConnection(connection,
