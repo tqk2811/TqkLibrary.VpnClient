@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
 using TqkLibrary.VpnClient.Abstractions.Channels;
@@ -130,7 +131,8 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
 
         sealed class FakeChannel : IPacketChannel
         {
-            public List<byte[]> Writes { get; } = new();
+            // Concurrent: the swap-and-write test has several writers landing on the same inner at once.
+            public ConcurrentQueue<byte[]> Writes { get; } = new();
             public LinkMedium Medium { get; set; } = LinkMedium.Ip;
             public int Mtu { get; set; } = 1400;
             public int MaxHeaderLength { get; set; }
@@ -141,7 +143,7 @@ namespace TqkLibrary.VpnClient.IpStack.Tests
 
             public ValueTask WriteIpPacketAsync(ReadOnlyMemory<byte> ipPacket, CancellationToken cancellationToken = default)
             {
-                Writes.Add(ipPacket.ToArray());
+                Writes.Enqueue(ipPacket.ToArray());
                 return default;
             }
 
