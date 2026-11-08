@@ -16,8 +16,11 @@ namespace TqkLibrary.VpnClient.Transport.RawIp.Tests
         const int Guard = 5000;
 
         [Fact]
-        public async Task Receive_StripsTheIpv4Header_AndSkipsOtherSources()
+        public async Task Receive_SkipsOtherSources()
         {
+            // macOS only configures 127.0.0.1 on lo0, so there is no second loopback source to bind to.
+            Assert.SkipWhen(OperatingSystem.IsMacOS(), "macOS has no 127.0.0.2 loopback address");
+
             using var local = Bind(IPAddress.Loopback);
             using var stranger = Bind(IPAddress.Parse("127.0.0.2"));
             using var gateway = Bind(IPAddress.Loopback);
@@ -25,6 +28,22 @@ namespace TqkLibrary.VpnClient.Transport.RawIp.Tests
             await using var transport = new RawIpDatagramTransport(local, IPAddress.Loopback);
 
             stranger.SendTo(WrapInIpv4(new byte[] { 9, 9 }), target);          // wrong source: skipped
+            gateway.SendTo(WrapInIpv4(new byte[] { 1, 2, 3 }), target);
+
+            using var cts = new CancellationTokenSource(Guard);
+            byte[] buffer = new byte[16];
+            int n = await transport.ReceiveAsync(buffer, cts.Token);
+            Assert.Equal(new byte[] { 1, 2, 3 }, buffer.AsSpan(0, n).ToArray());
+        }
+
+        [Fact]
+        public async Task Receive_StripsTheIpv4Header_AndDropsFragments()
+        {
+            using var local = Bind(IPAddress.Loopback);
+            using var gateway = Bind(IPAddress.Loopback);
+            IPEndPoint target = (IPEndPoint)local.LocalEndPoint!;
+            await using var transport = new RawIpDatagramTransport(local, IPAddress.Loopback);
+
             byte[] fragment = WrapInIpv4(new byte[] { 8, 8 });
             fragment[6] = 0x20;                                                 // More-Fragments: dropped
             gateway.SendTo(fragment, target);
