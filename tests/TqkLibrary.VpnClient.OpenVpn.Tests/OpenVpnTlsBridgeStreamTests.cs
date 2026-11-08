@@ -105,7 +105,8 @@ namespace TqkLibrary.VpnClient.OpenVpn.Tests
                 writers.Add(Task.Run(() => { for (int i = 0; i < 10; i++) bridge.Write(new byte[] { 1 }, 0, 1); }));
                 writers.Add(Task.Run(async () => { for (int i = 0; i < 10; i++) await bridge.WriteAsync(new byte[] { 2 }, 0, 1); }));
             }
-            await Task.WhenAll(writers).WaitAsync(Timeout);
+            // Only a hang guard: the 80 writes are serialised and each sleeps, which a loaded CI runner stretches past 5 s.
+            await Task.WhenAll(writers).WaitAsync(TimeSpan.FromSeconds(30));
 
             Assert.Equal(80, total);
             Assert.Equal(0, overlapped);
